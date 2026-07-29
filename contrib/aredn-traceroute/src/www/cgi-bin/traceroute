@@ -1,0 +1,44 @@
+#!/usr/bin/ucode
+/*
+ * Drop-in replacement for AREDN /cgi-bin/traceroute.
+ * Same HTML/streaming contract as firmware CGI so Tools → Traceroute keeps working.
+ * Appends per-hop GPS, link type, and Babel link cost when available.
+ */
+
+import * as configuration from "aredn.configuration";
+import * as atr from "aredn_traceroute";
+
+const node = configuration.getName();
+
+const q = getenv("QUERY_STRING") || "";
+const m = match(q, /server=([^&]*)/);
+let server = m && m[1];
+
+print("Content-type: text/html\r\n");
+print("Cache-Control: no-store\r\n");
+print("Access-Control-Allow-Origin: *\r\n");
+print("\r\n");
+
+if (!server) {
+    print("<html><head><title>ERROR</title></head><body><pre>Provide a server name to run a test between this client and a server [/cgi-bin/traceroute?server=&lt;ServerName&gt;</pre></body></html>\n");
+}
+else if (match(server, /[^0-9a-zA-Z.\-]/)) {
+    print("<html><head><title>ERROR</title></head><body><pre>Illegal server name</pre></body></html>\n");
+}
+else {
+    if (!match(server, /\./)) {
+        server += ".local.mesh";
+    }
+    print("<html><head><title>SUCCESS</title></head>\n");
+    print(`<body><pre>Client: ${node}\nServer: ${server}\n`);
+    flush();
+
+    const ok = atr.runEnrichedTraceroute(server, function (line) {
+        print(`${line}\n`);
+        flush();
+    });
+    if (!ok) {
+        print("traceroute failed\n");
+    }
+    print("</pre></body></html>\n");
+}

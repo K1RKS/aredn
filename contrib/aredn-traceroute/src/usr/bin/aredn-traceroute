@@ -1,0 +1,25 @@
+#!/usr/bin/ucode
+/*
+ * AREDN enriched traceroute CLI — GPS, link type (DtD/RF/WG/Xlink), Babel cost.
+ */
+
+import * as atr from "aredn_traceroute";
+
+if (length(ARGV) < 1 || ARGV[0] === "-h" || ARGV[0] === "--help") {
+    print("Usage: aredn-traceroute <destination>\n");
+    print("  Runs traceroute and appends per-hop GPS, link type, and Babel link cost.\n");
+    print("  Link type/cost come from the previous hop's LQM (route-specific).\n");
+    print("  Each node is queried at most once via /a/sysinfo?lqm=1.\n");
+    exit(length(ARGV) < 1 ? 1 : 0);
+}
+
+const dest = ARGV[0];
+if (match(dest, /[^0-9a-zA-Z.\-]/)) {
+    print("Illegal destination name\n");
+    exit(1);
+}
+
+const ok = atr.runEnrichedTraceroute(dest, function (line) {
+    print(`${line}\n`);
+});
+exit(ok ? 0 : 1);
