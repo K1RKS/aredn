@@ -225,10 +225,17 @@ export function seedLocal(ctx)
     catch (_) {
     }
     const idx = indexTrackers(trackers);
+    let gpsReason = null;
+    if (lat == null || lon == null) {
+        gpsReason = "local node has no lat/lon in aredn.@location[0]";
+    }
     return storeEntry(ctx, ctx.localKey, {
         key: ctx.localKey,
         local: true,
         failed: false,
+        fetchHost: null,
+        failReason: null,
+        gpsReason: gpsReason,
         lat: lat,
         lon: lon,
         hostname: hostname,
@@ -275,12 +282,16 @@ export function ensureNode(ctx, hostOrIp)
     }
 
     const host = meshHost(hostOrIp);
-    const info = fetchJson(`http://${host}/a/sysinfo?lqm=1`);
+    const url = `http://${host}/a/sysinfo?lqm=1`;
+    const info = fetchJson(url);
     if (!info) {
         return storeEntry(ctx, key, {
             key: key,
             local: false,
             failed: true,
+            fetchHost: host,
+            failReason: `sysinfo fetch failed (${url}); timeout, unreachable, or non-AREDN hop`,
+            gpsReason: `no GPS: sysinfo fetch failed for ${host}`,
             lat: null,
             lon: null,
             hostname: hostOrIp,
@@ -295,10 +306,17 @@ export function ensureNode(ctx, hostOrIp)
     const idx = indexTrackers(trackers);
     const ip = info.ip || (match(hostOrIp, /^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$/) ? hostOrIp : null);
     const hostname = info.node || info.hostname || hostOrIp;
+    let gpsReason = null;
+    if (info.lat == null || info.lon == null || info.lat === "" || info.lon === "") {
+        gpsReason = `node ${hostname} responded to sysinfo but lat/lon are unset (aredn.@location[0])`;
+    }
     const entry = storeEntry(ctx, key, {
         key: key,
         local: false,
         failed: false,
+        fetchHost: host,
+        failReason: null,
+        gpsReason: gpsReason,
         lat: info.lat,
         lon: info.lon,
         hostname: hostname,
@@ -317,16 +335,46 @@ export function ensureNode(ctx, hostOrIp)
 export function lookupLink(ctx, prevKey, nextIp, nextHost)
 {
     const prev = ctx.byKey[prevKey] || (prevKey === ctx.localKey ? seedLocal(ctx) : null);
+    const prevLabel = prev ? (prev.hostname || prev.ip || prevKey) : prevKey;
     if (!prev) {
-        return { type: null, cost: null };
+        return {
+            type: null,
+            cost: null,
+            typeReason: `no LQM data for previous hop (${prevKey})`,
+            costReason: `no LQM data for previous hop (${prevKey})`
+        };
+    }
+    if (prev.failed) {
+        const why = prev.failReason || `previous hop ${prevLabel} sysinfo/LQM unavailable`;
+        return {
+            type: null,
+            cost: null,
+            typeReason: `link type unknown: ${why}`,
+            costReason: `link cost unknown: ${why}`
+        };
     }
     const tracker = findNeighbor(prev, nextIp, nextHost);
     if (!tracker) {
-        return { type: null, cost: null };
+        const target = nextIp || nextHost || "?";
+        const why = `${target} not found as a Babel/LQM neighbor of previous hop ${prevLabel}`;
+        return {
+            type: null,
+            cost: null,
+            typeReason: `link type unknown: ${why}`,
+            costReason: `link cost unknown: ${why}`
+        };
     }
+    const type = mapLinkType(tracker.type);
+    const cost = linkCost(prev, tracker, prev.local);
     return {
-        type: mapLinkType(tracker.type),
-        cost: linkCost(prev, tracker, prev.local)
+        type: type,
+        cost: cost,
+        typeReason: type ? null : `neighbor ${nextIp || nextHost} on ${prevLabel} has no link type`,
+        costReason: cost != null ? null : (
+            prev.local
+                ? `neighbor on ${prevLabel} has no Babel cost / LQM rxcost`
+                : `neighbor on ${prevLabel} has no LQM rxcost/txcost`
+        )
     };
 };
 
@@ -391,6 +439,7 @@ export function enrichHop(ctx, prevKey, hop)
     if (hop.unreachable) {
         return {
             line: ` ${hop.hop}  * * *`,
+            notes: [ "    # unreachable hop (* * *); no GPS/link metadata" ],
             nextKey: prevKey
         };
     }
@@ -403,16 +452,37 @@ export function enrichHop(ctx, prevKey, hop)
     const lat = node ? node.lat : null;
     const lon = node ? node.lon : null;
     const nextKey = (node && node.key) ? node.key : (cacheKey(hop.ip || hop.hostname) || prevKey);
+    const notes = [];
+    if (lat == null || lon == null || lat === "" || lon === "") {
+        if (node && node.gpsReason) {
+            push(notes, `    # GPS -: ${node.gpsReason}`);
+        }
+        else if (!node) {
+            push(notes, "    # GPS -: could not resolve hop for sysinfo lookup");
+        }
+        else {
+            push(notes, "    # GPS -: lat/lon unavailable");
+        }
+    }
+    if (!link.type && link.typeReason) {
+        push(notes, `    # type -: ${link.typeReason}`);
+    }
+    if (link.cost == null && link.costReason) {
+        push(notes, `    # cost -: ${link.costReason}`);
+    }
     return {
         line: formatHopLine(hop.hop, hostname, hop.ip, hop.rtt, lat, lon, link.type, link.cost),
+        notes: notes,
         nextKey: nextKey
     };
 };
 
 /**
- * Run traceroute and emit lines via printFn(line). Returns true on success.
+ * Run traceroute and emit lines via printFn(line).
+ * options.verbose: when true, print why unset GPS/type/cost values are missing.
+ * Returns true on success.
  */
-export function runEnrichedTraceroute(dest, printFn)
+export function runEnrichedTraceroute(dest, printFn, options)
 {
     if (!dest) {
         return false;
@@ -420,6 +490,7 @@ export function runEnrichedTraceroute(dest, printFn)
     if (!match(dest, /\./) && !match(dest, /^[0-9.]+$/)) {
         dest = `${dest}.local.mesh`;
     }
+    const verbose = options && options.verbose;
     const ctx = createContext();
     seedLocal(ctx);
     let prevKey = ctx.localKey;
@@ -434,6 +505,11 @@ export function runEnrichedTraceroute(dest, printFn)
         if (hop) {
             const enriched = enrichHop(ctx, prevKey, hop);
             printFn(enriched.line);
+            if (verbose && enriched.notes) {
+                for (let i = 0; i < length(enriched.notes); i++) {
+                    printFn(enriched.notes[i]);
+                }
+            }
             if (!hop.unreachable) {
                 prevKey = enriched.nextKey;
             }

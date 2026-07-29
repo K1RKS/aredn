@@ -13,6 +13,7 @@ const node = configuration.getName();
 const q = getenv("QUERY_STRING") || "";
 const m = match(q, /server=([^&]*)/);
 let server = m && m[1];
+const verbose = match(q, /(^|&)verbose=1(&|$)/) ? true : false;
 
 print("Content-type: text/html\r\n");
 print("Cache-Control: no-store\r\n");
@@ -36,7 +37,7 @@ else {
     const ok = atr.runEnrichedTraceroute(server, function (line) {
         print(`${line}\n`);
         flush();
-    });
+    }, { verbose: verbose });
     if (!ok) {
         print("traceroute failed\n");
     }

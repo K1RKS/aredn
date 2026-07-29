@@ -5,15 +5,45 @@
 
 import * as atr from "aredn_traceroute";
 
-if (length(ARGV) < 1 || ARGV[0] === "-h" || ARGV[0] === "--help") {
-    print("Usage: aredn-traceroute <destination>\n");
+function usage()
+{
+    print("Usage: aredn-traceroute [-verbose] <destination>\n");
     print("  Runs traceroute and appends per-hop GPS, link type, and Babel link cost.\n");
     print("  Link type/cost come from the previous hop's LQM (route-specific).\n");
     print("  Each node is queried at most once via /a/sysinfo?lqm=1.\n");
-    exit(length(ARGV) < 1 ? 1 : 0);
+    print("  -verbose   Explain why any GPS/type/cost fields are unset (-).\n");
+};
+
+let verbose = false;
+let dest = null;
+for (let i = 0; i < length(ARGV); i++) {
+    const a = ARGV[i];
+    if (a === "-h" || a === "--help") {
+        usage();
+        exit(0);
+    }
+    if (a === "-verbose" || a === "--verbose" || a === "-v") {
+        verbose = true;
+        continue;
+    }
+    if (match(a, /^-/)) {
+        print(`Unknown option: ${a}\n`);
+        usage();
+        exit(1);
+    }
+    if (dest) {
+        print("Only one destination is allowed\n");
+        usage();
+        exit(1);
+    }
+    dest = a;
 }
 
-const dest = ARGV[0];
+if (!dest) {
+    usage();
+    exit(1);
+}
+
 if (match(dest, /[^0-9a-zA-Z.\-]/)) {
     print("Illegal destination name\n");
     exit(1);
@@ -21,5 +51,5 @@ if (match(dest, /[^0-9a-zA-Z.\-]/)) {
 
 const ok = atr.runEnrichedTraceroute(dest, function (line) {
     print(`${line}\n`);
-});
+}, { verbose: verbose });
 exit(ok ? 0 : 1);
