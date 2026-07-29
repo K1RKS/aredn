@@ -2,7 +2,7 @@
  * AREDN traceroute with per-hop mesh metadata (GPS, link type, Babel cost).
  * Side-loaded package companion for AREDN firmware.
  *
- * Attribution: AREDN® project patterns and APIs.
+ * Attribution: AREDN project patterns and APIs.
  */
 
 import * as fs from "fs";
@@ -81,7 +81,7 @@ function indexTrackers(trackers)
     const byIp = {};
     const byHost = {};
     if (!trackers) {
-        return { byIp, byHost };
+        return { byIp: byIp, byHost: byHost };
     }
     for (let mac in trackers) {
         const t = trackers[mac];
@@ -100,7 +100,7 @@ function indexTrackers(trackers)
             }
         }
     }
-    return { byIp, byHost };
+    return { byIp: byIp, byHost: byHost };
 }
 
 function findNeighbor(entry, nextIp, nextHost)
@@ -169,7 +169,7 @@ export function createContext()
         hostIndex: {},
         localKey: "local"
     };
-}
+};
 
 function storeEntry(ctx, key, entry)
 {
@@ -237,7 +237,7 @@ export function seedLocal(ctx)
         byIp: idx.byIp,
         byHost: idx.byHost
     });
-}
+};
 
 function fetchJson(url)
 {
@@ -291,7 +291,7 @@ export function ensureNode(ctx, hostOrIp)
         });
     }
 
-    const trackers = info.lqm?.info?.trackers || {};
+    const trackers = (info.lqm && info.lqm.info && info.lqm.info.trackers) ? info.lqm.info.trackers : {};
     const idx = indexTrackers(trackers);
     const ip = info.ip || (match(hostOrIp, /^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$/) ? hostOrIp : null);
     const hostname = info.node || info.hostname || hostOrIp;
@@ -312,7 +312,7 @@ export function ensureNode(ctx, hostOrIp)
         ctx.hostIndex[ip] = key;
     }
     return entry;
-}
+};
 
 export function lookupLink(ctx, prevKey, nextIp, nextHost)
 {
@@ -328,7 +328,7 @@ export function lookupLink(ctx, prevKey, nextIp, nextHost)
         type: mapLinkType(tracker.type),
         cost: linkCost(prev, tracker, prev.local)
     };
-}
+};
 
 export function formatGps(lat, lon)
 {
@@ -336,7 +336,7 @@ export function formatGps(lat, lon)
         return "-";
     }
     return `${lat},${lon}`;
-}
+};
 
 export function formatHopLine(hopNum, hostname, ip, rtt, lat, lon, type, cost)
 {
@@ -347,7 +347,7 @@ export function formatHopLine(hopNum, hostname, ip, rtt, lat, lon, type, cost)
     const t = type || "-";
     const c = cost != null ? `${cost}` : "-";
     return ` ${hopNum}  ${host}${ipPart} ${rttPart}  ${gps}  ${t}  ${c}`;
-}
+};
 
 /**
  * Parse a busybox traceroute hop line.
@@ -384,7 +384,7 @@ export function parseHopLine(line)
         };
     }
     return null;
-}
+};
 
 export function enrichHop(ctx, prevKey, hop)
 {
@@ -400,14 +400,14 @@ export function enrichHop(ctx, prevKey, hop)
     if (hostname && !match(hostname, /\./) && !match(hostname, /^[0-9.]+$/)) {
         hostname = `${hostname}.local.mesh`;
     }
-    const lat = node?.lat;
-    const lon = node?.lon;
-    const nextKey = node?.key || cacheKey(hop.ip || hop.hostname) || prevKey;
+    const lat = node ? node.lat : null;
+    const lon = node ? node.lon : null;
+    const nextKey = (node && node.key) ? node.key : (cacheKey(hop.ip || hop.hostname) || prevKey);
     return {
         line: formatHopLine(hop.hop, hostname, hop.ip, hop.rtt, lat, lon, link.type, link.cost),
         nextKey: nextKey
     };
-}
+};
 
 /**
  * Run traceroute and emit lines via printFn(line). Returns true on success.
@@ -444,4 +444,4 @@ export function runEnrichedTraceroute(dest, printFn)
     }
     running.close();
     return true;
-}
+};
