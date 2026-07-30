@@ -7,25 +7,26 @@ Each hop line is enriched with:
 - **GPS** of that hop node (`lat,lon`)
 - **Link type** used on the incoming edge: `DtD`, `RF`, `WG`, or `Xlink`
 - **Babel link cost** for that edge (local Babel `cost`, or remote LQM `rxcost`)
+- **Babel path metric** for that neighbor from the previous hop’s LQM (`metric`)
 
 Example:
 
 ```text
- 1  nodeB.local.mesh (10.1.2.3)  23.034 ms  45.1234,-122.1234  DtD  352
- 2  nodeC.local.mesh (10.1.2.4)  123.03 ms  44.2412,-12.1234  RF  3593
- 3  nodeD.local.mesh (175.0.1.3)  19 ms  14.2412,-132.1234  WG  133
+ 1  nodeB.local.mesh (10.1.2.3)  23.034 ms  45.1234,-122.1234  DtD  352  352
+ 2  nodeC.local.mesh (10.1.2.4)  123.03 ms  44.2412,-12.1234  RF  3593  3945
+ 3  nodeD.local.mesh (175.0.1.3)  19 ms  14.2412,-132.1234  WG  133  4078
 ```
 
 ## Install
 
-1. Build (or download) `aredn-traceroute-0.1.8-r0.apk`
+1. Build (or download) `aredn-traceroute-0.1.9-r0.apk`
 2. On the node: **Status → Packages** → upload / install with allow-untrusted  
-   or: `apk add --allow-untrusted aredn-traceroute-0.1.8-r0.apk`
+   or: `apk add --allow-untrusted aredn-traceroute-0.1.9-r0.apk`
 3. Tools → Traceroute uses the drop-in CGI automatically when this package is installed on the **source** node.
 4. CLI: `aredn-traceroute <destination>`  
    Verbose (explain unset `-` fields): `aredn-traceroute -verbose <destination>`
 
-When traceroute only returns an IP for a hop, the display name is filled from that hop’s `/a/sysinfo` `node` field, or from the previous hop’s LQM neighbor hostname. The `(IP)` still shows the hop address. If the previous hop’s traceroute IP failed sysinfo but its name was learned from the hop before that, later lookups re-fetch that previous hop via its mesh hostname (and mesh IP) so LQM/type/cost/name can still be resolved.
+When traceroute only returns an IP for a hop, the display name is filled from that hop’s `/a/sysinfo` `node` field, or from the previous hop’s LQM neighbor hostname. The `(IP)` still shows the hop address. If the previous hop’s traceroute IP failed sysinfo but its name was learned from the hop before that, later lookups re-fetch that previous hop via its mesh hostname (and mesh IP) so LQM/type/cost/metric/name can still be resolved.
 
 Removing the package restores the firmware traceroute CGI (overlayfs).
 
@@ -35,7 +36,7 @@ Removing the package restores the firmware traceroute CGI (overlayfs).
 cd contrib/aredn-traceroute
 chmod +x build.sh
 ./build.sh
-# → dist/aredn-traceroute-0.1.8-r0.apk
+# → dist/aredn-traceroute-0.1.9-r0.apk
 ```
 
 Uses a vendored copy of [kn6plv/MakeAPK](https://github.com/kn6plv/MakeAPK) (`tools/mkapk.py`). No OpenWrt buildroot required.
@@ -43,9 +44,9 @@ Uses a vendored copy of [kn6plv/MakeAPK](https://github.com/kn6plv/MakeAPK) (`to
 ## How enrichment works
 
 1. Run stock `/bin/traceroute -q 1 -w 1`.
-2. Seed local LQM (`/tmp/lqm.info`) + Babel neighbors for first-hop type/cost.
+2. Seed local LQM (`/tmp/lqm.info`) + Babel neighbors for first-hop type/cost/metric.
 3. For each new hop node, fetch **once**: `http://{node}/a/sysinfo?lqm=1` (GPS + neighbor trackers). Cache by mesh IP/hostname for the rest of the run; failed fetches are cached so timeouts are not repeated.
-4. GPS comes from the hop’s cached sysinfo; type/cost come from the **previous** hop’s cached LQM neighbor entry for this hop (route-specific).
+4. GPS comes from the hop’s cached sysinfo; type/cost/metric come from the **previous** hop’s cached LQM neighbor entry for this hop (route-specific).
 
 Missing values print as `-`. Unreachable hops (`* * *`) are not enriched.
 

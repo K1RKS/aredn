@@ -411,11 +411,14 @@ export function lookupLink(ctx, prevKey, nextIp, nextHost)
     const prev = getLqmSource(ctx, prevKey);
     const prevLabel = prev ? (prev.displayName || prev.hostname || prev.ip || prevKey) : prevKey;
     if (!prev) {
+        const why = `no LQM data for previous hop (${prevKey})`;
         return {
             type: null,
             cost: null,
-            typeReason: `no LQM data for previous hop (${prevKey})`,
-            costReason: `no LQM data for previous hop (${prevKey})`,
+            metric: null,
+            typeReason: why,
+            costReason: why,
+            metricReason: why,
             viaHostname: false
         };
     }
@@ -424,8 +427,10 @@ export function lookupLink(ctx, prevKey, nextIp, nextHost)
         return {
             type: null,
             cost: null,
+            metric: null,
             typeReason: `link type unknown: ${why}`,
             costReason: `link cost unknown: ${why}`,
+            metricReason: `metric unknown: ${why}`,
             viaHostname: false
         };
     }
@@ -436,22 +441,27 @@ export function lookupLink(ctx, prevKey, nextIp, nextHost)
         return {
             type: null,
             cost: null,
+            metric: null,
             typeReason: `link type unknown: ${why}`,
             costReason: `link cost unknown: ${why}`,
+            metricReason: `metric unknown: ${why}`,
             viaHostname: prev.refreshedViaHostname ? true : false
         };
     }
     const type = mapLinkType(tracker.type);
     const cost = linkCost(prev, tracker, prev.local);
+    const metric = tracker.metric != null ? tracker.metric : null;
     return {
         type: type,
         cost: cost,
+        metric: metric,
         typeReason: type ? null : `neighbor ${nextIp || nextHost} on ${prevLabel} has no link type`,
         costReason: cost != null ? null : (
             prev.local
                 ? `neighbor on ${prevLabel} has no Babel cost / LQM rxcost`
                 : `neighbor on ${prevLabel} has no LQM rxcost/txcost`
         ),
+        metricReason: metric != null ? null : `neighbor on ${prevLabel} has no Babel path metric in LQM`,
         viaHostname: prev.refreshedViaHostname ? true : false,
         prevLabel: prevLabel,
         neighborHostname: tracker.hostname || null
@@ -466,7 +476,7 @@ export function formatGps(lat, lon)
     return `${lat},${lon}`;
 };
 
-export function formatHopLine(hopNum, hostname, ip, rtt, lat, lon, type, cost)
+export function formatHopLine(hopNum, hostname, ip, rtt, lat, lon, type, cost, metric)
 {
     const host = hostname || ip || "?";
     const ipPart = ip ? ` (${ip})` : "";
@@ -474,7 +484,8 @@ export function formatHopLine(hopNum, hostname, ip, rtt, lat, lon, type, cost)
     const gps = formatGps(lat, lon);
     const t = type || "-";
     const c = cost != null ? `${cost}` : "-";
-    return ` ${hopNum}  ${host}${ipPart} ${rttPart}  ${gps}  ${t}  ${c}`;
+    const m = metric != null ? `${metric}` : "-";
+    return ` ${hopNum}  ${host}${ipPart} ${rttPart}  ${gps}  ${t}  ${c}  ${m}`;
 };
 
 /**
@@ -649,8 +660,11 @@ export function enrichHop(ctx, prevKey, hop)
     if (link.cost == null && link.costReason) {
         push(notes, `    # cost -: ${link.costReason}`);
     }
+    if (link.metric == null && link.metricReason) {
+        push(notes, `    # metric -: ${link.metricReason}`);
+    }
     return {
-        line: formatHopLine(hop.hop, hostname, hop.ip, hop.rtt, lat, lon, link.type, link.cost),
+        line: formatHopLine(hop.hop, hostname, hop.ip, hop.rtt, lat, lon, link.type, link.cost, link.metric),
         notes: notes,
         nextKey: nextKey
     };
