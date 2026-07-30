@@ -343,7 +343,7 @@ function hasNeighborIndex(entry)
     if (!entry || !entry.byIp) {
         return false;
     }
-    for (let _k in entry.byIp) {
+    for (let k in entry.byIp) {
         return true;
     }
     return false;
@@ -574,7 +574,16 @@ export function enrichHop(ctx, prevKey, hop)
             rebindEntry(ctx, node, byName);
             node = byName;
             if (byName.hostname && !isIpv4(byName.hostname)) {
-                resolved = { name: meshHost(byName.hostname) || byName.hostname, source: "sysinfo" };
+                const prior = resolved;
+                let src = "sysinfo";
+                if (prior.source === "previous_lqm" || prior.source === "previous_lqm_via_hostname") {
+                    src = "previous_lqm_then_sysinfo";
+                }
+                resolved = {
+                    name: meshHost(byName.hostname) || byName.hostname,
+                    source: src,
+                    from: prior.from
+                };
             }
         }
     }
@@ -600,12 +609,19 @@ export function enrichHop(ctx, prevKey, hop)
     if (node && !node.failed && node.ip && hop.ip && node.ip !== hop.ip) {
         nextKey = node.key;
     }
+    const tracerouteWasIp = isIpv4(hop.hostname) || hop.hostname === hop.ip || !hop.hostname;
     const notes = [];
     if (resolved.source === "previous_lqm") {
         push(notes, `    # name: ${hostname} from previous hop ${resolved.from} LQM neighbor list`);
     }
     else if (resolved.source === "previous_lqm_via_hostname") {
         push(notes, `    # name: ${hostname} from previous hop ${resolved.from} LQM (refetched via mesh hostname after traceroute IP failed)`);
+    }
+    else if (resolved.source === "previous_lqm_then_sysinfo") {
+        push(notes, `    # name: ${hostname} from previous hop ${resolved.from} LQM, then confirmed via hop sysinfo`);
+    }
+    else if (resolved.source === "sysinfo" && tracerouteWasIp) {
+        push(notes, `    # name: ${hostname} from hop sysinfo (traceroute only had IP)`);
     }
     else if (resolved.source === "unresolved") {
         push(notes, `    # name: no hostname from sysinfo or previous hop LQM for ${hop.ip || hop.hostname}`);
@@ -650,10 +666,14 @@ export function runEnrichedTraceroute(dest, printFn, options)
     if (!match(dest, /\./) && !match(dest, /^[0-9.]+$/)) {
         dest = `${dest}.local.mesh`;
     }
-    const verbose = options && options.verbose;
+    const verbose = !!(options && options.verbose);
     const ctx = createContext();
     seedLocal(ctx);
     let prevKey = ctx.localKey;
+
+    if (verbose) {
+        printFn("# verbose: notes explain name resolution and any unset (-) GPS/type/cost fields");
+    }
 
     const running = fs.popen(`/bin/traceroute -q 1 -w 1 ${dest} 2>&1`);
     if (!running) {
@@ -665,9 +685,15 @@ export function runEnrichedTraceroute(dest, printFn, options)
         if (hop) {
             const enriched = enrichHop(ctx, prevKey, hop);
             printFn(enriched.line);
-            if (verbose && enriched.notes) {
-                for (let i = 0; i < length(enriched.notes); i++) {
-                    printFn(enriched.notes[i]);
+            if (verbose) {
+                const notes = enriched.notes || [];
+                if (length(notes) === 0) {
+                    printFn("    # (no missing fields; name from traceroute or already known)");
+                }
+                else {
+                    for (let i = 0; i < length(notes); i++) {
+                        printFn(notes[i]);
+                    }
                 }
             }
             if (!hop.unreachable) {
