@@ -567,23 +567,24 @@ export function enrichHop(ctx, prevKey, hop)
     let node = ensureNode(ctx, hop.ip || hop.hostname);
     // Resolve name first so a failed tunnel-IP prev can be refreshed via its mesh hostname.
     let resolved = resolveDisplayHostname(ctx, prevKey, hop, node);
+    // Snapshot previous-hop name provenance for -verbose before any sysinfo rebind.
+    let nameFromPrev = null;
+    if (resolved.source === "previous_lqm" || resolved.source === "previous_lqm_via_hostname") {
+        nameFromPrev = {
+            name: resolved.name,
+            source: resolved.source,
+            from: resolved.from
+        };
+    }
     // If this hop's IP sysinfo failed but we learned a hostname from prev LQM, re-fetch via name.
+    // (Same control flow as 0.1.5/0.1.6 — do not change rebind/nextKey behavior.)
     if (node && node.failed && resolved.name && !isIpv4(resolved.name) && resolved.name !== hop.ip) {
         const byName = ensureNode(ctx, resolved.name);
         if (byName && !byName.failed) {
             rebindEntry(ctx, node, byName);
             node = byName;
             if (byName.hostname && !isIpv4(byName.hostname)) {
-                const prior = resolved;
-                let src = "sysinfo";
-                if (prior.source === "previous_lqm" || prior.source === "previous_lqm_via_hostname") {
-                    src = "previous_lqm_then_sysinfo";
-                }
-                resolved = {
-                    name: meshHost(byName.hostname) || byName.hostname,
-                    source: src,
-                    from: prior.from
-                };
+                resolved = { name: meshHost(byName.hostname) || byName.hostname, source: "sysinfo" };
             }
         }
     }
@@ -591,6 +592,13 @@ export function enrichHop(ctx, prevKey, hop)
     // If name still unresolved, try again after prev may have been refreshed via hostname.
     if (resolved.source === "unresolved") {
         resolved = resolveDisplayHostname(ctx, prevKey, hop, node);
+        if (resolved.source === "previous_lqm" || resolved.source === "previous_lqm_via_hostname") {
+            nameFromPrev = {
+                name: resolved.name,
+                source: resolved.source,
+                from: resolved.from
+            };
+        }
     }
     const hostname = resolved.name;
     if (node) {
@@ -609,19 +617,14 @@ export function enrichHop(ctx, prevKey, hop)
     if (node && !node.failed && node.ip && hop.ip && node.ip !== hop.ip) {
         nextKey = node.key;
     }
-    const tracerouteWasIp = isIpv4(hop.hostname) || hop.hostname === hop.ip || !hop.hostname;
     const notes = [];
-    if (resolved.source === "previous_lqm") {
-        push(notes, `    # name: ${hostname} from previous hop ${resolved.from} LQM neighbor list`);
-    }
-    else if (resolved.source === "previous_lqm_via_hostname") {
-        push(notes, `    # name: ${hostname} from previous hop ${resolved.from} LQM (refetched via mesh hostname after traceroute IP failed)`);
-    }
-    else if (resolved.source === "previous_lqm_then_sysinfo") {
-        push(notes, `    # name: ${hostname} from previous hop ${resolved.from} LQM, then confirmed via hop sysinfo`);
-    }
-    else if (resolved.source === "sysinfo" && tracerouteWasIp) {
-        push(notes, `    # name: ${hostname} from hop sysinfo (traceroute only had IP)`);
+    if (nameFromPrev) {
+        if (nameFromPrev.source === "previous_lqm_via_hostname") {
+            push(notes, `    # name: ${hostname} from previous hop ${nameFromPrev.from} LQM (refetched via mesh hostname after traceroute IP failed)`);
+        }
+        else {
+            push(notes, `    # name: ${hostname} from previous hop ${nameFromPrev.from} LQM neighbor list`);
+        }
     }
     else if (resolved.source === "unresolved") {
         push(notes, `    # name: no hostname from sysinfo or previous hop LQM for ${hop.ip || hop.hostname}`);
@@ -666,7 +669,7 @@ export function runEnrichedTraceroute(dest, printFn, options)
     if (!match(dest, /\./) && !match(dest, /^[0-9.]+$/)) {
         dest = `${dest}.local.mesh`;
     }
-    const verbose = !!(options && options.verbose);
+    const verbose = options && options.verbose;
     const ctx = createContext();
     seedLocal(ctx);
     let prevKey = ctx.localKey;
@@ -681,10 +684,9 @@ export function runEnrichedTraceroute(dest, printFn, options)
         if (hop) {
             const enriched = enrichHop(ctx, prevKey, hop);
             printFn(enriched.line);
-            if (verbose) {
-                const notes = enriched.notes || [];
-                for (let i = 0; i < length(notes); i++) {
-                    printFn(notes[i]);
+            if (verbose && enriched.notes) {
+                for (let i = 0; i < length(enriched.notes); i++) {
+                    printFn(enriched.notes[i]);
                 }
             }
             if (!hop.unreachable) {

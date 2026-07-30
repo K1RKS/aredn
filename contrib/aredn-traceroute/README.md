@@ -18,9 +18,9 @@ Example:
 
 ## Install
 
-1. Build (or download) `aredn-traceroute-0.1.7-r0.apk`
+1. Build (or download) `aredn-traceroute-0.1.8-r0.apk`
 2. On the node: **Status → Packages** → upload / install with allow-untrusted  
-   or: `apk add --allow-untrusted aredn-traceroute-0.1.7-r0.apk`
+   or: `apk add --allow-untrusted aredn-traceroute-0.1.8-r0.apk`
 3. Tools → Traceroute uses the drop-in CGI automatically when this package is installed on the **source** node.
 4. CLI: `aredn-traceroute <destination>`  
    Verbose (explain unset `-` fields): `aredn-traceroute -verbose <destination>`
@@ -35,7 +35,7 @@ Removing the package restores the firmware traceroute CGI (overlayfs).
 cd contrib/aredn-traceroute
 chmod +x build.sh
 ./build.sh
-# → dist/aredn-traceroute-0.1.7-r0.apk
+# → dist/aredn-traceroute-0.1.8-r0.apk
 ```
 
 Uses a vendored copy of [kn6plv/MakeAPK](https://github.com/kn6plv/MakeAPK) (`tools/mkapk.py`). No OpenWrt buildroot required.
