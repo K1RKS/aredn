@@ -397,6 +397,48 @@ export function formatHopLine(hopNum, hostname, ip, rtt, lat, lon, type, cost)
     return ` ${hopNum}  ${host}${ipPart} ${rttPart}  ${gps}  ${t}  ${c}`;
 };
 
+function isIpv4(s)
+{
+    return s && match(s, /^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$/) ? true : false;
+}
+
+/**
+ * Prefer a real nodename when traceroute only showed an IP.
+ * Sources: this hop's sysinfo (node), else previous hop's LQM neighbor hostname.
+ */
+function resolveDisplayHostname(ctx, prevKey, hop, node)
+{
+    let name = hop.hostname;
+    if (name && !isIpv4(name) && name !== hop.ip) {
+        if (!match(name, /\./)) {
+            name = `${name}.local.mesh`;
+        }
+        return name;
+    }
+
+    if (node && node.hostname && !isIpv4(node.hostname) && node.hostname !== hop.ip) {
+        name = node.hostname;
+        if (!match(name, /\./)) {
+            name = `${name}.local.mesh`;
+        }
+        return name;
+    }
+
+    const prev = ctx.byKey[prevKey] || (prevKey === ctx.localKey ? ctx.byKey[ctx.localKey] : null);
+    if (prev && !prev.failed) {
+        const tracker = findNeighbor(prev, hop.ip, hop.hostname);
+        if (tracker && tracker.hostname && !isIpv4(tracker.hostname)) {
+            name = tracker.hostname;
+            if (!match(name, /\./)) {
+                name = `${name}.local.mesh`;
+            }
+            return name;
+        }
+    }
+
+    return hop.hostname || hop.ip;
+}
+
 /**
  * Parse a busybox traceroute hop line.
  * Returns null if not a hop line.
@@ -445,14 +487,14 @@ export function enrichHop(ctx, prevKey, hop)
     }
     const node = ensureNode(ctx, hop.ip || hop.hostname);
     const link = lookupLink(ctx, prevKey, hop.ip, hop.hostname);
-    let hostname = hop.hostname;
-    if (hostname && !match(hostname, /\./) && !match(hostname, /^[0-9.]+$/)) {
-        hostname = `${hostname}.local.mesh`;
-    }
+    const hostname = resolveDisplayHostname(ctx, prevKey, hop, node);
     const lat = node ? node.lat : null;
     const lon = node ? node.lon : null;
     const nextKey = (node && node.key) ? node.key : (cacheKey(hop.ip || hop.hostname) || prevKey);
     const notes = [];
+    if (isIpv4(hostname) || hostname === hop.ip) {
+        push(notes, `    # name: no hostname from sysinfo or previous hop LQM for ${hop.ip || hop.hostname}`);
+    }
     if (lat == null || lon == null || lat === "" || lon === "") {
         if (node && node.gpsReason) {
             push(notes, `    # GPS -: ${node.gpsReason}`);
