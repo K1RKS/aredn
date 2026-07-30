@@ -209,12 +209,14 @@ export function seedLocal(ctx)
     }
     catch (_) {
     }
-    try {
-        const c = uci.cursor();
-        lat = toNum(c.get("aredn", "@location[0]", "lat"));
-        lon = toNum(c.get("aredn", "@location[0]", "lon"));
-    }
-    catch (_) {
+    if (ctx.wantGps) {
+        try {
+            const c = uci.cursor();
+            lat = toNum(c.get("aredn", "@location[0]", "lat"));
+            lon = toNum(c.get("aredn", "@location[0]", "lon"));
+        }
+        catch (_) {
+        }
     }
     try {
         if (fs.access("/tmp/lqm.info")) {
@@ -226,7 +228,7 @@ export function seedLocal(ctx)
     }
     const idx = indexTrackers(trackers);
     let gpsReason = null;
-    if (lat == null || lon == null) {
+    if (ctx.wantGps && (lat == null || lon == null)) {
         gpsReason = "local node has no lat/lon in aredn.@location[0]";
     }
     return storeEntry(ctx, ctx.localKey, {
@@ -292,7 +294,7 @@ export function ensureNode(ctx, hostOrIp)
             failed: true,
             fetchHost: host,
             failReason: `sysinfo fetch failed (${url}); timeout, unreachable, or non-AREDN hop`,
-            gpsReason: `no GPS: sysinfo fetch failed for ${host}`,
+            gpsReason: ctx.wantGps ? `no GPS: sysinfo fetch failed for ${host}` : null,
             lat: null,
             lon: null,
             hostname: hostOrIp,
@@ -307,9 +309,15 @@ export function ensureNode(ctx, hostOrIp)
     const idx = indexTrackers(trackers);
     const ip = info.ip || (match(hostOrIp, /^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$/) ? hostOrIp : null);
     const hostname = info.node || info.hostname || hostOrIp;
+    let lat = null;
+    let lon = null;
     let gpsReason = null;
-    if (info.lat == null || info.lon == null || info.lat === "" || info.lon === "") {
-        gpsReason = `node ${hostname} responded to sysinfo but lat/lon are unset (aredn.@location[0])`;
+    if (ctx.wantGps) {
+        lat = info.lat;
+        lon = info.lon;
+        if (lat == null || lon == null || lat === "" || lon === "") {
+            gpsReason = `node ${hostname} responded to sysinfo but lat/lon are unset (aredn.@location[0])`;
+        }
     }
     const entry = storeEntry(ctx, key, {
         key: key,
@@ -318,8 +326,8 @@ export function ensureNode(ctx, hostOrIp)
         fetchHost: host,
         failReason: null,
         gpsReason: gpsReason,
-        lat: info.lat,
-        lon: info.lon,
+        lat: lat,
+        lon: lon,
         hostname: hostname,
         ip: ip,
         trackers: trackers,
@@ -478,16 +486,19 @@ export function formatGps(lat, lon)
     return `${lat},${lon}`;
 };
 
-export function formatHopLine(hopNum, hostname, ip, rtt, lat, lon, type, cost, metric)
+export function formatHopLine(hopNum, hostname, ip, rtt, lat, lon, type, cost, metric, includeGps)
 {
     const host = hostname || ip || "?";
     const ipPart = ip ? ` (${ip})` : "";
     const rttPart = rtt != null ? ` ${rtt} ms` : "";
-    const gps = formatGps(lat, lon);
     const t = type || "-";
     const c = cost != null ? `${cost}` : "-";
     const m = metric != null ? `${metric}` : "-";
-    return ` ${hopNum}  ${host}${ipPart} ${rttPart}  ${gps}  ${t}  ${c}  ${m}`;
+    if (includeGps) {
+        const gps = formatGps(lat, lon);
+        return ` ${hopNum}  ${host}${ipPart} ${rttPart}  ${gps}  ${t}  ${c}  ${m}`;
+    }
+    return ` ${hopNum}  ${host}${ipPart} ${rttPart}  ${t}  ${c}  ${m}`;
 };
 
 /**
@@ -630,8 +641,9 @@ export function enrichHop(ctx, prevKey, hop)
             }
         }
     }
-    const lat = node ? node.lat : null;
-    const lon = node ? node.lon : null;
+    const wantGps = ctx.wantGps ? true : false;
+    const lat = wantGps && node ? node.lat : null;
+    const lon = wantGps && node ? node.lon : null;
     let nextKey = (node && node.key) ? node.key : (cacheKey(hop.ip || hop.hostname) || prevKey);
     // Prefer mesh-IP/hostname cache key when we rebound a failed tunnel entry.
     if (node && !node.failed && node.ip && hop.ip && node.ip !== hop.ip) {
@@ -652,7 +664,7 @@ export function enrichHop(ctx, prevKey, hop)
     if (link.viaHostname) {
         push(notes, `    # link: previous hop LQM loaded via resolved hostname ${link.prevLabel}`);
     }
-    if (lat == null || lon == null || lat === "" || lon === "") {
+    if (wantGps && (lat == null || lon == null || lat === "" || lon === "")) {
         if (node && node.gpsReason) {
             push(notes, `    # GPS -: ${node.gpsReason}`);
         }
@@ -673,7 +685,7 @@ export function enrichHop(ctx, prevKey, hop)
         push(notes, `    # metric -: ${link.metricReason}`);
     }
     return {
-        line: formatHopLine(hop.hop, hostname, hop.ip, hop.rtt, lat, lon, link.type, link.cost, link.metric),
+        line: formatHopLine(hop.hop, hostname, hop.ip, hop.rtt, lat, lon, link.type, link.cost, link.metric, wantGps),
         notes: notes,
         nextKey: nextKey
     };
@@ -694,6 +706,7 @@ export function runEnrichedTraceroute(dest, printFn, options)
     }
     const verbose = options && options.verbose;
     const ctx = createContext();
+    ctx.wantGps = !!(options && options.gps);
     seedLocal(ctx);
     let prevKey = ctx.localKey;
 

@@ -1,20 +1,22 @@
 #!/usr/bin/ucode
 /*
- * AREDN enriched traceroute CLI — GPS, link type (DtD/RF/WG/Xlink), Babel cost.
+ * AREDN enriched traceroute CLI — link type, Babel cost/metric; optional GPS.
  */
 
 import * as atr from "aredn_traceroute";
 
 function usage()
 {
-    print("Usage: aredn-traceroute [-verbose] <destination>\n");
-    print("  Runs traceroute and appends per-hop GPS, link type, Babel cost, and metric.\n");
+    print("Usage: aredn-traceroute [-verbose] [-gps] <destination>\n");
+    print("  Runs traceroute and appends per-hop link type, Babel cost, and metric.\n");
     print("  Link type/cost/metric come from the previous hop's LQM (route-specific).\n");
     print("  Each node is queried at most once via /a/sysinfo?lqm=1.\n");
-    print("  -verbose   Explain why any GPS/type/cost/metric fields are unset (-).\n");
+    print("  -gps       Include per-hop GPS coordinates (off by default).\n");
+    print("  -verbose   Explain why any type/cost/metric (and GPS if -gps) fields are unset (-).\n");
 };
 
 let verbose = false;
+let gps = false;
 let dest = null;
 for (let i = 0; i < length(ARGV); i++) {
     const a = ARGV[i];
@@ -24,6 +26,10 @@ for (let i = 0; i < length(ARGV); i++) {
     }
     if (a === "-verbose" || a === "--verbose" || a === "-v") {
         verbose = true;
+        continue;
+    }
+    if (a === "-gps" || a === "--gps") {
+        gps = true;
         continue;
     }
     if (match(a, /^-/)) {
@@ -51,5 +57,5 @@ if (match(dest, /[^0-9a-zA-Z.\-]/)) {
 
 const ok = atr.runEnrichedTraceroute(dest, function (line) {
     print(`${line}\n`);
-}, { verbose: verbose });
+}, { verbose: verbose, gps: gps });
 exit(ok ? 0 : 1);
