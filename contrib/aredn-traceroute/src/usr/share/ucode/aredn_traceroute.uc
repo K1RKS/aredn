@@ -405,6 +405,7 @@ function isIpv4(s)
 /**
  * Prefer a real nodename when traceroute only showed an IP.
  * Sources: this hop's sysinfo (node), else previous hop's LQM neighbor hostname.
+ * Returns { name, source } where source is traceroute|sysinfo|previous_lqm|unresolved.
  */
 function resolveDisplayHostname(ctx, prevKey, hop, node)
 {
@@ -413,7 +414,7 @@ function resolveDisplayHostname(ctx, prevKey, hop, node)
         if (!match(name, /\./)) {
             name = `${name}.local.mesh`;
         }
-        return name;
+        return { name: name, source: "traceroute" };
     }
 
     if (node && node.hostname && !isIpv4(node.hostname) && node.hostname !== hop.ip) {
@@ -421,7 +422,7 @@ function resolveDisplayHostname(ctx, prevKey, hop, node)
         if (!match(name, /\./)) {
             name = `${name}.local.mesh`;
         }
-        return name;
+        return { name: name, source: "sysinfo" };
     }
 
     const prev = ctx.byKey[prevKey] || (prevKey === ctx.localKey ? ctx.byKey[ctx.localKey] : null);
@@ -432,11 +433,12 @@ function resolveDisplayHostname(ctx, prevKey, hop, node)
             if (!match(name, /\./)) {
                 name = `${name}.local.mesh`;
             }
-            return name;
+            const prevLabel = prev.hostname || prev.ip || prevKey;
+            return { name: name, source: "previous_lqm", from: prevLabel };
         }
     }
 
-    return hop.hostname || hop.ip;
+    return { name: hop.hostname || hop.ip, source: "unresolved" };
 }
 
 /**
@@ -487,12 +489,16 @@ export function enrichHop(ctx, prevKey, hop)
     }
     const node = ensureNode(ctx, hop.ip || hop.hostname);
     const link = lookupLink(ctx, prevKey, hop.ip, hop.hostname);
-    const hostname = resolveDisplayHostname(ctx, prevKey, hop, node);
+    const resolved = resolveDisplayHostname(ctx, prevKey, hop, node);
+    const hostname = resolved.name;
     const lat = node ? node.lat : null;
     const lon = node ? node.lon : null;
     const nextKey = (node && node.key) ? node.key : (cacheKey(hop.ip || hop.hostname) || prevKey);
     const notes = [];
-    if (isIpv4(hostname) || hostname === hop.ip) {
+    if (resolved.source === "previous_lqm") {
+        push(notes, `    # name: ${hostname} from previous hop ${resolved.from} LQM neighbor list`);
+    }
+    else if (resolved.source === "unresolved") {
         push(notes, `    # name: no hostname from sysinfo or previous hop LQM for ${hop.ip || hop.hostname}`);
     }
     if (lat == null || lon == null || lat === "" || lon === "") {

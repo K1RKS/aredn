@@ -6,7 +6,7 @@ mkdir -p dist
 chmod +x src/usr/bin/aredn-traceroute src/www/cgi-bin/traceroute tools/mkapk.py
 python3 tools/mkapk.py \
   -n aredn-traceroute \
-  -v 0.1.3 \
+  -v 0.1.4 \
   -r r0 \
   -a noarch \
   -d src \
