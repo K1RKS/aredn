@@ -236,6 +236,7 @@ export function seedLocal(ctx)
         fetchHost: null,
         failReason: null,
         gpsReason: gpsReason,
+        displayName: hostname,
         lat: lat,
         lon: lon,
         hostname: hostname,
@@ -332,16 +333,90 @@ export function ensureNode(ctx, hostOrIp)
     return entry;
 };
 
+function isIpv4(s)
+{
+    return s && match(s, /^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$/) ? true : false;
+}
+
+function hasNeighborIndex(entry)
+{
+    if (!entry || !entry.byIp) {
+        return false;
+    }
+    for (let _k in entry.byIp) {
+        return true;
+    }
+    return false;
+}
+
+function rebindEntry(ctx, failedOrOld, good)
+{
+    if (!failedOrOld || !good) {
+        return;
+    }
+    if (failedOrOld.ip) {
+        ctx.byKey[failedOrOld.ip] = good;
+        ctx.hostIndex[failedOrOld.ip] = good.key;
+    }
+    if (failedOrOld.key && failedOrOld.key !== good.key) {
+        ctx.byKey[failedOrOld.key] = good;
+    }
+    if (failedOrOld.displayName) {
+        good.displayName = good.displayName || failedOrOld.displayName;
+        const dk = cacheKey(failedOrOld.displayName);
+        if (dk) {
+            ctx.hostIndex[dk] = good.key;
+        }
+    }
+}
+
+/**
+ * Prefer LQM from a previous hop entry. If that entry failed (e.g. tunnel IP)
+ * but we later learned a mesh hostname for it, re-fetch sysinfo via that hostname
+ * (and use its mesh IP / LQM for lookups).
+ */
+function getLqmSource(ctx, prevKey)
+{
+    let prev = ctx.byKey[prevKey] || (prevKey === ctx.localKey ? ctx.byKey[ctx.localKey] : null);
+    if (!prev) {
+        return null;
+    }
+    if (!prev.failed && hasNeighborIndex(prev)) {
+        return prev;
+    }
+    const altName = prev.displayName;
+    if (!altName || isIpv4(altName) || altName === prev.ip) {
+        return prev;
+    }
+    const altKey = cacheKey(altName);
+    if (altKey && ctx.byKey[altKey] && !ctx.byKey[altKey].failed) {
+        const alt = ctx.byKey[altKey];
+        alt.refreshedViaHostname = true;
+        alt.displayName = alt.displayName || altName;
+        rebindEntry(ctx, prev, alt);
+        return alt;
+    }
+    const alt = ensureNode(ctx, altName);
+    if (alt && !alt.failed) {
+        alt.refreshedViaHostname = true;
+        alt.displayName = alt.displayName || altName;
+        rebindEntry(ctx, prev, alt);
+        return alt;
+    }
+    return prev;
+}
+
 export function lookupLink(ctx, prevKey, nextIp, nextHost)
 {
-    const prev = ctx.byKey[prevKey] || (prevKey === ctx.localKey ? seedLocal(ctx) : null);
-    const prevLabel = prev ? (prev.hostname || prev.ip || prevKey) : prevKey;
+    const prev = getLqmSource(ctx, prevKey);
+    const prevLabel = prev ? (prev.displayName || prev.hostname || prev.ip || prevKey) : prevKey;
     if (!prev) {
         return {
             type: null,
             cost: null,
             typeReason: `no LQM data for previous hop (${prevKey})`,
-            costReason: `no LQM data for previous hop (${prevKey})`
+            costReason: `no LQM data for previous hop (${prevKey})`,
+            viaHostname: false
         };
     }
     if (prev.failed) {
@@ -350,7 +425,8 @@ export function lookupLink(ctx, prevKey, nextIp, nextHost)
             type: null,
             cost: null,
             typeReason: `link type unknown: ${why}`,
-            costReason: `link cost unknown: ${why}`
+            costReason: `link cost unknown: ${why}`,
+            viaHostname: false
         };
     }
     const tracker = findNeighbor(prev, nextIp, nextHost);
@@ -361,7 +437,8 @@ export function lookupLink(ctx, prevKey, nextIp, nextHost)
             type: null,
             cost: null,
             typeReason: `link type unknown: ${why}`,
-            costReason: `link cost unknown: ${why}`
+            costReason: `link cost unknown: ${why}`,
+            viaHostname: prev.refreshedViaHostname ? true : false
         };
     }
     const type = mapLinkType(tracker.type);
@@ -374,7 +451,10 @@ export function lookupLink(ctx, prevKey, nextIp, nextHost)
             prev.local
                 ? `neighbor on ${prevLabel} has no Babel cost / LQM rxcost`
                 : `neighbor on ${prevLabel} has no LQM rxcost/txcost`
-        )
+        ),
+        viaHostname: prev.refreshedViaHostname ? true : false,
+        prevLabel: prevLabel,
+        neighborHostname: tracker.hostname || null
     };
 };
 
@@ -397,15 +477,11 @@ export function formatHopLine(hopNum, hostname, ip, rtt, lat, lon, type, cost)
     return ` ${hopNum}  ${host}${ipPart} ${rttPart}  ${gps}  ${t}  ${c}`;
 };
 
-function isIpv4(s)
-{
-    return s && match(s, /^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$/) ? true : false;
-}
-
 /**
  * Prefer a real nodename when traceroute only showed an IP.
- * Sources: this hop's sysinfo (node), else previous hop's LQM neighbor hostname.
- * Returns { name, source } where source is traceroute|sysinfo|previous_lqm|unresolved.
+ * Sources: this hop's sysinfo (node), else previous hop's LQM neighbor hostname
+ * (refreshing previous hop via its resolved mesh hostname if the traceroute IP failed).
+ * Returns { name, source, from }.
  */
 function resolveDisplayHostname(ctx, prevKey, hop, node)
 {
@@ -425,7 +501,7 @@ function resolveDisplayHostname(ctx, prevKey, hop, node)
         return { name: name, source: "sysinfo" };
     }
 
-    const prev = ctx.byKey[prevKey] || (prevKey === ctx.localKey ? ctx.byKey[ctx.localKey] : null);
+    const prev = getLqmSource(ctx, prevKey);
     if (prev && !prev.failed) {
         const tracker = findNeighbor(prev, hop.ip, hop.hostname);
         if (tracker && tracker.hostname && !isIpv4(tracker.hostname)) {
@@ -433,8 +509,9 @@ function resolveDisplayHostname(ctx, prevKey, hop, node)
             if (!match(name, /\./)) {
                 name = `${name}.local.mesh`;
             }
-            const prevLabel = prev.hostname || prev.ip || prevKey;
-            return { name: name, source: "previous_lqm", from: prevLabel };
+            const prevLabel = prev.displayName || prev.hostname || prev.ip || prevKey;
+            const source = prev.refreshedViaHostname ? "previous_lqm_via_hostname" : "previous_lqm";
+            return { name: name, source: source, from: prevLabel };
         }
     }
 
@@ -487,19 +564,54 @@ export function enrichHop(ctx, prevKey, hop)
             nextKey: prevKey
         };
     }
-    const node = ensureNode(ctx, hop.ip || hop.hostname);
+    let node = ensureNode(ctx, hop.ip || hop.hostname);
+    // Resolve name first so a failed tunnel-IP prev can be refreshed via its mesh hostname.
+    let resolved = resolveDisplayHostname(ctx, prevKey, hop, node);
+    // If this hop's IP sysinfo failed but we learned a hostname from prev LQM, re-fetch via name.
+    if (node && node.failed && resolved.name && !isIpv4(resolved.name) && resolved.name !== hop.ip) {
+        const byName = ensureNode(ctx, resolved.name);
+        if (byName && !byName.failed) {
+            rebindEntry(ctx, node, byName);
+            node = byName;
+            if (byName.hostname && !isIpv4(byName.hostname)) {
+                resolved = { name: meshHost(byName.hostname) || byName.hostname, source: "sysinfo" };
+            }
+        }
+    }
     const link = lookupLink(ctx, prevKey, hop.ip, hop.hostname);
-    const resolved = resolveDisplayHostname(ctx, prevKey, hop, node);
+    // If name still unresolved, try again after prev may have been refreshed via hostname.
+    if (resolved.source === "unresolved") {
+        resolved = resolveDisplayHostname(ctx, prevKey, hop, node);
+    }
     const hostname = resolved.name;
+    if (node) {
+        node.displayName = hostname;
+        if (!isIpv4(hostname) && hostname !== hop.ip) {
+            const hk = cacheKey(hostname);
+            if (hk) {
+                ctx.hostIndex[hk] = node.key;
+            }
+        }
+    }
     const lat = node ? node.lat : null;
     const lon = node ? node.lon : null;
-    const nextKey = (node && node.key) ? node.key : (cacheKey(hop.ip || hop.hostname) || prevKey);
+    let nextKey = (node && node.key) ? node.key : (cacheKey(hop.ip || hop.hostname) || prevKey);
+    // Prefer mesh-IP/hostname cache key when we rebound a failed tunnel entry.
+    if (node && !node.failed && node.ip && hop.ip && node.ip !== hop.ip) {
+        nextKey = node.key;
+    }
     const notes = [];
     if (resolved.source === "previous_lqm") {
         push(notes, `    # name: ${hostname} from previous hop ${resolved.from} LQM neighbor list`);
     }
+    else if (resolved.source === "previous_lqm_via_hostname") {
+        push(notes, `    # name: ${hostname} from previous hop ${resolved.from} LQM (refetched via mesh hostname after traceroute IP failed)`);
+    }
     else if (resolved.source === "unresolved") {
         push(notes, `    # name: no hostname from sysinfo or previous hop LQM for ${hop.ip || hop.hostname}`);
+    }
+    if (link.viaHostname) {
+        push(notes, `    # link: previous hop LQM loaded via resolved hostname ${link.prevLabel}`);
     }
     if (lat == null || lon == null || lat === "" || lon === "") {
         if (node && node.gpsReason) {
