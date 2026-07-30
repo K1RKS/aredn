@@ -371,9 +371,9 @@ function rebindEntry(ctx, failedOrOld, good)
 }
 
 /**
- * Prefer LQM from a previous hop entry. If that entry failed (e.g. tunnel IP)
- * but we later learned a mesh hostname for it, re-fetch sysinfo via that hostname
- * (and use its mesh IP / LQM for lookups).
+ * Prefer LQM from a previous hop entry. If that entry was only reachable via a
+ * traceroute IP (often a tunnel address) but we later learned a mesh hostname
+ * for it, re-fetch sysinfo via that hostname and use its LQM for lookups.
  */
 function getLqmSource(ctx, prevKey)
 {
@@ -381,11 +381,13 @@ function getLqmSource(ctx, prevKey)
     if (!prev) {
         return null;
     }
-    if (!prev.failed && hasNeighborIndex(prev)) {
-        return prev;
-    }
     const altName = prev.displayName;
-    if (!altName || isIpv4(altName) || altName === prev.ip) {
+    const haveMeshName = altName && !isIpv4(altName) && altName !== prev.ip;
+    // Tunnel/traceroute IPs can return sysinfo with a neighbor table that does not
+    // index the next hop the way mesh-hostname sysinfo does. Prefer hostname refresh.
+    const fetchedViaIp = prev.fetchHost && isIpv4(prev.fetchHost);
+    const shouldRefresh = haveMeshName && (prev.failed || !hasNeighborIndex(prev) || fetchedViaIp);
+    if (!shouldRefresh) {
         return prev;
     }
     const altKey = cacheKey(altName);
@@ -587,15 +589,22 @@ export function enrichHop(ctx, prevKey, hop)
             from: resolved.from
         };
     }
-    // If this hop's IP sysinfo failed but we learned a hostname from prev LQM, re-fetch via name.
-    // (Same control flow as 0.1.5/0.1.6 — do not change rebind/nextKey behavior.)
-    if (node && node.failed && resolved.name && !isIpv4(resolved.name) && resolved.name !== hop.ip) {
-        const byName = ensureNode(ctx, resolved.name);
-        if (byName && !byName.failed) {
-            rebindEntry(ctx, node, byName);
-            node = byName;
-            if (byName.hostname && !isIpv4(byName.hostname)) {
-                resolved = { name: meshHost(byName.hostname) || byName.hostname, source: "sysinfo" };
+    // If we learned a mesh hostname (especially from previous-hop LQM), prefer
+    // sysinfo via that name when the traceroute IP failed, has no neighbors, or
+    // was only fetched by numeric IP (tunnel addresses often need this).
+    if (resolved.name && !isIpv4(resolved.name) && resolved.name !== hop.ip) {
+        const fetchedViaIp = node && node.fetchHost && isIpv4(node.fetchHost);
+        const needNameFetch = !node || node.failed || !hasNeighborIndex(node) || fetchedViaIp;
+        if (needNameFetch) {
+            const byName = ensureNode(ctx, resolved.name);
+            if (byName && !byName.failed) {
+                if (node) {
+                    rebindEntry(ctx, node, byName);
+                }
+                node = byName;
+                if (byName.hostname && !isIpv4(byName.hostname)) {
+                    resolved = { name: meshHost(byName.hostname) || byName.hostname, source: "sysinfo" };
+                }
             }
         }
     }
