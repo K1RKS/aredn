@@ -671,10 +671,6 @@ export function runEnrichedTraceroute(dest, printFn, options)
     seedLocal(ctx);
     let prevKey = ctx.localKey;
 
-    if (verbose) {
-        printFn("# verbose: notes explain name resolution and any unset (-) GPS/type/cost fields");
-    }
-
     const running = fs.popen(`/bin/traceroute -q 1 -w 1 ${dest} 2>&1`);
     if (!running) {
         return false;
@@ -687,13 +683,8 @@ export function runEnrichedTraceroute(dest, printFn, options)
             printFn(enriched.line);
             if (verbose) {
                 const notes = enriched.notes || [];
-                if (length(notes) === 0) {
-                    printFn("    # (no missing fields; name from traceroute or already known)");
-                }
-                else {
-                    for (let i = 0; i < length(notes); i++) {
-                        printFn(notes[i]);
-                    }
+                for (let i = 0; i < length(notes); i++) {
+                    printFn(notes[i]);
                 }
             }
             if (!hop.unreachable) {
