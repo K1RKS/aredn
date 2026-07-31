@@ -133,12 +133,14 @@
     const old = sid;
     sid = null;
     setConnectedUi(false);
+    setStatus("disconnecting…");
     if (old) {
       try {
         await api("stop", { sid: old, method: "POST" });
       } catch (e) { /* ignore */ }
     }
-    setStatus("disconnected");
+    // Apps-bar launches this in a new tab; return to the node admin UI.
+    location.replace("/a/status");
   }
 
   async function startSession() {
