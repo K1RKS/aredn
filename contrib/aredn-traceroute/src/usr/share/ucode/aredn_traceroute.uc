@@ -9,6 +9,7 @@ import * as fs from "fs";
 import * as uci from "uci";
 import * as babel from "aredn.babel";
 import * as configuration from "aredn.configuration";
+import * as mesh from "aredn.mesh";
 
 const UFETCH = "/bin/uclient-fetch";
 const FETCH_TIMEOUT = 2;
@@ -162,6 +163,81 @@ function linkCost(entry, tracker, local)
     return null;
 }
 
+/**
+ * Build dest-IP -> Babel path metric map from the local routing table.
+ * LQM tracker.metric is often unset (nexthop matching uses IPv6 LL), so traceroute
+ * metrics come from installed host routes to each hop address instead.
+ */
+function seedLocalRouteMetrics(ctx)
+{
+    ctx.routeMetricByIp = {};
+    try {
+        const routes = babel.getHostRoutes();
+        for (let i = 0; i < length(routes); i++) {
+            const r = routes[i];
+            if (!r || r.metric == null || r.metric === 65535) {
+                continue;
+            }
+            let dst = r.dst;
+            const slash = match(dst, /^([^/]+)/);
+            if (slash) {
+                dst = slash[1];
+            }
+            if (match(dst, /^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$/)) {
+                const prev = ctx.routeMetricByIp[dst];
+                if (prev == null || r.metric < prev) {
+                    ctx.routeMetricByIp[dst] = r.metric;
+                }
+            }
+        }
+    }
+    catch (_) {
+    }
+}
+
+function localPathMetric(ctx, ip)
+{
+    if (!ip || !ctx.routeMetricByIp) {
+        return null;
+    }
+    const m = ctx.routeMetricByIp[ip];
+    return m != null ? m : null;
+}
+
+/**
+ * Path metric from this node (traceroute source) to the hop.
+ * Prefer local Babel host routes; LQM neighbor.metric is unreliable (often null
+ * due to IPv6 LL nexthops) and means "best route via neighbor", not "to hop".
+ */
+function resolvePathMetric(ctx, hop, node)
+{
+    let metric = localPathMetric(ctx, hop.ip);
+    if (metric != null) {
+        return {
+            metric: metric,
+            reason: null,
+            source: "local_route"
+        };
+    }
+    if (node && node.ip && node.ip !== hop.ip) {
+        metric = localPathMetric(ctx, node.ip);
+        if (metric != null) {
+            return {
+                metric: metric,
+                reason: null,
+                source: "local_route_mesh_ip"
+            };
+        }
+    }
+    const tried = hop.ip || "?";
+    const mesh = (node && node.ip && node.ip !== hop.ip) ? ` or mesh IP ${node.ip}` : "";
+    return {
+        metric: null,
+        reason: `no Babel host route on this node to ${tried}${mesh}`,
+        source: null
+    };
+}
+
 export function createContext()
 {
     return {
@@ -169,6 +245,62 @@ export function createContext()
         hostIndex: {},
         localKey: "local"
     };
+};
+
+function resolveDestIp(dest)
+{
+    if (!dest) {
+        return null;
+    }
+    if (match(dest, /^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$/)) {
+        return dest;
+    }
+    const short = lc(replace(dest, /\.local\.mesh$/, ""));
+    try {
+        const nodes = mesh.getNodeList();
+        for (let i = 0; i < length(nodes); i++) {
+            const n = nodes[i];
+            if (n && n.ip && n.name && lc(n.name) === short) {
+                return n.ip;
+            }
+        }
+    }
+    catch (_) {
+    }
+    try {
+        const p = fs.popen(`/usr/bin/resolveip -4 -t 1 ${dest} 2>/dev/null`);
+        if (p) {
+            const ip = trim(p.read("line") || "");
+            p.close();
+            if (match(ip, /^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$/)) {
+                return ip;
+            }
+        }
+    }
+    catch (_) {
+    }
+    return null;
+}
+
+/**
+ * Babel path metric from this node to dest (hostname or IP).
+ * Same host-route metric used as the last field on each hop line.
+ */
+export function lookupDestPathMetric(dest)
+{
+    if (!dest) {
+        return null;
+    }
+    if (!match(dest, /\./) && !match(dest, /^[0-9.]+$/)) {
+        dest = `${dest}.local.mesh`;
+    }
+    const ctx = createContext();
+    seedLocalRouteMetrics(ctx);
+    const ip = resolveDestIp(dest);
+    if (!ip) {
+        return null;
+    }
+    return localPathMetric(ctx, ip);
 };
 
 function storeEntry(ctx, key, entry)
@@ -425,10 +557,8 @@ export function lookupLink(ctx, prevKey, nextIp, nextHost)
         return {
             type: null,
             cost: null,
-            metric: null,
             typeReason: why,
             costReason: why,
-            metricReason: why,
             viaHostname: false
         };
     }
@@ -437,10 +567,8 @@ export function lookupLink(ctx, prevKey, nextIp, nextHost)
         return {
             type: null,
             cost: null,
-            metric: null,
             typeReason: `link type unknown: ${why}`,
             costReason: `link cost unknown: ${why}`,
-            metricReason: `metric unknown: ${why}`,
             viaHostname: false
         };
     }
@@ -451,27 +579,22 @@ export function lookupLink(ctx, prevKey, nextIp, nextHost)
         return {
             type: null,
             cost: null,
-            metric: null,
             typeReason: `link type unknown: ${why}`,
             costReason: `link cost unknown: ${why}`,
-            metricReason: `metric unknown: ${why}`,
             viaHostname: prev.refreshedViaHostname ? true : false
         };
     }
     const type = mapLinkType(tracker.type);
     const cost = linkCost(prev, tracker, prev.local);
-    const metric = tracker.metric != null ? tracker.metric : null;
     return {
         type: type,
         cost: cost,
-        metric: metric,
         typeReason: type ? null : `neighbor ${nextIp || nextHost} on ${prevLabel} has no link type`,
         costReason: cost != null ? null : (
             prev.local
                 ? `neighbor on ${prevLabel} has no Babel cost / LQM rxcost`
                 : `neighbor on ${prevLabel} has no LQM rxcost/txcost`
         ),
-        metricReason: metric != null ? null : `neighbor on ${prevLabel} has no Babel path metric in LQM`,
         viaHostname: prev.refreshedViaHostname ? true : false,
         prevLabel: prevLabel,
         neighborHostname: tracker.hostname || null
@@ -620,6 +743,7 @@ export function enrichHop(ctx, prevKey, hop)
         }
     }
     const link = lookupLink(ctx, prevKey, hop.ip, hop.hostname);
+    const pathMetric = resolvePathMetric(ctx, hop, node);
     // If name still unresolved, try again after prev may have been refreshed via hostname.
     if (resolved.source === "unresolved") {
         resolved = resolveDisplayHostname(ctx, prevKey, hop, node);
@@ -664,6 +788,9 @@ export function enrichHop(ctx, prevKey, hop)
     if (link.viaHostname) {
         push(notes, `    # link: previous hop LQM loaded via resolved hostname ${link.prevLabel}`);
     }
+    if (pathMetric.source === "local_route_mesh_ip" && node && node.ip) {
+        push(notes, `    # metric: Babel path metric via mesh IP ${node.ip} (traceroute hop IP not in local host routes)`);
+    }
     if (wantGps && (lat == null || lon == null || lat === "" || lon === "")) {
         if (node && node.gpsReason) {
             push(notes, `    # GPS -: ${node.gpsReason}`);
@@ -681,11 +808,11 @@ export function enrichHop(ctx, prevKey, hop)
     if (link.cost == null && link.costReason) {
         push(notes, `    # cost -: ${link.costReason}`);
     }
-    if (link.metric == null && link.metricReason) {
-        push(notes, `    # metric -: ${link.metricReason}`);
+    if (pathMetric.metric == null && pathMetric.reason) {
+        push(notes, `    # metric -: ${pathMetric.reason}`);
     }
     return {
-        line: formatHopLine(hop.hop, hostname, hop.ip, hop.rtt, lat, lon, link.type, link.cost, link.metric, wantGps),
+        line: formatHopLine(hop.hop, hostname, hop.ip, hop.rtt, lat, lon, link.type, link.cost, pathMetric.metric, wantGps),
         notes: notes,
         nextKey: nextKey
     };
@@ -707,6 +834,7 @@ export function runEnrichedTraceroute(dest, printFn, options)
     const verbose = options && options.verbose;
     const ctx = createContext();
     ctx.wantGps = !!(options && options.gps);
+    seedLocalRouteMetrics(ctx);
     seedLocal(ctx);
     let prevKey = ctx.localKey;
 

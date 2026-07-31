@@ -2,7 +2,8 @@
 /*
  * Drop-in replacement for AREDN /cgi-bin/traceroute.
  * Same HTML/streaming contract as firmware CGI so Tools → Traceroute keeps working.
- * Appends per-hop GPS, link type, and Babel link cost when available.
+ * Client line includes Babel path metric to the destination; hops append type/cost/metric
+ * (and GPS when gps=1).
  */
 
 import * as configuration from "aredn.configuration";
@@ -32,7 +33,9 @@ else {
         server += ".local.mesh";
     }
     print("<html><head><title>SUCCESS</title></head>\n");
-    print(`<body><pre>Client: ${node}\nServer: ${server}\n`);
+    const destMetric = atr.lookupDestPathMetric(server);
+    const metricPart = destMetric != null ? `${destMetric}` : "-";
+    print(`<body><pre>Client: ${node}  ${metricPart}\nServer: ${server}\n`);
     flush();
 
     const ok = atr.runEnrichedTraceroute(server, function (line) {
