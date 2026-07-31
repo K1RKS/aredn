@@ -12,3 +12,6 @@ openwrt/
 ._.DS_Store
 saved/
 .vscode
+
+# Local-only helper scripts (not checked in)
+/local/
