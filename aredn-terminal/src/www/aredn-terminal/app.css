@@ -40,6 +40,27 @@ html, body {
   background: #30363d;
 }
 
+.bar button:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.bar button.role-primary {
+  border-color: #3d7ea6;
+  background: #1f3a4d;
+  color: #7ec8f0;
+}
+
+.bar button.role-viewer {
+  border-color: #6e5a2e;
+  background: #3a321c;
+  color: #e3b341;
+}
+
+.bar button.role-viewer:not(:disabled):hover {
+  background: #4a4024;
+}
+
 #terminal {
   height: calc(100% - 2.2rem);
   padding: 0.25rem;

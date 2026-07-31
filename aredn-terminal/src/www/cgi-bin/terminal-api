@@ -1,7 +1,8 @@
 #!/usr/bin/ucode
 /*
  * Terminal session API. Auth required on every operation.
- * Ops: start | read | write | stop | ping
+ * Ops: join | read | write | leave | takeover | ping | stop
+ * Clients: cid identifies browser; one primary may write, viewers are readonly.
  */
 
 import * as term from "aredn_terminal";
@@ -17,6 +18,7 @@ function send(code, obj)
     const status = code == 200 ? "200 OK" :
         code == 401 ? "401 Unauthorized" :
         code == 400 ? "400 Bad Request" :
+        code == 403 ? "403 Forbidden" :
         code == 409 ? "409 Conflict" :
         code == 410 ? "410 Gone" : `${code}`;
     print(`Status: ${status}\r\n`);
@@ -55,7 +57,8 @@ if (!term.isAuthenticated(env)) {
 else {
     const q = term.parseQuery(env.QUERY_STRING);
     let op = q.op || "";
-    const sid = q.sid || "";
+    // Prefer cid; accept legacy sid as client id for leave/stop from old UIs.
+    const cid = q.cid || q.sid || "";
     let body = "";
 
     if (env.REQUEST_METHOD == "POST") {
@@ -70,20 +73,17 @@ else {
 
     term.cleanupStale();
 
-    if (op == "start") {
-        const r = term.startSession();
-        if (r.error == "busy") {
-            send(409, r);
-        }
-        else if (r.error) {
+    if (op == "join" || op == "start") {
+        const r = term.joinSession();
+        if (r.error) {
             send(400, r);
         }
         else {
-            send(200, { ok: true, sid: r.sid });
+            send(200, { ok: true, sid: r.sid, cid: r.cid, role: r.role });
         }
     }
     else if (op == "read") {
-        const r = term.readSession(sid);
+        const r = term.readSession(cid);
         if (r.error == "gone") {
             send(410, r);
         }
@@ -91,7 +91,15 @@ else {
             send(400, r);
         }
         else {
-            send(200, { ok: true, data: b64enc(r.data), offset: r.offset, alive: true });
+            send(200, {
+                ok: true,
+                data: b64enc(r.data),
+                offset: r.offset,
+                alive: true,
+                role: r.role,
+                cid: r.cid,
+                sid: r.sid
+            });
         }
     }
     else if (op == "write") {
@@ -108,7 +116,22 @@ else {
                 data = body;
             }
         }
-        const r = term.writeSession(sid, data);
+        const r = term.writeSession(cid, data);
+        if (r.error == "gone") {
+            send(410, r);
+        }
+        else if (r.error == "readonly") {
+            send(403, r);
+        }
+        else if (r.error) {
+            send(400, r);
+        }
+        else {
+            send(200, { ok: true, role: "primary" });
+        }
+    }
+    else if (op == "takeover") {
+        const r = term.takeover(cid);
         if (r.error == "gone") {
             send(410, r);
         }
@@ -116,20 +139,32 @@ else {
             send(400, r);
         }
         else {
-            send(200, { ok: true });
+            send(200, { ok: true, role: r.role, cid: r.cid, sid: r.sid });
         }
     }
-    else if (op == "stop") {
-        term.stopSession(sid);
-        send(200, { ok: true });
+    else if (op == "leave" || op == "stop") {
+        if (cid) {
+            const r = term.leaveClient(cid);
+            send(200, { ok: true, closed: r.closed ? true : false });
+        }
+        else {
+            term.stopAll();
+            send(200, { ok: true, closed: true });
+        }
     }
     else if (op == "ping") {
-        if (sid) {
-            term.touchHeartbeat(sid);
+        const r = term.pingClient(cid);
+        if (r.error == "gone") {
+            send(410, r);
         }
-        send(200, { ok: true });
+        else if (r.error) {
+            send(400, r);
+        }
+        else {
+            send(200, { ok: true, role: r.role, cid: r.cid });
+        }
     }
     else {
-        send(400, { error: "bad_op", message: "op must be start|read|write|stop|ping" });
+        send(400, { error: "bad_op", message: "op must be join|read|write|leave|takeover|ping|stop" });
     }
 }

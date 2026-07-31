@@ -1,16 +1,18 @@
 /*
  * AREDN terminal session helpers: authV1, ash session I/O, apps-bar badges.
- * Side-loaded package companion for AREDN firmware.
+ * One shell, multiple browser clients (one primary writer + readonly viewers).
  */
 
 import * as fs from "fs";
 import * as configuration from "aredn.configuration";
 
 export const SESSION_ROOT = "/tmp/aredn-terminal";
+export const SHELL_DIR = "/tmp/aredn-terminal/active";
+export const CLIENTS_DIR = "/tmp/aredn-terminal/active/clients";
 export const BADGE_DIR = "/tmp/apps/terminal";
-export const MAX_SESSIONS = 1;
 export const IDLE_SECS = 60;
 export const AUTH_AGE = 315360000; // 10 years (match stock UI)
+export const VIEWER_CATCHUP = 32768; // bytes of history for new viewers
 
 const DAYS = [ "", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun" ];
 const MONTHS = [ "", "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec" ];
@@ -111,49 +113,59 @@ export function setBadge(busy)
         fs.writefile(`${BADGE_DIR}/badge-color`, "#c44c44");
     }
     else {
-        fs.unlink(`${BADGE_DIR}/badge`);
-        fs.unlink(`${BADGE_DIR}/badge-color`);
+        system(`rm -f '${BADGE_DIR}/badge' '${BADGE_DIR}/badge-color'`);
     }
 };
 
-export function touchHeartbeat(sid)
+export function clearBadge()
 {
-    fs.writefile(`${SESSION_ROOT}/${sid}/heartbeat`, `${clock()[0]}`);
+    setBadge(false);
 };
 
-function sessionAlive(sid)
+function shellAlive()
 {
-    const pid = trim(fs.readfile(`${SESSION_ROOT}/${sid}/pid`) || "");
+    const pid = trim(fs.readfile(`${SHELL_DIR}/pid`) || "");
     if (!pid || !match(pid, /^[0-9]+$/)) {
         return false;
     }
     return system(`kill -0 ${pid} 2>/dev/null`) === 0;
 };
 
-export function stopSession(sid)
+function newId()
 {
-    if (!sid || match(sid, /[^0-9a-f]/)) {
-        return false;
-    }
-    const dir = `${SESSION_ROOT}/${sid}`;
-    if (!fs.stat(dir)) {
-        return false;
-    }
-    const pid = trim(fs.readfile(`${dir}/pid`) || "");
-    if (pid && match(pid, /^[0-9]+$/)) {
-        system(`kill ${pid} 2>/dev/null`);
-        system(`kill -9 ${pid} 2>/dev/null`);
-    }
-    system(`pkill -f 'aredn-terminal-session ${dir}' 2>/dev/null`);
-    system(`rm -rf '${dir}'`);
-    refreshBadgeFromSessions();
-    return true;
+    const t = clock();
+    return sprintf("%08x%04x", t[0] & 0xffffffff, t[1] & 0xffff);
 };
 
-export function listSessions()
+function clientDir(cid)
+{
+    return `${CLIENTS_DIR}/${cid}`;
+};
+
+function validId(id)
+{
+    return id && !match(id, /[^0-9a-f]/);
+};
+
+function readRole(cid)
+{
+    return trim(fs.readfile(`${clientDir(cid)}/role`) || "");
+};
+
+function writeRole(cid, role)
+{
+    fs.writefile(`${clientDir(cid)}/role`, role);
+};
+
+function touchClient(cid)
+{
+    fs.writefile(`${clientDir(cid)}/heartbeat`, `${clock()[0]}`);
+};
+
+function listClientIds()
 {
     const out = [];
-    const entries = fs.lsdir(SESSION_ROOT);
+    const entries = fs.lsdir(CLIENTS_DIR);
     if (!entries) {
         return out;
     }
@@ -166,112 +178,332 @@ export function listSessions()
     return out;
 };
 
-export function refreshBadgeFromSessions()
+function clientOrder(cid)
 {
-    const sessions = listSessions();
-    let busy = false;
-    for (let i = 0; i < length(sessions); i++) {
-        if (sessionAlive(sessions[i])) {
-            busy = true;
-            break;
+    return int(trim(fs.readfile(`${clientDir(cid)}/order`) || "0"));
+};
+
+function sortedClients()
+{
+    const ids = listClientIds();
+    // Insertion sort by order (small N).
+    for (let i = 1; i < length(ids); i++) {
+        const key = ids[i];
+        const ko = clientOrder(key);
+        let j = i - 1;
+        while (j >= 0 && clientOrder(ids[j]) > ko) {
+            ids[j + 1] = ids[j];
+            j--;
+        }
+        ids[j + 1] = key;
+    }
+    return ids;
+};
+
+function nextOrder()
+{
+    const n = int(trim(fs.readfile(`${SHELL_DIR}/next_order`) || "0")) + 1;
+    fs.writefile(`${SHELL_DIR}/next_order`, `${n}`);
+    return n;
+};
+
+function removeClientFiles(cid)
+{
+    if (validId(cid)) {
+        system(`rm -rf '${clientDir(cid)}'`);
+    }
+};
+
+export function promotePrimary()
+{
+    const ids = sortedClients();
+    if (length(ids) == 0) {
+        return null;
+    }
+    let primary = null;
+    for (let i = 0; i < length(ids); i++) {
+        if (primary == null) {
+            primary = ids[i];
+            writeRole(ids[i], "primary");
+        }
+        else {
+            writeRole(ids[i], "viewer");
         }
     }
-    setBadge(busy);
+    return primary;
+};
+
+function killShell()
+{
+    if (fs.stat(SHELL_DIR)) {
+        const pid = trim(fs.readfile(`${SHELL_DIR}/pid`) || "");
+        if (pid && match(pid, /^[0-9]+$/)) {
+            system(`kill ${pid} 2>/dev/null`);
+            system(`kill -9 ${pid} 2>/dev/null`);
+        }
+        system(`pkill -f 'aredn-terminal-session ${SHELL_DIR}' 2>/dev/null`);
+    }
+    system(`rm -rf '${SESSION_ROOT}'`);
+    clearBadge();
+};
+
+export function refreshBadge()
+{
+    if (shellAlive() && length(listClientIds()) > 0) {
+        setBadge(true);
+    }
+    else {
+        clearBadge();
+    }
+};
+
+function spawnShell()
+{
+    ensureDir(SESSION_ROOT);
+    ensureDir(SHELL_DIR);
+    ensureDir(CLIENTS_DIR);
+    fs.writefile(`${SHELL_DIR}/next_order`, "0");
+    system(`setsid /usr/libexec/aredn-terminal-session '${SHELL_DIR}' >/dev/null 2>&1 &`);
+    system("sleep 0.2 2>/dev/null || sleep 1");
+    return shellAlive();
+};
+
+function createClient(role)
+{
+    const cid = newId();
+    const dir = clientDir(cid);
+    ensureDir(CLIENTS_DIR);
+    ensureDir(dir);
+    writeRole(cid, role);
+    fs.writefile(`${dir}/order`, `${nextOrder()}`);
+    touchClient(cid);
+
+    const st = fs.stat(`${SHELL_DIR}/stdout`);
+    let offset = 0;
+    if (st && st.size > VIEWER_CATCHUP) {
+        offset = st.size - VIEWER_CATCHUP;
+    }
+    // Primary joining a fresh shell starts at 0; viewers joining live get catch-up tail.
+    if (role == "primary" && (!st || st.size == 0)) {
+        offset = 0;
+    }
+    fs.writefile(`${dir}/offset`, `${offset}`);
+    return cid;
 };
 
 export function cleanupStale()
 {
     ensureDir(SESSION_ROOT);
+    if (!fs.stat(SHELL_DIR)) {
+        clearBadge();
+        return;
+    }
+    if (!shellAlive()) {
+        killShell();
+        return;
+    }
+
     const now = clock()[0];
-    const sessions = listSessions();
-    for (let i = 0; i < length(sessions); i++) {
-        const sid = sessions[i];
-        const hb = int(trim(fs.readfile(`${SESSION_ROOT}/${sid}/heartbeat`) || "0"));
-        if (!sessionAlive(sid) || (hb > 0 && now - hb > IDLE_SECS)) {
-            stopSession(sid);
+    const ids = listClientIds();
+    let primaryGone = false;
+    for (let i = 0; i < length(ids); i++) {
+        const cid = ids[i];
+        const hb = int(trim(fs.readfile(`${clientDir(cid)}/heartbeat`) || "0"));
+        if (hb > 0 && now - hb > IDLE_SECS) {
+            if (readRole(cid) == "primary") {
+                primaryGone = true;
+            }
+            removeClientFiles(cid);
         }
     }
-    refreshBadgeFromSessions();
+
+    const left = listClientIds();
+    if (length(left) == 0) {
+        killShell();
+        return;
+    }
+
+    let hasPrimary = false;
+    for (let i = 0; i < length(left); i++) {
+        if (readRole(left[i]) == "primary") {
+            hasPrimary = true;
+            break;
+        }
+    }
+    if (!hasPrimary || primaryGone) {
+        promotePrimary();
+    }
+    refreshBadge();
 };
 
-function newSid()
-{
-    const t = clock();
-    return sprintf("%08x%04x", t[0] & 0xffffffff, t[1] & 0xffff);
-};
-
-export function startSession()
+/**
+ * Join existing shell as viewer, or create shell + join as primary.
+ */
+export function joinSession()
 {
     cleanupStale();
-    const sessions = listSessions();
-    let alive = 0;
-    for (let i = 0; i < length(sessions); i++) {
-        if (sessionAlive(sessions[i])) {
-            alive++;
+
+    if (shellAlive()) {
+        const cid = createClient("viewer");
+        // Ensure someone is primary (e.g. after races).
+        let hasPrimary = false;
+        const ids = listClientIds();
+        for (let i = 0; i < length(ids); i++) {
+            if (readRole(ids[i]) == "primary") {
+                hasPrimary = true;
+                break;
+            }
         }
-    }
-    if (alive >= MAX_SESSIONS) {
-        return { error: "busy", message: "Terminal already in use" };
+        if (!hasPrimary) {
+            promotePrimary();
+        }
+        refreshBadge();
+        return { sid: "active", cid: cid, role: readRole(cid) };
     }
 
-    const sid = newSid();
-    const dir = `${SESSION_ROOT}/${sid}`;
-    ensureDir(SESSION_ROOT);
-    ensureDir(dir);
-    fs.writefile(`${dir}/offset`, "0");
-    touchHeartbeat(sid);
-
-    system(`setsid /usr/libexec/aredn-terminal-session '${dir}' >/dev/null 2>&1 &`);
-    system("sleep 0.2 2>/dev/null || sleep 1");
-    if (!sessionAlive(sid)) {
-        system(`rm -rf '${dir}'`);
+    system(`rm -rf '${SESSION_ROOT}'`);
+    if (!spawnShell()) {
+        system(`rm -rf '${SESSION_ROOT}'`);
         return { error: "spawn", message: "Failed to start shell session" };
     }
+    const cid = createClient("primary");
     setBadge(true);
-    return { sid: sid };
+    return { sid: "active", cid: cid, role: "primary" };
 };
 
-export function writeSession(sid, data)
+export function leaveClient(cid)
 {
-    if (!sid || match(sid, /[^0-9a-f]/) || data == null) {
+    cleanupStale();
+    if (!validId(cid)) {
         return { error: "bad_request" };
     }
-    if (!sessionAlive(sid)) {
+    if (!fs.stat(clientDir(cid))) {
+        if (length(listClientIds()) == 0) {
+            killShell();
+        }
+        else {
+            refreshBadge();
+        }
+        return { ok: true };
+    }
+
+    const wasPrimary = readRole(cid) == "primary";
+    removeClientFiles(cid);
+
+    const left = listClientIds();
+    if (length(left) == 0) {
+        killShell();
+        return { ok: true, closed: true };
+    }
+    if (wasPrimary) {
+        promotePrimary();
+    }
+    refreshBadge();
+    return { ok: true, closed: false };
+};
+
+/** Tear down entire shell (admin / last-resort). */
+export function stopAll()
+{
+    killShell();
+    return { ok: true };
+};
+
+export function takeover(cid)
+{
+    cleanupStale();
+    if (!validId(cid) || !fs.stat(clientDir(cid))) {
         return { error: "gone" };
     }
-    touchHeartbeat(sid);
-    const f = fs.open(`${SESSION_ROOT}/${sid}/stdin`, "w");
+    if (!shellAlive()) {
+        return { error: "gone" };
+    }
+    touchClient(cid);
+    const ids = listClientIds();
+    for (let i = 0; i < length(ids); i++) {
+        writeRole(ids[i], ids[i] == cid ? "primary" : "viewer");
+    }
+    return { ok: true, role: "primary", cid: cid, sid: "active" };
+};
+
+export function writeSession(cid, data)
+{
+    if (!validId(cid) || data == null) {
+        return { error: "bad_request" };
+    }
+    if (!shellAlive() || !fs.stat(clientDir(cid))) {
+        return { error: "gone" };
+    }
+    touchClient(cid);
+    if (readRole(cid) != "primary") {
+        return { error: "readonly", message: "Viewer mode — take control to type" };
+    }
+    const f = fs.open(`${SHELL_DIR}/stdin`, "w");
     if (!f) {
         return { error: "write" };
     }
     f.write(data);
     f.close();
-    return { ok: true };
+    return { ok: true, role: "primary" };
 };
 
-export function readSession(sid)
+export function readSession(cid)
 {
-    if (!sid || match(sid, /[^0-9a-f]/)) {
+    if (!validId(cid)) {
         return { error: "bad_request" };
     }
-    if (!sessionAlive(sid)) {
+    if (!shellAlive() || !fs.stat(clientDir(cid))) {
         cleanupStale();
         return { error: "gone" };
     }
-    touchHeartbeat(sid);
-    const dir = `${SESSION_ROOT}/${sid}`;
+    touchClient(cid);
+    const dir = clientDir(cid);
     const offset = int(trim(fs.readfile(`${dir}/offset`) || "0"));
-    const f = fs.open(`${dir}/stdout`, "r");
+    const f = fs.open(`${SHELL_DIR}/stdout`, "r");
     if (!f) {
-        return { data: "", offset: offset };
+        return { data: "", offset: offset, role: readRole(cid), cid: cid };
     }
     f.seek(offset);
     const chunk = f.read("all") || "";
-    const st = fs.stat(`${dir}/stdout`);
+    const st = fs.stat(`${SHELL_DIR}/stdout`);
     const newOffset = st ? st.size : offset + length(chunk);
     f.close();
     fs.writefile(`${dir}/offset`, `${newOffset}`);
-    return { data: chunk, offset: newOffset, alive: true };
+    return {
+        data: chunk,
+        offset: newOffset,
+        alive: true,
+        role: readRole(cid),
+        cid: cid,
+        sid: "active"
+    };
+};
+
+export function pingClient(cid)
+{
+    if (!validId(cid) || !fs.stat(clientDir(cid))) {
+        return { error: "gone" };
+    }
+    touchClient(cid);
+    return { ok: true, role: readRole(cid), cid: cid };
+};
+
+// Back-compat aliases used by older call sites during transition.
+export function listSessions()
+{
+    return listClientIds();
+};
+
+export function stopSession(cid)
+{
+    return leaveClient(cid);
+};
+
+export function touchHeartbeat(cid)
+{
+    if (validId(cid) && fs.stat(clientDir(cid))) {
+        touchClient(cid);
+    }
 };
 
 export function readPostBody()
