@@ -1,0 +1,20 @@
+---
+description: Slack MCP is read-only unless the user explicitly permits writes
+alwaysApply: true
+---
+
+# Slack MCP policy
+
+Slack MCP access is **read-only by default**.
+
+## Allowed without asking
+- Reading channels, threads, messages, users, and related Slack metadata via MCP
+
+## Forbidden unless Kirk explicitly permits it in this conversation
+- Posting, sending, or replying to messages
+- Editing or deleting messages
+- Creating, renaming, archiving, or otherwise modifying channels
+- Adding/removing reactions, pins, bookmarks, or similar write actions
+- Inviting/removing users, changing topic/purpose, or any other mutating Slack API/MCP call
+
+If a task seems to require a Slack write, **stop and ask Kirk for explicit permission** first. Do not treat earlier permission in another chat/work area as consent here.
