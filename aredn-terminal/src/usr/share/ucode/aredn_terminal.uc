@@ -235,13 +235,15 @@ export function promotePrimary()
 
 function killShell()
 {
+    // Kill any helpers/shells for this package (including orphans from older layouts).
+    system("pkill -f '/usr/libexec/aredn-terminal-session' 2>/dev/null");
+    system("pkill -f '/tmp/aredn-terminal/' 2>/dev/null");
     if (fs.stat(SHELL_DIR)) {
         const pid = trim(fs.readfile(`${SHELL_DIR}/pid`) || "");
         if (pid && match(pid, /^[0-9]+$/)) {
             system(`kill ${pid} 2>/dev/null`);
             system(`kill -9 ${pid} 2>/dev/null`);
         }
-        system(`pkill -f 'aredn-terminal-session ${SHELL_DIR}' 2>/dev/null`);
     }
     system(`rm -rf '${SESSION_ROOT}'`);
     clearBadge();
@@ -529,6 +531,28 @@ export function readPostBody()
     return body;
 };
 
+// CGI ucode has no global urldecode; decode %XX and +.
+export function urlDecode(s)
+{
+    if (s == null || s === "") {
+        return "";
+    }
+    s = replace(`${s}`, /\+/g, " ");
+    let out = "";
+    for (let i = 0; i < length(s); ) {
+        const ch = substr(s, i, 1);
+        if (ch == "%" && i + 2 < length(s)) {
+            out += chr(hex(substr(s, i + 1, 2)));
+            i += 3;
+        }
+        else {
+            out += ch;
+            i++;
+        }
+    }
+    return out;
+};
+
 export function parseQuery(q)
 {
     const out = {};
@@ -539,7 +563,7 @@ export function parseQuery(q)
     for (let i = 0; i < length(parts); i++) {
         const kv = split(parts[i], "=");
         if (length(kv) >= 1 && kv[0] !== "") {
-            out[kv[0]] = length(kv) > 1 ? replace(kv[1], /\+/g, " ") : "";
+            out[kv[0]] = length(kv) > 1 ? urlDecode(kv[1]) : "";
         }
     }
     return out;

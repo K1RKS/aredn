@@ -19,14 +19,15 @@ let loginFailed = false;
 if (!authed && env.REQUEST_METHOD == "POST") {
     const body = term.readPostBody();
     let password = "";
-    const m = match(body, /(?:^|&)password=([^&]*)/);
+    // ucode regex has no (?:...) non-capturing groups
+    const m = match(body, /(^|&)password=([^&]*)/);
     if (m) {
-        password = replace(urldecode(m[1]), /\+/g, " ");
+        password = term.urlDecode(m[2]);
     }
     else {
         const q = term.parseQuery(env.QUERY_STRING);
         if (q.password) {
-            password = urldecode(q.password);
+            password = term.urlDecode(q.password);
         }
     }
     if (password !== "" && term.authenticatePassword(password)) {

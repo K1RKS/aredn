@@ -64,9 +64,10 @@ else {
     if (env.REQUEST_METHOD == "POST") {
         body = term.readPostBody();
         if (!op) {
-            const om = match(body, /(?:^|&)op=([^&]*)/);
+            // ucode regex has no (?:...) non-capturing groups
+            const om = match(body, /(^|&)op=([^&]*)/);
             if (om) {
-                op = urldecode(om[1]);
+                op = term.urlDecode(om[2]);
             }
         }
     }
@@ -105,12 +106,12 @@ else {
     else if (op == "write") {
         let data = "";
         if (q.data != null && q.data !== "") {
-            data = b64dec(urldecode(q.data)) || "";
+            data = b64dec(term.urlDecode(q.data)) || "";
         }
         else {
-            const dm = match(body, /(?:^|&)data=([^&]*)/);
+            const dm = match(body, /(^|&)data=([^&]*)/);
             if (dm) {
-                data = b64dec(urldecode(dm[1])) || "";
+                data = b64dec(term.urlDecode(dm[2])) || "";
             }
             else if (length(body)) {
                 data = body;

@@ -2,7 +2,6 @@
 # Keep a login ash session alive with FIFO stdin and file-captured stdout.
 # CGI writers drop chunks into q.* files (non-blocking); this loop feeds them to ash.
 # Usage: aredn-terminal-session <session-dir>
-set -e
 DIR="$1"
 [ -n "$DIR" ] || exit 1
 [ -d "$DIR" ] || exit 1
@@ -17,12 +16,15 @@ exec 3<>"$DIR/stdin"
 echo $! > "$DIR/pid"
 
 # Feed queued keystroke files into ash stdin without blocking CGI writers.
-while kill -0 "$(cat "$DIR/pid")" 2>/dev/null; do
+# Do not use set -e: busybox sleep may reject fractional seconds.
+while kill -0 "$(cat "$DIR/pid" 2>/dev/null)" 2>/dev/null; do
 	for f in "$DIR"/q.*; do
-		[ -f "$f" ] || continue
-		cat "$f" >&3 2>/dev/null || true
-		rm -f "$f"
+		if [ -f "$f" ]; then
+			cat "$f" >&3 2>/dev/null
+			rm -f "$f"
+		fi
 	done
-	sleep 0.05
+	# Prefer short delay when supported; fall back to 1s.
+	sleep 0.1 2>/dev/null || sleep 1
 done
 exit 0
