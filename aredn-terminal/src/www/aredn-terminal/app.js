@@ -2,7 +2,6 @@
   "use strict";
 
   const statusEl = document.getElementById("status");
-  const reconnectBtn = document.getElementById("btn-reconnect");
   const disconnectBtn = document.getElementById("btn-disconnect");
   const roleBtn = document.getElementById("btn-role");
   const term = new Terminal({
@@ -263,9 +262,6 @@
     }
   });
 
-  if (reconnectBtn) {
-    reconnectBtn.addEventListener("click", joinSession);
-  }
   if (disconnectBtn) {
     disconnectBtn.addEventListener("click", disconnectSession);
   }

@@ -94,7 +94,6 @@ else {
   <span id="status" class="status">connecting…</span>
   <button type="button" id="btn-role" class="role role-viewer" disabled>Viewer</button>
   <button type="button" id="btn-disconnect">Disconnect</button>
-  <button type="button" id="btn-reconnect">Reconnect</button>
 </header>
 <div id="terminal"></div>
 <script src="/aredn-terminal/xterm.js"></script>
