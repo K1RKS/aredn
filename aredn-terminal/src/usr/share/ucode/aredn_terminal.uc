@@ -235,18 +235,19 @@ export function promotePrimary()
 
 function killShell()
 {
-    // Hard-kill every helper / leftover ash from this package (old layouts included).
+    // Hard-kill every helper / leftover process from this package.
     system("ps w 2>/dev/null | grep aredn-terminal-session | grep -v grep | while read pid rest; do kill -9 \"$pid\" 2>/dev/null; done");
     system("ps w 2>/dev/null | grep '/bin/ash -l' | grep -v grep | while read pid rest; do kill -9 \"$pid\" 2>/dev/null; done");
     system("ps w 2>/dev/null | grep 'tail -f /tmp/aredn-terminal' | grep -v grep | while read pid rest; do kill -9 \"$pid\" 2>/dev/null; done");
+    system("ps w 2>/dev/null | grep 'socat PTY,link=/tmp/aredn-terminal' | grep -v grep | while read pid rest; do kill -9 \"$pid\" 2>/dev/null; done");
+    system("ps w 2>/dev/null | grep '/tmp/aredn-terminal/active/tty' | grep -v grep | while read pid rest; do kill -9 \"$pid\" 2>/dev/null; done");
     if (fs.stat(SHELL_DIR)) {
-        const pid = trim(fs.readfile(`${SHELL_DIR}/pid`) || "");
-        if (pid && match(pid, /^[0-9]+$/)) {
-            system(`kill -9 ${pid} 2>/dev/null`);
-        }
-        const wrap = trim(fs.readfile(`${SHELL_DIR}/wrapper`) || "");
-        if (wrap && match(wrap, /^[0-9]+$/)) {
-            system(`kill -9 ${wrap} 2>/dev/null`);
+        const keys = [ "pid", "socat", "catpid", "tailpid", "wrapper" ];
+        for (let i = 0; i < length(keys); i++) {
+            const p = trim(fs.readfile(`${SHELL_DIR}/${keys[i]}`) || "");
+            if (p && match(p, /^[0-9]+$/)) {
+                system(`kill -9 ${p} 2>/dev/null`);
+            }
         }
     }
     system(`rm -rf '${SESSION_ROOT}'`);
@@ -447,11 +448,7 @@ export function writeSession(cid, data)
     if (readRole(cid) != "primary") {
         return { error: "readonly", message: "Viewer mode — take control to type" };
     }
-    // xterm sends CR for Enter; ash without a PTY expects LF.
-    data = replace(data, /\r\n/g, "\n");
-    data = replace(data, /\r/g, "\n");
-
-    // Append to infile; session helper's `tail -f` feeds ash (never blocks CGI on a FIFO).
+    // PTY expects CR from xterm for Enter; do not convert to LF.
     const f = fs.open(`${SHELL_DIR}/infile`, "a");
     if (!f) {
         return { error: "write" };

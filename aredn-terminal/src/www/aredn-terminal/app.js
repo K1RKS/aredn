@@ -7,7 +7,8 @@
   const roleBtn = document.getElementById("btn-role");
   const term = new Terminal({
     cursorBlink: true,
-    convertEol: true,
+    // PTY (socat) already emits CRLF; do not convert again.
+    convertEol: false,
     fontSize: 14,
     fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Consolas, monospace',
     theme: {
@@ -236,8 +237,8 @@
     if (!cid || role !== "primary") {
       return;
     }
-    // Send as base64 query param so CGI never depends on raw POST stdin.
-    const normalized = data.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
+    // Keep CR from xterm (PTY line discipline); only normalize CRLF pairs.
+    const normalized = data.replace(/\r\n/g, "\r");
     api("write", { cid: cid, method: "POST", dataB64: b64encode(normalized) }).catch(function (e) {
       if (e.status === 403) {
         applyRole("viewer");

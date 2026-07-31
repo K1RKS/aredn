@@ -12,11 +12,12 @@ chmod +x \
   tools/mkapk.py
 python3 tools/mkapk.py \
   -n aredn-terminal \
-  -v 0.1.9 \
+  -v 0.1.10 \
   -r r0 \
   -a noarch \
   -d src \
   -o dist \
+  -p socat \
   -D "AREDN authenticated interactive terminal (xterm.js + ucode CGI)" \
   -u "https://github.com/K1RKS/aredn" \
   -l GPL-3.0-only \

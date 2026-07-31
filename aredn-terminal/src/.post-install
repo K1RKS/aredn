@@ -1,6 +1,6 @@
 #!/bin/sh
 # Clear runtime session/badge state when the package is installed or upgraded.
-# Also kill any leftover session helpers (tmp wipe alone leaves orphans holding old FIFOs).
+# Also kill any leftover session helpers (tmp wipe alone leaves orphans).
 ps w 2>/dev/null | grep aredn-terminal-session | grep -v grep | while read pid rest; do
 	kill -9 "$pid" 2>/dev/null
 done
@@ -8,6 +8,9 @@ ps w 2>/dev/null | grep '/bin/ash -l' | grep -v grep | while read pid rest; do
 	kill -9 "$pid" 2>/dev/null
 done
 ps w 2>/dev/null | grep 'tail -f /tmp/aredn-terminal' | grep -v grep | while read pid rest; do
+	kill -9 "$pid" 2>/dev/null
+done
+ps w 2>/dev/null | grep 'socat PTY,link=/tmp/aredn-terminal' | grep -v grep | while read pid rest; do
 	kill -9 "$pid" 2>/dev/null
 done
 rm -rf /tmp/aredn-terminal

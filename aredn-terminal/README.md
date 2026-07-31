@@ -8,11 +8,11 @@ Side-loaded **noarch** APK that adds an authenticated interactive terminal to an
 
 ## Install
 
-1. Build (or download) `aredn-terminal-0.1.9-r0.apk`
+1. Build (or download) `aredn-terminal-0.1.10-r0.apk`
 2. On the node: **Status → Packages**, or:
 
 ```sh
-apk add --allow-untrusted /tmp/aredn-terminal-0.1.9-r0.apk
+apk add --allow-untrusted /tmp/aredn-terminal-0.1.10-r0.apk
 ```
 
 3. Open `http://<node>/cgi-bin/terminal`, or use the apps-bar **terminal** icon (admin).
@@ -27,14 +27,14 @@ chmod +x build.sh
 ./build.sh
 ```
 
-Output: `dist/aredn-terminal-0.1.9-r0.apk`
+Output: `dist/aredn-terminal-0.1.10-r0.apk`
 
 Uses vendored [kn6plv/MakeAPK](https://github.com/kn6plv/MakeAPK) — no OpenWrt buildroot required.
 
 ## Behavior notes
 
-- Spawns `/bin/ash -l` with FIFO stdin and file-captured stdout (no PTY daemon).
-- Full-screen TTY programs (e.g. `vim`) may not behave correctly; basic interactive shell use is the target.
+- Spawns `/bin/ash -l` under a **socat PTY** so the shell echoes typing and shows a normal prompt.
+- Full-screen TTY programs may still be limited; basic interactive shell use is the target.
 - Multiple browsers can attach to the same shell: one **Primary** (keyboard) and any number of **Viewer**s (read-only). Click **Viewer** to take control; the previous primary becomes a viewer.
 - A client with no heartbeat for ~60s is dropped; if it was primary, the next viewer in join order is promoted. When the last client leaves, the shell stops and the apps badge clears.
 - Badge: `/tmp/apps/terminal/badge` = `BUSY` (red) while a session is alive; removed when idle.

@@ -9,6 +9,9 @@ done
 ps w 2>/dev/null | grep 'tail -f /tmp/aredn-terminal' | grep -v grep | while read pid rest; do
 	kill -9 "$pid" 2>/dev/null
 done
+ps w 2>/dev/null | grep 'socat PTY,link=/tmp/aredn-terminal' | grep -v grep | while read pid rest; do
+	kill -9 "$pid" 2>/dev/null
+done
 rm -rf /tmp/aredn-terminal
 rm -f /tmp/apps/terminal/badge /tmp/apps/terminal/badge-color
 exit 0
