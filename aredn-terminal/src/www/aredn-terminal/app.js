@@ -3,8 +3,11 @@
 
   const statusEl = document.getElementById("status");
   const reconnectBtn = document.getElementById("btn-reconnect");
+  const disconnectBtn = document.getElementById("btn-disconnect");
   const term = new Terminal({
     cursorBlink: true,
+    // ash without a PTY emits bare LF; convert to CRLF so lines advance correctly.
+    convertEol: true,
     fontSize: 14,
     fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Consolas, monospace',
     theme: {
@@ -108,14 +111,34 @@
       pollTimer = setTimeout(pollOnce, 120);
     } catch (e) {
       if (e.status === 410) {
-        setStatus("session ended");
         sid = null;
         stopPolling();
+        setConnectedUi(false);
+        setStatus("session ended");
       } else {
         setStatus("read error: " + e.message);
         pollTimer = setTimeout(pollOnce, 1000);
       }
     }
+  }
+
+  function setConnectedUi(connected) {
+    if (disconnectBtn) {
+      disconnectBtn.disabled = !connected;
+    }
+  }
+
+  async function disconnectSession() {
+    stopPolling();
+    const old = sid;
+    sid = null;
+    setConnectedUi(false);
+    if (old) {
+      try {
+        await api("stop", { sid: old, method: "POST" });
+      } catch (e) { /* ignore */ }
+    }
+    setStatus("disconnected");
   }
 
   async function startSession() {
@@ -136,6 +159,7 @@
       const r = await api("start", { method: "POST" });
       sid = r.sid;
       setStatus("connected (" + sid + ")");
+      setConnectedUi(true);
       pollOnce();
       pingTimer = setInterval(function () {
         if (sid) {
@@ -143,6 +167,8 @@
         }
       }, 15000);
     } catch (e) {
+      sid = null;
+      setConnectedUi(false);
       setStatus("failed: " + e.message);
     } finally {
       starting = false;
@@ -176,6 +202,10 @@
   if (reconnectBtn) {
     reconnectBtn.addEventListener("click", startSession);
   }
+  if (disconnectBtn) {
+    disconnectBtn.addEventListener("click", disconnectSession);
+  }
 
+  setConnectedUi(false);
   startSession();
 })();
