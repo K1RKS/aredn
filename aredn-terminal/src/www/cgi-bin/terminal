@@ -1,0 +1,103 @@
+#!/usr/bin/ucode
+/*
+ * Authenticated interactive terminal UI for AREDN nodes.
+ * URL: /cgi-bin/terminal
+ */
+
+import * as term from "aredn_terminal";
+
+const env = {
+    HTTP_COOKIE: getenv("HTTP_COOKIE") || "",
+    REQUEST_METHOD: getenv("REQUEST_METHOD") || "GET",
+    QUERY_STRING: getenv("QUERY_STRING") || "",
+};
+
+let setCookie = null;
+let authed = term.isAuthenticated(env);
+let loginFailed = false;
+
+if (!authed && env.REQUEST_METHOD == "POST") {
+    const body = term.readPostBody();
+    let password = "";
+    const m = match(body, /(?:^|&)password=([^&]*)/);
+    if (m) {
+        password = replace(urldecode(m[1]), /\+/g, " ");
+    }
+    else {
+        const q = term.parseQuery(env.QUERY_STRING);
+        if (q.password) {
+            password = urldecode(q.password);
+        }
+    }
+    if (password !== "" && term.authenticatePassword(password)) {
+        authed = true;
+        setCookie = term.getCookieHeader();
+    }
+    else {
+        loginFailed = true;
+    }
+}
+
+print("Content-type: text/html; charset=utf-8\r\n");
+print("Cache-Control: no-store\r\n");
+if (setCookie) {
+    print(`Set-Cookie: ${setCookie}\r\n`);
+}
+print("\r\n");
+
+if (!authed) {
+    print(`<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AREDN Terminal Login</title>
+<style>
+body{margin:0;min-height:100vh;display:flex;align-items:center;justify-content:center;
+font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;background:#1a1d21;color:#e8eaed}
+form{background:#252a31;padding:1.5rem 1.75rem;border:1px solid #3a4149;min-width:16rem}
+label{display:block;font-size:.85rem;margin-bottom:.4rem;color:#9aa0a6}
+input[type=password]{width:100%;box-sizing:border-box;padding:.5rem .6rem;border:1px solid #3a4149;
+background:#121417;color:#e8eaed;margin-bottom:1rem}
+button{width:100%;padding:.55rem;border:0;background:#3d7ea6;color:#fff;font:inherit;cursor:pointer}
+button:hover{background:#4a93c0}
+h1{font-size:1.1rem;margin:0 0 1rem;font-weight:600}
+.err{color:#f28b82;font-size:.85rem;margin:-.5rem 0 1rem}
+</style>
+</head>
+<body>
+<form method="post" action="/cgi-bin/terminal" autocomplete="current-password">
+<h1>AREDN Terminal</h1>
+${loginFailed ? '<p class="err">Invalid password</p>' : ""}
+<label for="password">Node password</label>
+<input id="password" name="password" type="password" autofocus required>
+<button type="submit">Open terminal</button>
+</form>
+</body>
+</html>
+`);
+}
+else {
+    print(`<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AREDN Terminal</title>
+<link rel="stylesheet" href="/aredn-terminal/xterm.css">
+<link rel="stylesheet" href="/aredn-terminal/app.css">
+</head>
+<body>
+<header class="bar">
+  <span class="title">AREDN Terminal</span>
+  <span id="status" class="status">connecting…</span>
+  <button type="button" id="btn-reconnect">Reconnect</button>
+</header>
+<div id="terminal"></div>
+<script src="/aredn-terminal/xterm.js"></script>
+<script src="/aredn-terminal/xterm-addon-fit.js"></script>
+<script src="/aredn-terminal/app.js"></script>
+</body>
+</html>
+`);
+}

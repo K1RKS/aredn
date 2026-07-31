@@ -1,0 +1,135 @@
+#!/usr/bin/ucode
+/*
+ * Terminal session API. Auth required on every operation.
+ * Ops: start | read | write | stop | ping
+ */
+
+import * as term from "aredn_terminal";
+
+const env = {
+    HTTP_COOKIE: getenv("HTTP_COOKIE") || "",
+    REQUEST_METHOD: getenv("REQUEST_METHOD") || "GET",
+    QUERY_STRING: getenv("QUERY_STRING") || "",
+};
+
+function send(code, obj)
+{
+    const status = code == 200 ? "200 OK" :
+        code == 401 ? "401 Unauthorized" :
+        code == 400 ? "400 Bad Request" :
+        code == 409 ? "409 Conflict" :
+        code == 410 ? "410 Gone" : `${code}`;
+    print(`Status: ${status}\r\n`);
+    print("Content-type: application/json; charset=utf-8\r\n");
+    print("Cache-Control: no-store\r\n");
+    print("\r\n");
+
+    let first = true;
+    print("{");
+    for (let k in obj) {
+        if (!first) {
+            print(",");
+        }
+        first = false;
+        const v = obj[k];
+        print(`"${k}":`);
+        if (type(v) == "bool") {
+            print(v ? "true" : "false");
+        }
+        else if (type(v) == "int" || type(v) == "double") {
+            print(`${v}`);
+        }
+        else if (v == null) {
+            print("null");
+        }
+        else {
+            print(`"${term.jsonEscape(`${v}`)}"`);
+        }
+    }
+    print("}\n");
+}
+
+if (!term.isAuthenticated(env)) {
+    send(401, { error: "unauthorized" });
+}
+else {
+    const q = term.parseQuery(env.QUERY_STRING);
+    let op = q.op || "";
+    const sid = q.sid || "";
+    let body = "";
+
+    if (env.REQUEST_METHOD == "POST") {
+        body = term.readPostBody();
+        if (!op) {
+            const om = match(body, /(?:^|&)op=([^&]*)/);
+            if (om) {
+                op = urldecode(om[1]);
+            }
+        }
+    }
+
+    term.cleanupStale();
+
+    if (op == "start") {
+        const r = term.startSession();
+        if (r.error == "busy") {
+            send(409, r);
+        }
+        else if (r.error) {
+            send(400, r);
+        }
+        else {
+            send(200, { ok: true, sid: r.sid });
+        }
+    }
+    else if (op == "read") {
+        const r = term.readSession(sid);
+        if (r.error == "gone") {
+            send(410, r);
+        }
+        else if (r.error) {
+            send(400, r);
+        }
+        else {
+            send(200, { ok: true, data: b64enc(r.data), offset: r.offset, alive: true });
+        }
+    }
+    else if (op == "write") {
+        let data = "";
+        if (q.data != null && q.data !== "") {
+            data = b64dec(urldecode(q.data)) || "";
+        }
+        else {
+            const dm = match(body, /(?:^|&)data=([^&]*)/);
+            if (dm) {
+                data = b64dec(urldecode(dm[1])) || "";
+            }
+            else if (length(body)) {
+                data = body;
+            }
+        }
+        const r = term.writeSession(sid, data);
+        if (r.error == "gone") {
+            send(410, r);
+        }
+        else if (r.error) {
+            send(400, r);
+        }
+        else {
+            send(200, { ok: true });
+        }
+    }
+    else if (op == "stop") {
+        term.stopSession(sid);
+        send(200, { ok: true });
+    }
+    else if (op == "ping") {
+        if (sid) {
+            term.touchHeartbeat(sid);
+        }
+        send(200, { ok: true });
+    }
+    else {
+        send(400, { error: "bad_op", message: "op must be start|read|write|stop|ping" });
+    }
+}

@@ -1,0 +1,11 @@
+#!/usr/bin/ucode
+/*
+ * Apps-bar launcher for the authenticated terminal.
+ */
+
+print("Status: 302 Found\r\n");
+print("Location: /cgi-bin/terminal\r\n");
+print("Cache-Control: no-store\r\n");
+print("Content-type: text/html\r\n");
+print("\r\n");
+print("<a href=\"/cgi-bin/terminal\">AREDN Terminal</a>\n");
