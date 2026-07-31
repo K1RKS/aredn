@@ -12,7 +12,7 @@ chmod +x \
   tools/mkapk.py
 python3 tools/mkapk.py \
   -n aredn-terminal \
-  -v 0.1.8 \
+  -v 0.1.9 \
   -r r0 \
   -a noarch \
   -d src \

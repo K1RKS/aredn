@@ -8,11 +8,11 @@ Side-loaded **noarch** APK that adds an authenticated interactive terminal to an
 
 ## Install
 
-1. Build (or download) `aredn-terminal-0.1.8-r0.apk`
+1. Build (or download) `aredn-terminal-0.1.9-r0.apk`
 2. On the node: **Status → Packages**, or:
 
 ```sh
-apk add --allow-untrusted /tmp/aredn-terminal-0.1.8-r0.apk
+apk add --allow-untrusted /tmp/aredn-terminal-0.1.9-r0.apk
 ```
 
 3. Open `http://<node>/cgi-bin/terminal`, or use the apps-bar **terminal** icon (admin).
@@ -27,7 +27,7 @@ chmod +x build.sh
 ./build.sh
 ```
 
-Output: `dist/aredn-terminal-0.1.8-r0.apk`
+Output: `dist/aredn-terminal-0.1.9-r0.apk`
 
 Uses vendored [kn6plv/MakeAPK](https://github.com/kn6plv/MakeAPK) — no OpenWrt buildroot required.
 

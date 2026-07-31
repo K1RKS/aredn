@@ -1,30 +1,34 @@
 #!/bin/sh
-# Keep a login ash session alive with FIFO stdin and file-captured stdout.
-# CGI writers drop chunks into q.* files (non-blocking); this loop feeds them to ash.
+# Interactive ash session without blocking CGI writers.
+# Keystrokes are appended to infile; tail -f feeds them to ash.
 # Usage: aredn-terminal-session <session-dir>
 DIR="$1"
 [ -n "$DIR" ] || exit 1
 [ -d "$DIR" ] || exit 1
 
-mkfifo "$DIR/stdin" 2>/dev/null || true
+: > "$DIR/infile"
 : > "$DIR/stdout"
 date +%s > "$DIR/heartbeat"
 
-# Open FIFO read/write so ash does not block on open; keep fd open in this process.
-exec 3<>"$DIR/stdin"
-/bin/ash -l <&3 >>"$DIR/stdout" 2>&1 &
-echo $! > "$DIR/pid"
+# Pipeline: file follower -> ash. Track ash PID via a wrapper.
+(
+	# BusyBox: tail -f follows the infile as CGI appends to it.
+	tail -f "$DIR/infile" 2>/dev/null | /bin/ash -l >>"$DIR/stdout" 2>&1 &
+	# $! is ash (last process in pipeline for ash) on BusyBox — also save pipeline pgid.
+	echo $! > "$DIR/pid"
+	wait
+) &
+echo $! > "$DIR/wrapper"
 
-# Feed queued keystroke files into ash stdin without blocking CGI writers.
-# Do not use set -e: busybox sleep may reject fractional seconds.
+# Wait until ash pid file exists.
+i=0
+while [ ! -s "$DIR/pid" ] && [ "$i" -lt 20 ]; do
+	sleep 1
+	i=$((i + 1))
+done
+
+# Stay alive while ash lives.
 while kill -0 "$(cat "$DIR/pid" 2>/dev/null)" 2>/dev/null; do
-	for f in "$DIR"/q.*; do
-		if [ -f "$f" ]; then
-			cat "$f" >&3 2>/dev/null
-			rm -f "$f"
-		fi
-	done
-	# Prefer short delay when supported; fall back to 1s.
-	sleep 0.1 2>/dev/null || sleep 1
+	sleep 1
 done
 exit 0

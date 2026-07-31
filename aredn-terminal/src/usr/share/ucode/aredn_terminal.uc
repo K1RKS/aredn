@@ -235,14 +235,18 @@ export function promotePrimary()
 
 function killShell()
 {
-    // Kill any helpers/shells for this package (including orphans from older layouts).
-    system("pkill -f '/usr/libexec/aredn-terminal-session' 2>/dev/null");
-    system("pkill -f '/tmp/aredn-terminal/' 2>/dev/null");
+    // Hard-kill every helper / leftover ash from this package (old layouts included).
+    system("ps w 2>/dev/null | grep aredn-terminal-session | grep -v grep | while read pid rest; do kill -9 \"$pid\" 2>/dev/null; done");
+    system("ps w 2>/dev/null | grep '/bin/ash -l' | grep -v grep | while read pid rest; do kill -9 \"$pid\" 2>/dev/null; done");
+    system("ps w 2>/dev/null | grep 'tail -f /tmp/aredn-terminal' | grep -v grep | while read pid rest; do kill -9 \"$pid\" 2>/dev/null; done");
     if (fs.stat(SHELL_DIR)) {
         const pid = trim(fs.readfile(`${SHELL_DIR}/pid`) || "");
         if (pid && match(pid, /^[0-9]+$/)) {
-            system(`kill ${pid} 2>/dev/null`);
             system(`kill -9 ${pid} 2>/dev/null`);
+        }
+        const wrap = trim(fs.readfile(`${SHELL_DIR}/wrapper`) || "");
+        if (wrap && match(wrap, /^[0-9]+$/)) {
+            system(`kill -9 ${wrap} 2>/dev/null`);
         }
     }
     system(`rm -rf '${SESSION_ROOT}'`);
@@ -261,12 +265,15 @@ export function refreshBadge()
 
 function spawnShell()
 {
+    // Always start from a clean process table / tmp tree.
+    killShell();
+    system("sleep 1");
     ensureDir(SESSION_ROOT);
     ensureDir(SHELL_DIR);
     ensureDir(CLIENTS_DIR);
     fs.writefile(`${SHELL_DIR}/next_order`, "0");
     system(`setsid /usr/libexec/aredn-terminal-session '${SHELL_DIR}' >/dev/null 2>&1 &`);
-    system("sleep 0.2 2>/dev/null || sleep 1");
+    system("sleep 1");
     return shellAlive();
 };
 
@@ -444,11 +451,13 @@ export function writeSession(cid, data)
     data = replace(data, /\r\n/g, "\n");
     data = replace(data, /\r/g, "\n");
 
-    // Non-blocking: drop a queue file for the session helper to feed into the FIFO.
-    // Opening the FIFO from CGI can block and make uhttpd return a non-JSON error page.
-    const t = clock();
-    const qf = sprintf("%s/q.%08x%04x_%s", SHELL_DIR, t[0] & 0xffffffff, t[1] & 0xffff, cid);
-    fs.writefile(qf, data);
+    // Append to infile; session helper's `tail -f` feeds ash (never blocks CGI on a FIFO).
+    const f = fs.open(`${SHELL_DIR}/infile`, "a");
+    if (!f) {
+        return { error: "write" };
+    }
+    f.write(data);
+    f.close();
     return { ok: true, role: "primary" };
 };
 
