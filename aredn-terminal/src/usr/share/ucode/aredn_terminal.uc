@@ -438,12 +438,15 @@ export function writeSession(cid, data)
     if (readRole(cid) != "primary") {
         return { error: "readonly", message: "Viewer mode — take control to type" };
     }
-    const f = fs.open(`${SHELL_DIR}/stdin`, "w");
-    if (!f) {
-        return { error: "write" };
-    }
-    f.write(data);
-    f.close();
+    // xterm sends CR for Enter; ash without a PTY expects LF.
+    data = replace(data, /\r\n/g, "\n");
+    data = replace(data, /\r/g, "\n");
+
+    // Non-blocking: drop a queue file for the session helper to feed into the FIFO.
+    // Opening the FIFO from CGI can block and make uhttpd return a non-JSON error page.
+    const t = clock();
+    const qf = sprintf("%s/q.%08x%04x_%s", SHELL_DIR, t[0] & 0xffffffff, t[1] & 0xffff, cid);
+    fs.writefile(qf, data);
     return { ok: true, role: "primary" };
 };
 
@@ -513,7 +516,11 @@ export function readPostBody()
         return "";
     }
     const max = cl > 65536 ? 65536 : cl;
-    const f = fs.open("/dev/stdin", "r");
+    // Prefer the CGI stdin fd; /dev/stdin is unreliable under some uhttpd setups.
+    let f = fs.open("/proc/self/fd/0", "r");
+    if (!f) {
+        f = fs.open("/dev/stdin", "r");
+    }
     if (!f) {
         return "";
     }

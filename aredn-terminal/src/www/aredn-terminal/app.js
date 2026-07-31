@@ -34,6 +34,10 @@
     }
   }
 
+  function b64encode(str) {
+    return btoa(unescape(encodeURIComponent(str)));
+  }
+
   function b64decode(str) {
     try {
       return decodeURIComponent(escape(atob(str)));
@@ -53,23 +57,30 @@
     if (opts.cid) {
       params.set("cid", opts.cid);
     }
-    let url = "/cgi-bin/terminal-api?" + params.toString();
+    if (opts.dataB64) {
+      params.set("data", opts.dataB64);
+    }
+    const url = "/cgi-bin/terminal-api?" + params.toString();
     const init = {
-      method: opts.method || "GET",
+      method: opts.method || (opts.dataB64 ? "POST" : "GET"),
       credentials: "same-origin",
       cache: "no-store"
     };
     if (opts.body != null) {
       init.method = "POST";
-      init.headers = { "Content-Type": "text/plain; charset=utf-8" };
+      init.headers = { "Content-Type": "application/x-www-form-urlencoded; charset=utf-8" };
       init.body = opts.body;
     }
     const res = await fetch(url, init);
+    const text = await res.text();
     let json = null;
     try {
-      json = await res.json();
+      json = JSON.parse(text);
     } catch (e) {
-      json = { error: "bad_json", status: res.status };
+      const err = new Error("bad_json HTTP " + res.status);
+      err.status = res.status;
+      err.payload = { error: "bad_json", body: text.slice(0, 120) };
+      throw err;
     }
     if (!res.ok) {
       const err = new Error((json && json.message) || (json && json.error) || ("HTTP " + res.status));
@@ -225,7 +236,9 @@
     if (!cid || role !== "primary") {
       return;
     }
-    api("write", { cid: cid, method: "POST", body: data }).catch(function (e) {
+    // Send as base64 query param so CGI never depends on raw POST stdin.
+    const normalized = data.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
+    api("write", { cid: cid, method: "POST", dataB64: b64encode(normalized) }).catch(function (e) {
       if (e.status === 403) {
         applyRole("viewer");
         setStatus("viewer (control taken)");

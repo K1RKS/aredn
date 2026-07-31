@@ -1,0 +1,5 @@
+#!/bin/sh
+# Clear runtime session/badge state when the package is installed or upgraded.
+rm -rf /tmp/aredn-terminal
+rm -f /tmp/apps/terminal/badge /tmp/apps/terminal/badge-color
+exit 0
