@@ -12,14 +12,13 @@ Each hop line is enriched with:
 Example (default, no GPS):
 
 ```text
-Client: nodeA  4078
-Server: nodeD.local.mesh
+Aredn-Traceroute: nodeA to nodeD.local.mesh  Babel Metric 4078
  1  nodeB.local.mesh (10.1.2.3)  23.034 ms  DtD  352  352
  2  nodeC.local.mesh (10.1.2.4)  123.03 ms  RF  3593  3945
  3  nodeD.local.mesh (175.0.1.3)  19 ms  WG  133  4078
 ```
 
-The `Client:` line includes this node’s Babel path metric to the destination.
+The header line includes this node’s Babel path metric to the destination.
 
 With `-gps`:
 

@@ -12,7 +12,7 @@ function usage()
     print("  Runs traceroute and appends per-hop link type, Babel cost, and metric.\n");
     print("  Link type/cost/metric come from the previous hop's LQM (route-specific).\n");
     print("  Each node is queried at most once via /a/sysinfo?lqm=1.\n");
-    print("  Client line shows this node's Babel path metric to the destination.\n");
+    print("  Header shows start node, destination, and Babel path metric.\n");
     print("  -gps       Include per-hop GPS coordinates (off by default).\n");
     print("  -verbose   Explain why any type/cost/metric (and GPS if -gps) fields are unset (-).\n");
 };
@@ -60,7 +60,7 @@ if (match(dest, /[^0-9a-zA-Z.\-]/)) {
 const node = configuration.getName() || "?";
 const destMetric = atr.lookupDestPathMetric(dest);
 const metricPart = destMetric != null ? `${destMetric}` : "-";
-print(`Client: ${node}  ${metricPart}\n`);
+print(`Aredn-Traceroute: ${node} to ${dest}  Babel Metric ${metricPart}\n`);
 
 const ok = atr.runEnrichedTraceroute(dest, function (line) {
     print(`${line}\n`);
