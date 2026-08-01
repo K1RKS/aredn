@@ -1,26 +1,32 @@
 # stableroute (side-loaded APK)
 
-Standalone CLI package that runs stock `/bin/traceroute` **N** times (default 10),
-groups identical ordered hop paths, and prints a stability report.
+Standalone CLI package that runs traceroute **N** times (default 10), groups identical
+ordered hop paths, and prints a stability report.
 
 Path identity is the full hop sequence (hostname/IP/`*`). RTT does **not** affect
 equality — `nodea→nodeb→nodec` and `noded→nodee→nodec` are different paths.
 
+By default, uses **aredn-traceroute** when that binary is already installed on the
+node (`/usr/bin/aredn-traceroute`). Otherwise uses stock `/bin/traceroute`.
+Pass `-legacy` to force stock traceroute. This package does **not** install
+aredn-traceroute.
+
 ## Install
 
-1. Build (or download) `stableroute-0.1.3-r0.apk`
+1. Build (or download) `stableroute-0.1.4-r0.apk`
 2. On the node: **Status → Packages** → upload / install with allow-untrusted  
-   or: `apk add --allow-untrusted stableroute-0.1.3-r0.apk`
+   or: `apk add --allow-untrusted stableroute-0.1.4-r0.apk`
 3. CLI: `stableroute <destination>`  
    Custom run count: `stableroute -n 20 <destination>`  
-   Debug (raw vs parse): `stableroute -debug -n 3 <destination>`
+   Debug (raw vs parse): `stableroute -debug -n 3 <destination>`  
+   Force stock traceroute: `stableroute -legacy <destination>`
 
 ## Build
 
 ```sh
 chmod +x build.sh
 ./build.sh
-# → dist/stableroute-0.1.3-r0.apk
+# → dist/stableroute-0.1.4-r0.apk
 ```
 
 Uses a vendored copy of [kn6plv/MakeAPK](https://github.com/kn6plv/MakeAPK) (`tools/mkapk.py`). No OpenWrt buildroot required.
@@ -28,19 +34,22 @@ Uses a vendored copy of [kn6plv/MakeAPK](https://github.com/kn6plv/MakeAPK) (`to
 ## Usage
 
 ```text
-Usage: stableroute [-n N] <destination>
+Usage: stableroute [-n N] [-debug] [-legacy] <destination>
   Run traceroute N times (default 10), group identical hop paths, report stability.
 ```
 
 Bare node names (no dots) get `.local.mesh` appended for the probe.
 
+The report header includes `using aredn-traceroute` or `using traceroute`.
+
 ## How it works
 
-1. Run `/bin/traceroute -q 1 -w 1` N times (quiet during runs).
-2. Parse hop lines (same busybox shapes as aredn-traceroute).
-3. Key each run by ordered hop identities (short hostname preferred, else IP, else `*`).
-4. Aggregate counts and per-hop RTTs across matching paths.
-5. Print summary, then each unique path with occurrence count and `avg Xms +- Yms`
+1. Select probe: `aredn-traceroute` if present and not `-legacy`, else `/bin/traceroute -q 1 -w 1`.
+2. Run the probe N times (quiet during runs unless `-debug`).
+3. Parse hop lines (BusyBox and aredn-traceroute enriched shapes).
+4. Key each run by ordered hop identities (short hostname preferred, else IP, else `*`).
+5. Aggregate counts and per-hop RTTs across matching paths.
+6. Print summary, then each unique path with occurrence count and `avg Xms +- Yms`
    (Y = max absolute deviation from the mean for that hop on that path).
 
 ### Summary fields
@@ -55,7 +64,8 @@ Unreachable / partial paths are still listed as unique paths (marked `[unreachab
 ## Example
 
 ```text
-stableroute(0.1.3-r0): destination nodec  runs 10
+stableroute(0.1.4-r0): destination nodec  runs 10
+using aredn-traceroute
 Summary:
   unique paths: 2
   shortest route: 3 hops
@@ -77,5 +87,5 @@ Path 2: 3/10 (30%)
 ## Compatibility
 
 - CLI only in v1 (no Tools UI / CGI swap).
-- Uses stock BusyBox traceroute; does not depend on the `aredn-traceroute` APK.
-- Concepts (parse/dest normalize/MakeAPK layout) follow the aredn-traceroute package.
+- Optional use of `aredn-traceroute` when already installed; no hard package dependency.
+- Stock BusyBox traceroute remains available via `-legacy` or when aredn-traceroute is absent.

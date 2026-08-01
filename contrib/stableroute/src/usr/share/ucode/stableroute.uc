@@ -7,7 +7,29 @@ import * as fs from "fs";
 /* Keep in sync with build.sh -v/-r (and bump-stableroute-revision rule). */
 export function packageVersion()
 {
-    return "0.1.3-r0";
+    return "0.1.4-r0";
+};
+
+const AREDN_TRACEROUTE = "/usr/bin/aredn-traceroute";
+const STOCK_TRACEROUTE = "/bin/traceroute -q 1 -w 1";
+
+/**
+ * Prefer aredn-traceroute when installed, unless legacy is true.
+ * Does not install packages — only detects /usr/bin/aredn-traceroute.
+ * Returns { using, cmd } where using is the header phrase.
+ */
+export function selectProbe(legacy)
+{
+    if (!legacy && fs.access(AREDN_TRACEROUTE)) {
+        return {
+            using: "using aredn-traceroute",
+            cmd: AREDN_TRACEROUTE
+        };
+    }
+    return {
+        using: "using traceroute",
+        cmd: STOCK_TRACEROUTE
+    };
 };
 
 export function shortMeshName(name)
@@ -30,7 +52,7 @@ export function normalizeDest(dest)
 };
 
 /**
- * Parse a busybox traceroute hop line.
+ * Parse a hop line from BusyBox traceroute or aredn-traceroute enrichment.
  * Returns null if not a hop line.
  */
 export function parseHopLine(line)
@@ -148,16 +170,18 @@ export function runReachedDest(hops, dest)
 };
 
 /**
- * Run one traceroute; return { hops, ok, raw, events }.
+ * Run one traceroute probe; return { hops, ok, raw, events }.
  * events[i] = { line, hop } where hop is null if the line was not a parsed hop.
+ * probeCmd defaults to stock /bin/traceroute.
  */
-export function runOneTraceroute(dest)
+export function runOneTraceroute(dest, probeCmd)
 {
     dest = normalizeDest(dest);
+    const cmd = probeCmd || STOCK_TRACEROUTE;
     const hops = [];
     const raw = [];
     const events = [];
-    const running = fs.popen(`/bin/traceroute -q 1 -w 1 ${dest} 2>&1`);
+    const running = fs.popen(`${cmd} ${dest} 2>&1`);
     if (!running) {
         return { hops: hops, ok: false, raw: raw, events: events };
     }
@@ -314,6 +338,7 @@ export function formatReport(agg)
     const paths = agg.paths;
     const unique = length(paths);
     push(lines, `stableroute(${packageVersion()}): destination ${shortMeshName(agg.dest)}  runs ${n}`);
+    push(lines, agg.using || "using traceroute");
     push(lines, "Summary:");
     push(lines, `  unique paths: ${unique}`);
     push(lines, `  shortest route: ${agg.shortest} hops`);
@@ -411,6 +436,7 @@ export function formatDebugRun(runIndex, runCount, one)
 /**
  * Run traceroute N times and return formatted report text.
  * options.debug: when true, prepend per-run raw vs parse dump.
+ * options.legacy: force stock /bin/traceroute even if aredn-traceroute is present.
  * Returns { ok, text }.
  */
 export function runStableRoute(dest, n, options)
@@ -424,11 +450,13 @@ export function runStableRoute(dest, n, options)
     }
     n = int(n);
     const debug = !!(options && options.debug);
+    const legacy = !!(options && options.legacy);
+    const probe = selectProbe(legacy);
     const runs = [];
     let anyOk = false;
     const debugParts = [];
     for (let i = 0; i < n; i++) {
-        const one = runOneTraceroute(dest);
+        const one = runOneTraceroute(dest, probe.cmd);
         if (one.ok) {
             anyOk = true;
         }
@@ -438,6 +466,7 @@ export function runStableRoute(dest, n, options)
         push(runs, one);
     }
     const agg = aggregateRuns(dest, runs);
+    agg.using = probe.using;
     let text = formatReport(agg);
     if (debug) {
         text = join("\n", debugParts) + "=== REPORT ===\n" + text;
