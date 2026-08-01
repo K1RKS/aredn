@@ -247,6 +247,15 @@ export function createContext()
     };
 };
 
+/* Display name for the header line: strip trailing .local.mesh (assumed). */
+export function shortMeshName(name)
+{
+    if (!name) {
+        return name;
+    }
+    return replace(name, /\.local\.mesh$/, "");
+};
+
 function resolveDestIp(dest)
 {
     if (!dest) {

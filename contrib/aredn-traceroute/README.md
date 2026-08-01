@@ -12,7 +12,7 @@ Each hop line is enriched with:
 Example (default, no GPS):
 
 ```text
-Aredn-Traceroute: nodeA to nodeD.local.mesh  Babel Metric 4078
+Aredn-Traceroute: nodeA to nodeD  Babel Metric 4078
  1  nodeB.local.mesh (10.1.2.3)  23.034 ms  DtD  352  352
  2  nodeC.local.mesh (10.1.2.4)  123.03 ms  RF  3593  3945
  3  nodeD.local.mesh (175.0.1.3)  19 ms  WG  133  4078
@@ -28,9 +28,9 @@ With `-gps`:
 
 ## Install
 
-1. Build (or download) `aredn-traceroute-0.1.13-r0.apk`
+1. Build (or download) `aredn-traceroute-0.1.15-r0.apk`
 2. On the node: **Status → Packages** → upload / install with allow-untrusted  
-   or: `apk add --allow-untrusted aredn-traceroute-0.1.13-r0.apk`
+   or: `apk add --allow-untrusted aredn-traceroute-0.1.15-r0.apk`
 3. Tools → Traceroute uses the drop-in CGI automatically when this package is installed on the **source** node (GPS off unless `gps=1` is in the query string).
 4. CLI: `aredn-traceroute <destination>`  
    GPS: `aredn-traceroute -gps <destination>`  
@@ -45,7 +45,7 @@ Removing the package restores the firmware traceroute CGI (overlayfs).
 ```sh
 chmod +x build.sh
 ./build.sh
-# → dist/aredn-traceroute-0.1.13-r0.apk
+# → dist/aredn-traceroute-0.1.15-r0.apk
 ```
 
 Uses a vendored copy of [kn6plv/MakeAPK](https://github.com/kn6plv/MakeAPK) (`tools/mkapk.py`). No OpenWrt buildroot required.

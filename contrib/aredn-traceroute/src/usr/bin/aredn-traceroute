@@ -60,7 +60,7 @@ if (match(dest, /[^0-9a-zA-Z.\-]/)) {
 const node = configuration.getName() || "?";
 const destMetric = atr.lookupDestPathMetric(dest);
 const metricPart = destMetric != null ? `${destMetric}` : "-";
-print(`Aredn-Traceroute: ${node} to ${dest}  Babel Metric ${metricPart}\n`);
+print(`Aredn-Traceroute: ${atr.shortMeshName(node)} to ${atr.shortMeshName(dest)}  Babel Metric ${metricPart}\n`);
 
 const ok = atr.runEnrichedTraceroute(dest, function (line) {
     print(`${line}\n`);
