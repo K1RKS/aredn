@@ -1,0 +1,29 @@
+---
+description: Bump stableroute package version on every change and before every build
+alwaysApply: true
+---
+
+# Bump stableroute revision on every change and build
+
+Whenever you change anything under `contrib/stableroute/` that affects the built package or its documented version (source, library, `build.sh`, install docs that embed the APK name, etc.), **increment the package version in the same change set**.
+
+Whenever you run `contrib/stableroute/build.sh` (or otherwise produce a new APK), **bump the version first** if it has not already been bumped for this content change. Never rebuild and ship the same `-v` / `packageVersion()` that was already built or installed for different content.
+
+## What to bump
+
+1. In `contrib/stableroute/build.sh`, increment the patch segment of `-v` (e.g. `0.1.0` → `0.1.1`).
+2. Leave `-r r0` unless the user explicitly asks to bump only the APK release field.
+3. Update `packageVersion()` in `contrib/stableroute/src/usr/share/ucode/stableroute.uc` to match (`0.1.N-r0`).
+4. Update every APK filename / version string in `contrib/stableroute/README.md` (and any other docs touched in that change) to match the new `-v` value.
+
+## When
+
+- Do this for **every** substantive package edit in the same turn as the edit — do not wait to be asked.
+- Do this **before every build** that produces an APK for testing, install, or deploy — including rebuilds after local tweaks.
+- Skip only for changes that cannot affect a build or published version (e.g. this Cursor rule alone, `.gitignore` for local helpers, comments outside the package).
+- If several edits land in one session before a build/commit, bump **once** per logical change set (one new version number), not once per file touch.
+- Do not reuse a version that was already built/installed/pushed for a different content change.
+
+## After bumping (when testing/deploying)
+
+Build and install with the new version so the node is not left on a stale APK with the same name.

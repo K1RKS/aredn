@@ -1,0 +1,15 @@
+---
+description: Keep this work area pinned to its assigned git ref
+alwaysApply: true
+---
+
+# Work-area isolation for stableroute
+
+This Cursor window is a dedicated AREDN work area.
+
+- Assigned git branch: `stableroute`
+- Do **not** checkout, create, rename, or switch branches/tags.
+- Do **not** modify or open sibling work areas under `~/ai_projects/AREDN/`.
+- Do **not** extract packages into a standalone mini-repo.
+- All commits for this area must stay on `stableroute`.
+- If work belongs on another branch/tag, stop and tell the user to use that work area's Cursor window instead.

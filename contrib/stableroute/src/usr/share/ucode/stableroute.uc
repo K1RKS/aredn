@@ -1,0 +1,377 @@
+/*
+ * stableroute — run traceroute N times, group identical hop paths, report stability.
+ */
+
+import * as fs from "fs";
+
+/* Keep in sync with build.sh -v/-r (and bump-stableroute-revision rule). */
+export function packageVersion()
+{
+    return "0.1.0-r0";
+};
+
+export function shortMeshName(name)
+{
+    if (!name) {
+        return name;
+    }
+    return replace(name, /\.local\.mesh$/, "");
+};
+
+export function normalizeDest(dest)
+{
+    if (!dest) {
+        return dest;
+    }
+    if (!match(dest, /\./) && !match(dest, /^[0-9.]+$/)) {
+        return `${dest}.local.mesh`;
+    }
+    return dest;
+};
+
+/**
+ * Parse a busybox traceroute hop line.
+ * Returns null if not a hop line.
+ */
+export function parseHopLine(line)
+{
+    line = trim(line);
+    if (!line) {
+        return null;
+    }
+    let m = match(line, /^([0-9]+) +\* +\* +\*/);
+    if (m) {
+        return { hop: int(m[1]), unreachable: true };
+    }
+    m = match(line, /^([0-9]+) +([^ ]+) \(([0-9.]+)\) +([0-9.]+) +ms/);
+    if (m) {
+        return {
+            hop: int(m[1]),
+            hostname: m[2],
+            ip: m[3],
+            rtt: m[4],
+            unreachable: false
+        };
+    }
+    m = match(line, /^([0-9]+) +([0-9.]+) +([0-9.]+) +ms/);
+    if (m) {
+        return {
+            hop: int(m[1]),
+            hostname: m[2],
+            ip: m[2],
+            rtt: m[3],
+            unreachable: false
+        };
+    }
+    return null;
+};
+
+function hopIdentity(hop)
+{
+    if (!hop || hop.unreachable) {
+        return "*";
+    }
+    const host = shortMeshName(hop.hostname);
+    if (host && host !== hop.ip) {
+        return lc(host);
+    }
+    if (hop.ip) {
+        return hop.ip;
+    }
+    return "*";
+};
+
+function pathKeyFromHops(hops)
+{
+    const parts = [];
+    for (let i = 0; i < length(hops); i++) {
+        push(parts, hopIdentity(hops[i]));
+    }
+    return join(parts, "|");
+};
+
+function hopDisplay(hop)
+{
+    if (!hop || hop.unreachable) {
+        return "*";
+    }
+    const host = shortMeshName(hop.hostname);
+    if (host && hop.ip && host !== hop.ip) {
+        return `${host} (${hop.ip})`;
+    }
+    if (hop.ip) {
+        return hop.ip;
+    }
+    return host || "*";
+};
+
+function rttNumber(hop)
+{
+    if (!hop || hop.unreachable || hop.rtt == null || hop.rtt === "") {
+        return null;
+    }
+    const n = hop.rtt * 1;
+    if (n != n) {
+        return null;
+    }
+    return n;
+};
+
+/**
+ * True if any hop matches the destination hostname or IP.
+ */
+export function runReachedDest(hops, dest)
+{
+    if (!dest || !hops || length(hops) === 0) {
+        return false;
+    }
+    const destShort = lc(shortMeshName(dest));
+    const destIsIp = match(dest, /^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$/);
+    for (let i = 0; i < length(hops); i++) {
+        const h = hops[i];
+        if (!h || h.unreachable) {
+            continue;
+        }
+        if (destIsIp && h.ip === dest) {
+            return true;
+        }
+        if (h.ip && destIsIp === false && h.ip === dest) {
+            return true;
+        }
+        const host = lc(shortMeshName(h.hostname));
+        if (host && destShort && host === destShort) {
+            return true;
+        }
+    }
+    return false;
+};
+
+/**
+ * Run one traceroute; return { hops, ok }.
+ */
+export function runOneTraceroute(dest)
+{
+    dest = normalizeDest(dest);
+    const hops = [];
+    const running = fs.popen(`/bin/traceroute -q 1 -w 1 ${dest} 2>&1`);
+    if (!running) {
+        return { hops: hops, ok: false };
+    }
+    for (let line = running.read("line"); length(line); line = running.read("line")) {
+        line = replace(line, /\r?\n$/, "");
+        const hop = parseHopLine(line);
+        if (hop) {
+            push(hops, hop);
+        }
+    }
+    running.close();
+    return { hops: hops, ok: true };
+};
+
+function absDiff(a, b)
+{
+    const d = a - b;
+    return d < 0 ? -d : d;
+};
+
+function roundMs(n)
+{
+    if (n < 0) {
+        return int(n - 0.5);
+    }
+    return int(n + 0.5);
+};
+
+/**
+ * Aggregate N traceroute runs.
+ * Returns report object used by formatReport.
+ */
+export function aggregateRuns(dest, runs)
+{
+    dest = normalizeDest(dest);
+    const buckets = {};
+    let unreachable = 0;
+    let shortest = null;
+    let longest = null;
+    let totalOk = 0;
+
+    for (let r = 0; r < length(runs); r++) {
+        const run = runs[r];
+        const hops = run.hops || [];
+        const hopCount = length(hops);
+        if (shortest == null || hopCount < shortest) {
+            shortest = hopCount;
+        }
+        if (longest == null || hopCount > longest) {
+            longest = hopCount;
+        }
+        const reached = runReachedDest(hops, dest);
+        if (!reached) {
+            unreachable++;
+        }
+        const key = pathKeyFromHops(hops);
+        let b = buckets[key];
+        if (!b) {
+            b = {
+                key: key,
+                count: 0,
+                reached: reached,
+                hops: hops,
+                rtts: []
+            };
+            for (let i = 0; i < hopCount; i++) {
+                push(b.rtts, []);
+            }
+            buckets[key] = b;
+        }
+        b.count++;
+        /* Once reachable, keep reachable; never flip a reachable path to unreachable. */
+        if (reached) {
+            b.reached = true;
+        }
+        /* Prefer a display hop list from a reachable run when possible. */
+        if (reached && !b.displayFromReachable) {
+            b.hops = hops;
+            b.displayFromReachable = true;
+        }
+        for (let i = 0; i < hopCount; i++) {
+            if (i >= length(b.rtts)) {
+                push(b.rtts, []);
+            }
+            const ms = rttNumber(hops[i]);
+            if (ms != null) {
+                push(b.rtts[i], ms);
+            }
+        }
+        totalOk++;
+    }
+
+    const paths = [];
+    for (let k in buckets) {
+        push(paths, buckets[k]);
+    }
+
+    /* Sort by count desc, then key asc. */
+    for (let i = 0; i < length(paths); i++) {
+        for (let j = i + 1; j < length(paths); j++) {
+            const a = paths[i];
+            const b = paths[j];
+            let swap = false;
+            if (b.count > a.count) {
+                swap = true;
+            }
+            else if (b.count === a.count && b.key < a.key) {
+                swap = true;
+            }
+            if (swap) {
+                paths[i] = b;
+                paths[j] = a;
+            }
+        }
+    }
+
+    return {
+        dest: dest,
+        runs: length(runs),
+        unreachable: unreachable,
+        shortest: shortest == null ? 0 : shortest,
+        longest: longest == null ? 0 : longest,
+        paths: paths,
+        totalOk: totalOk
+    };
+};
+
+export function formatRttStats(samples)
+{
+    if (!samples || length(samples) === 0) {
+        return "-";
+    }
+    let sum = 0;
+    for (let i = 0; i < length(samples); i++) {
+        sum += samples[i];
+    }
+    const avg = sum / length(samples);
+    let maxDev = 0;
+    for (let i = 0; i < length(samples); i++) {
+        const d = absDiff(samples[i], avg);
+        if (d > maxDev) {
+            maxDev = d;
+        }
+    }
+    return `avg ${roundMs(avg)}ms +- ${roundMs(maxDev)}ms`;
+};
+
+export function formatReport(agg)
+{
+    const lines = [];
+    const n = agg.runs;
+    const paths = agg.paths;
+    const unique = length(paths);
+    push(lines, `stableroute(${packageVersion()}): destination ${shortMeshName(agg.dest)}  runs ${n}`);
+    push(lines, "Summary:");
+    push(lines, `  unique paths: ${unique}`);
+    push(lines, `  shortest route: ${agg.shortest} hops`);
+    push(lines, `  longest route: ${agg.longest} hops`);
+    push(lines, `  Unreachable: ${agg.unreachable}`);
+    if (unique > 0) {
+        const top = paths[0];
+        const pct = n > 0 ? roundMs((top.count * 100) / n) : 0;
+        push(lines, `  most common: ${top.count}/${n} (${pct}%)`);
+    }
+    else {
+        push(lines, "  most common: -");
+    }
+    push(lines, "");
+
+    for (let p = 0; p < length(paths); p++) {
+        const path = paths[p];
+        const pct = n > 0 ? roundMs((path.count * 100) / n) : 0;
+        let header = `Path ${p + 1}: ${path.count}/${n} (${pct}%)`;
+        if (!path.reached) {
+            header += "  [unreachable]";
+        }
+        push(lines, header);
+        const hops = path.hops || [];
+        for (let i = 0; i < length(hops); i++) {
+            const label = hopDisplay(hops[i]);
+            const stats = formatRttStats(path.rtts[i]);
+            if (label === "*") {
+                push(lines, `  ${hops[i].hop} *  ${stats}`);
+            }
+            else {
+                push(lines, `  ${hops[i].hop} ${label}  ${stats}`);
+            }
+        }
+        if (p + 1 < length(paths)) {
+            push(lines, "");
+        }
+    }
+    return join(lines, "\n") + "\n";
+};
+
+/**
+ * Run traceroute N times and return formatted report text.
+ * Returns { ok, text }.
+ */
+export function runStableRoute(dest, n)
+{
+    if (!dest) {
+        return { ok: false, text: "No destination\n" };
+    }
+    dest = normalizeDest(dest);
+    if (n == null || n < 1) {
+        n = 10;
+    }
+    n = int(n);
+    const runs = [];
+    let anyOk = false;
+    for (let i = 0; i < n; i++) {
+        const one = runOneTraceroute(dest);
+        if (one.ok) {
+            anyOk = true;
+        }
+        push(runs, one);
+    }
+    const agg = aggregateRuns(dest, runs);
+    return { ok: anyOk, text: formatReport(agg) };
+};

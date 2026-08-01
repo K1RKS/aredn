@@ -1,0 +1,81 @@
+#!/usr/bin/ucode
+/*
+ * stableroute CLI — run traceroute N times and report unique hop paths.
+ */
+
+import * as sr from "stableroute";
+
+function usage()
+{
+    print("Usage: stableroute [-n N] <destination>\n");
+    print("  Run traceroute N times (default 10), group identical hop paths, report stability.\n");
+    print("  Path identity is the full ordered hop list (hostname/IP/*); RTT does not affect equality.\n");
+    print("  Per-hop timing is reported as avg Xms +- Yms (Y = max |rtt - avg|).\n");
+    print("\n");
+    print("  Summary includes unique paths, shortest/longest hop counts, and Unreachable runs.\n");
+    print("\n");
+    print("  -n N       Number of traceroute runs (default 10)\n");
+    print("  -h         Show this help\n");
+};
+
+let runs = 10;
+let dest = null;
+for (let i = 0; i < length(ARGV); i++) {
+    const a = ARGV[i];
+    if (a === "-h" || a === "--help") {
+        usage();
+        exit(0);
+    }
+    if (a === "-n" || a === "--runs") {
+        if (i + 1 >= length(ARGV)) {
+            print("Missing value for -n\n");
+            usage();
+            exit(1);
+        }
+        i++;
+        const n = int(ARGV[i]);
+        if (n < 1) {
+            print("-n must be a positive integer\n");
+            usage();
+            exit(1);
+        }
+        runs = n;
+        continue;
+    }
+    if (match(a, /^-n([0-9]+)$/)) {
+        const m = match(a, /^-n([0-9]+)$/);
+        const n = int(m[1]);
+        if (n < 1) {
+            print("-n must be a positive integer\n");
+            usage();
+            exit(1);
+        }
+        runs = n;
+        continue;
+    }
+    if (match(a, /^-/)) {
+        print(`Unknown option: ${a}\n`);
+        usage();
+        exit(1);
+    }
+    if (dest) {
+        print("Only one destination is allowed\n");
+        usage();
+        exit(1);
+    }
+    dest = a;
+}
+
+if (!dest) {
+    usage();
+    exit(1);
+}
+
+if (match(dest, /[^0-9a-zA-Z.\-]/)) {
+    print("Illegal destination name\n");
+    exit(1);
+}
+
+const result = sr.runStableRoute(dest, runs);
+print(result.text);
+exit(result.ok ? 0 : 1);

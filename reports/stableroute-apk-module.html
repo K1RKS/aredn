@@ -1,0 +1,252 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>stableroute APK module — plan</title>
+<style>
+  :root {
+    --bg: #0f1115;
+    --fg: #e8eaed;
+    --muted: #9aa0a6;
+    --card: #161a22;
+    --border: #2a2f3a;
+    --accent: #8ab4f8;
+    --info-border: #3d5a80;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font: 15px/1.5 system-ui, sans-serif;
+    background: var(--bg);
+    color: var(--fg);
+    padding: 24px;
+    max-width: 920px;
+  }
+  h1 { font-size: 1.45rem; margin: 0 0 6px; }
+  h2 { font-size: 1.15rem; margin: 28px 0 10px; }
+  h3 { font-size: 1rem; margin: 16px 0 6px; }
+  p { margin: 0 0 10px; color: var(--muted); }
+  .lead { color: var(--muted); max-width: 62ch; }
+  .pills { display: flex; flex-wrap: wrap; gap: 8px; margin: 12px 0 20px; }
+  .pill {
+    display: inline-block;
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    padding: 2px 10px;
+    font-size: 12px;
+    color: var(--fg);
+  }
+  .pill.accent { color: var(--accent); border-color: #3d5a80; }
+  .stats {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 12px;
+    margin: 16px 0 20px;
+  }
+  @media (max-width: 720px) {
+    .stats { grid-template-columns: repeat(2, 1fr); }
+  }
+  .stat {
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background: var(--card);
+    padding: 12px 14px;
+  }
+  .stat .v { font-size: 1.05rem; font-weight: 600; color: var(--fg); }
+  .stat .l { font-size: 12px; color: var(--muted); margin-top: 4px; }
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 14px;
+    margin: 8px 0 12px;
+  }
+  th, td {
+    text-align: left;
+    padding: 8px 10px;
+    border-bottom: 1px solid var(--border);
+    vertical-align: top;
+  }
+  th { color: var(--muted); font-weight: 600; font-size: 12px; }
+  .callout {
+    border: 1px solid var(--info-border);
+    border-radius: 8px;
+    padding: 12px 14px;
+    background: var(--card);
+    margin: 14px 0;
+    color: var(--muted);
+  }
+  .callout strong { display: block; margin-bottom: 4px; color: var(--fg); }
+  .card {
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background: var(--card);
+    margin: 10px 0 14px;
+    overflow: hidden;
+  }
+  .card-h {
+    padding: 10px 14px;
+    border-bottom: 1px solid var(--border);
+    font-weight: 600;
+    font-size: 14px;
+  }
+  .card-b { padding: 12px 14px; }
+  pre {
+    margin: 0;
+    padding: 0;
+    color: var(--fg);
+    font: 12.5px/1.45 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    white-space: pre-wrap;
+    overflow: auto;
+  }
+  code {
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: 0.9em;
+    color: var(--accent);
+  }
+  .grid2 {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 12px;
+  }
+  @media (max-width: 720px) {
+    .grid2 { grid-template-columns: 1fr; }
+  }
+  ul.todos { margin: 8px 0 0; padding-left: 1.2rem; color: var(--muted); }
+  ul.todos li { margin: 4px 0; }
+  ul.todos li b { color: var(--fg); }
+  hr { border: none; border-top: 1px solid var(--border); margin: 24px 0; }
+  .src { font-size: 12px; margin-top: 24px; color: var(--muted); }
+</style>
+</head>
+<body>
+  <h1>stableroute APK module</h1>
+  <p class="lead">Side-loaded CLI that runs traceroute N times, groups full ordered hop paths, and reports stability with per-hop RTT avg ± max deviation.</p>
+  <div class="pills">
+    <span class="pill accent">stableroute</span>
+    <span class="pill">CLI only</span>
+    <span class="pill">stock /bin/traceroute</span>
+    <span class="pill">v0.1.0-r0</span>
+  </div>
+
+  <div class="stats">
+    <div class="stat"><div class="v">stableroute</div><div class="l">Package / binary</div></div>
+    <div class="stat"><div class="v">10</div><div class="l">Default runs (-n)</div></div>
+    <div class="stat"><div class="v">Full hop list</div><div class="l">Path identity</div></div>
+    <div class="stat"><div class="v">avg ± maxΔ</div><div class="l">Per-hop RTT</div></div>
+  </div>
+
+  <div class="callout">
+    <strong>Path equality</strong>
+    Ordered hop sequences are compared in full. <code>nodea→nodeb→nodec</code> and <code>noded→nodee→nodec</code> are different paths even when both have depth 3. RTT does not affect path identity.
+  </div>
+
+  <h2>Locked decisions</h2>
+  <table>
+    <thead><tr><th>Topic</th><th>Choice</th></tr></thead>
+    <tbody>
+      <tr><td>Package name</td><td>stableroute (APK stableroute-0.1.0-r0.apk)</td></tr>
+      <tr><td>Scope</td><td>CLI only — no Tools CGI / UI swap</td></tr>
+      <tr><td>Probe</td><td><code>/bin/traceroute -q 1 -w 1</code> (no aredn-traceroute APK dep)</td></tr>
+      <tr><td>Hop key</td><td>short hostname, else IP, else <code>*</code></td></tr>
+      <tr><td>Flag</td><td><code>-n N</code> runs (default 10); one destination</td></tr>
+      <tr><td>Summary</td><td>unique paths, shortest/longest hops, Unreachable count</td></tr>
+    </tbody>
+  </table>
+
+  <h2>Reuse from aredn-traceroute</h2>
+  <p>Copy/adapt concepts; do not import <code>aredn_traceroute</code> on-node in v1.</p>
+  <table>
+    <thead><tr><th>Concept</th><th>Source</th><th>Use in stableroute</th></tr></thead>
+    <tbody>
+      <tr><td>MakeAPK scaffold</td><td>build.sh, mkapk.py, dist/</td><td>Same layout; <code>-n stableroute</code></td></tr>
+      <tr><td>CLI shape</td><td>aredn-traceroute binary</td><td>ucode shebang, -h, single dest</td></tr>
+      <tr><td>Dest normalize</td><td>runEnrichedTraceroute</td><td>Append <code>.local.mesh</code> when needed</td></tr>
+      <tr><td>Hop parse</td><td>parseHopLine()</td><td>Port into stableroute.uc</td></tr>
+      <tr><td>Short names</td><td>shortMeshName()</td><td>Strip <code>.local.mesh</code> for keys/display</td></tr>
+      <tr><td>Version sync</td><td>packageVersion() + bump rule</td><td>Banner + revision rule</td></tr>
+      <tr><td>Install docs</td><td>traceroute README</td><td><code>apk add --allow-untrusted</code></td></tr>
+    </tbody>
+  </table>
+  <p>Not in v1: LQM/Babel enrichment, CGI swap, <code>-gps</code> / <code>-tx_rx_info</code> / <code>--node_version</code>.</p>
+
+  <h2>Package layout</h2>
+  <div class="card">
+    <div class="card-h">contrib/stableroute/</div>
+    <div class="card-b"><pre>contrib/stableroute/
+  build.sh
+  tools/mkapk.py
+  README.md
+  .gitignore          # dist/
+  src/
+    usr/bin/stableroute
+    usr/share/ucode/stableroute.uc</pre></div>
+  </div>
+
+  <h2>Aggregation flow</h2>
+  <table>
+    <thead><tr><th>Step</th><th>Action</th></tr></thead>
+    <tbody>
+      <tr><td>1</td><td>Parse destination and <code>-n N</code></td></tr>
+      <tr><td>2</td><td>For each run: <code>/bin/traceroute -q 1 -w 1 dest</code></td></tr>
+      <tr><td>3</td><td>Parse hop lines → ordered hop list</td></tr>
+      <tr><td>4</td><td>Path key = hop1|hop2|… (identity only)</td></tr>
+      <tr><td>5</td><td>Bucket count + collect per-hop RTTs</td></tr>
+      <tr><td>6</td><td>Print summary, then unique paths by frequency</td></tr>
+    </tbody>
+  </table>
+  <h3>Per unique path</h3>
+  <p>Occurrence count and % of N. Each hop shows identity plus <code>avg Xms +- Yms</code> where Y is max |rtt − avg| over samples for that hop on that path. No RTT samples → <code>-</code>.</p>
+
+  <h2>Example report</h2>
+  <div class="card">
+    <div class="card-h">Sample stdout</div>
+    <div class="card-b"><pre>stableroute(0.1.0-r0): destination &lt;dest&gt;  runs 10
+Summary:
+  unique paths: 2
+  shortest route: 3 hops
+  longest route: 5 hops
+  Unreachable: 1
+  most common: 7/10 (70%)
+
+Path 1: 7/10 (70%)
+  1 nodea (10.1.2.3)  avg 12ms +- 3ms
+  2 nodeb (10.1.2.4)  avg 45ms +- 8ms
+  3 nodec (10.1.2.5)  avg 50ms +- 5ms
+
+Path 2: 2/10 (20%)
+  1 noded (10.2.0.1)  avg 20ms +- 1ms
+  2 nodee (10.2.0.2)  avg 33ms +- 4ms
+  3 nodec (10.1.2.5)  avg 55ms +- 6ms</pre></div>
+  </div>
+
+  <hr />
+
+  <h2>Cursor rules</h2>
+  <div class="grid2">
+    <div class="card">
+      <div class="card-h">bump-stableroute-revision.mdc</div>
+      <div class="card-b"><p style="margin:0">On package changes: bump <code>build.sh -v</code> patch, sync <code>packageVersion()</code>, update README APK strings.</p></div>
+    </div>
+    <div class="card">
+      <div class="card-h">canvas-twin-html.mdc</div>
+      <div class="card-b"><p style="margin:0">Every <code>.canvas.tsx</code> gets <code>reports/&lt;same-kebab-name&gt;.html</code> in the same turn (self-contained digital twin).</p></div>
+    </div>
+  </div>
+
+  <h2>Implementation todos</h2>
+  <ul class="todos">
+    <li><b>pending</b> — Scaffold contrib/stableroute/ from aredn-traceroute MakeAPK pattern</li>
+    <li><b>pending</b> — Implement stableroute.uc + CLI: parse, N runs, path group, RTT, summary</li>
+    <li><b>pending</b> — Add bump-stableroute-revision.mdc and canvas-twin-html.mdc</li>
+    <li><b>pending</b> — Run build.sh and verify APK is produced</li>
+  </ul>
+
+  <div class="callout">
+    <strong>Out of scope (v1)</strong>
+    Tools UI/CGI · Babel/LQM enrichment · Parallel probes / changing -q/-w · Committing dist/*.apk
+  </div>
+
+  <p class="src">Digital twin of plan canvas stableroute-apk-module · openable without Cursor canvas runtime</p>
+</body>
+</html>
