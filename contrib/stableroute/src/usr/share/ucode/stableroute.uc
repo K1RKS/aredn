@@ -7,7 +7,7 @@ import * as fs from "fs";
 /* Keep in sync with build.sh -v/-r (and bump-stableroute-revision rule). */
 export function packageVersion()
 {
-    return "0.1.2-r0";
+    return "0.1.3-r0";
 };
 
 export function shortMeshName(name)
@@ -39,7 +39,8 @@ export function parseHopLine(line)
     if (!line) {
         return null;
     }
-    let m = match(line, /^([0-9]+) +\* +\* +\*/);
+    /* BusyBox -q 1 prints a single *; -q 3 prints * * *. Accept either. */
+    let m = match(line, /^([0-9]+) +\*/);
     if (m) {
         return { hop: int(m[1]), unreachable: true };
     }
@@ -380,7 +381,8 @@ export function formatDebugRun(runIndex, runCount, one)
         const hop = ev.hop;
         if (!hop) {
             /* Banner / non-hop lines are expected; only flag hop-looking lines. */
-            if (match(ev.line, /^[0-9]+ /) || match(ev.line, /^[0-9]+\t/)) {
+            const t = trim(ev.line);
+            if (match(t, /^[0-9]+\s/)) {
                 push(lines, `  DROP  ${ev.line}`);
                 dropped++;
             }
