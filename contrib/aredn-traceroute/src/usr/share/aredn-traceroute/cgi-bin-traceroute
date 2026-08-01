@@ -2,8 +2,12 @@
 /*
  * Drop-in replacement for AREDN /cgi-bin/traceroute.
  * Same HTML/streaming contract as firmware CGI so Tools → Traceroute keeps working.
- * Header line includes start/destination and Babel path metric; hops append type/cost/metric
- * (and GPS when gps=1).
+ * Banner (version / Babel metric) is emitted after the stock "traceroute to …" line
+ * so the Tools UI, which skips pre-banner lines, still displays it.
+ *
+ * Query flags:
+ *   verbose=1, gps=1, node_version=1
+ *   tx_rx_info=0 or no_tx_rx_info=1  (tx/rx fields on by default)
  */
 
 import * as configuration from "aredn.configuration";
@@ -16,6 +20,8 @@ const m = match(q, /server=([^&]*)/);
 let server = m && m[1];
 const verbose = match(q, /(^|&)verbose=1(&|$)/) ? true : false;
 const gps = match(q, /(^|&)gps=1(&|$)/) ? true : false;
+const nodeVersion = match(q, /(^|&)node_version=1(&|$)/) ? true : false;
+const txRxInfo = match(q, /(^|&)(tx_rx_info=0|no_tx_rx_info=1)(&|$)/) ? false : true;
 
 print("Content-type: text/html\r\n");
 print("Cache-Control: no-store\r\n");
@@ -33,15 +39,21 @@ else {
         server += ".local.mesh";
     }
     print("<html><head><title>SUCCESS</title></head>\n");
-    const destMetric = atr.lookupDestPathMetric(server);
-    const metricPart = destMetric != null ? `${destMetric}` : "-";
-    print(`<body><pre>Aredn-Traceroute(${atr.packageVersion()}): ${atr.shortMeshName(node)} to ${atr.shortMeshName(server)}  Babel Metric ${metricPart}\n`);
+    print("<body><pre>");
     flush();
 
+    const destMetric = atr.lookupDestPathMetric(server);
+    const headerLine = atr.formatBanner(node, server, destMetric);
     const ok = atr.runEnrichedTraceroute(server, function (line) {
         print(`${line}\n`);
         flush();
-    }, { verbose: verbose, gps: gps });
+    }, {
+        verbose: verbose,
+        gps: gps,
+        txRxInfo: txRxInfo,
+        nodeVersion: nodeVersion,
+        headerLine: headerLine
+    });
     if (!ok) {
         print("traceroute failed\n");
     }

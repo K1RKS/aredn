@@ -253,7 +253,13 @@ export function shortMeshName(name)
 /* Keep in sync with build.sh -v/-r (and bump-traceroute-revision rule). */
 export function packageVersion()
 {
-    return "0.1.18-r0";
+    return "0.1.23-r0";
+};
+
+export function formatBanner(node, dest, destMetric)
+{
+    const metricPart = destMetric != null ? `${destMetric}` : "-";
+    return `Aredn-Traceroute(${packageVersion()}): Babel Metric ${metricPart}`;
 };
 
 function resolveDestIp(dest)
@@ -372,6 +378,12 @@ export function seedLocal(ctx)
     if (ctx.wantGps && (lat == null || lon == null)) {
         gpsReason = "local node has no lat/lon in aredn.@location[0]";
     }
+    let firmwareVersion = null;
+    try {
+        firmwareVersion = configuration.getFirmwareVersion();
+    }
+    catch (_) {
+    }
     return storeEntry(ctx, ctx.localKey, {
         key: ctx.localKey,
         local: true,
@@ -384,6 +396,7 @@ export function seedLocal(ctx)
         lon: lon,
         hostname: hostname,
         ip: null,
+        firmwareVersion: firmwareVersion,
         trackers: trackers,
         byIp: idx.byIp,
         byHost: idx.byHost
@@ -440,6 +453,7 @@ export function ensureNode(ctx, hostOrIp)
             lon: null,
             hostname: hostOrIp,
             ip: match(hostOrIp, /^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$/) ? hostOrIp : null,
+            firmwareVersion: null,
             trackers: {},
             byIp: {},
             byHost: {}
@@ -450,6 +464,9 @@ export function ensureNode(ctx, hostOrIp)
     const idx = indexTrackers(trackers);
     const ip = info.ip || (match(hostOrIp, /^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$/) ? hostOrIp : null);
     const hostname = info.node || info.hostname || hostOrIp;
+    const firmwareVersion = (info.node_details && info.node_details.firmware_version)
+        ? info.node_details.firmware_version
+        : null;
     let lat = null;
     let lon = null;
     let gpsReason = null;
@@ -471,6 +488,7 @@ export function ensureNode(ctx, hostOrIp)
         lon: lon,
         hostname: hostname,
         ip: ip,
+        firmwareVersion: firmwareVersion,
         trackers: trackers,
         byIp: idx.byIp,
         byHost: idx.byHost
@@ -650,21 +668,33 @@ function fmtPct(v)
     return v != null && v !== "" ? `${v}%` : "-";
 }
 
-export function formatHopLine(hopNum, hostname, ip, rtt, lat, lon, type, txcost, rxcost, txSuccess, rxSuccess, metric, neighborErrors, includeGps)
+export function formatHopLine(hopNum, hostname, ip, rtt, lat, lon, type, txcost, rxcost, txSuccess, rxSuccess, metric, neighborErrors, firmwareVersion, includeGps, txRxInfo, nodeVersion)
 {
-    const host = hostname || ip || "?";
+    const host = shortMeshName(hostname || ip || "?");
     const ipPart = ip ? ` (${ip})` : "";
-    const rttPart = rtt != null ? ` ${rtt} ms` : "";
-    const t = type || "-";
-    const costs = `${fmtDash(txcost)}/${fmtDash(rxcost)}`;
-    const success = `(${fmtPct(txSuccess)}/${fmtPct(rxSuccess)})`;
-    const m = fmtDash(metric);
-    const errors = fmtPct(neighborErrors);
-    if (includeGps) {
-        const gps = formatGps(lat, lon);
-        return ` ${hopNum}  ${host}${ipPart} ${rttPart}  ${gps}  ${t}  ${costs}  ${success}  ${m}  ${errors}`;
+    let rttPart = "";
+    if (rtt != null && rtt !== "") {
+        const rttN = +rtt;
+        rttPart = rttN == rttN ? ` ${int(rttN + 0.5)} ms` : ` ${rtt} ms`;
     }
-    return ` ${hopNum}  ${host}${ipPart} ${rttPart}  ${t}  ${costs}  ${success}  ${m}  ${errors}`;
+    const t = type || "-";
+    const m = fmtDash(metric);
+    let line = ` ${hopNum} ${host}${ipPart}${rttPart}`;
+    if (includeGps) {
+        line += ` ${formatGps(lat, lon)}`;
+    }
+    line += ` ${t}`;
+    if (txRxInfo) {
+        line += ` ${fmtDash(txcost)}/${fmtDash(rxcost)} (${fmtPct(txSuccess)}/${fmtPct(rxSuccess)})`;
+    }
+    line += ` ${m}`;
+    if (txRxInfo) {
+        line += ` ${fmtPct(neighborErrors)}`;
+    }
+    if (nodeVersion) {
+        line += ` ${fmtDash(firmwareVersion)}`;
+    }
+    return line;
 };
 
 /**
@@ -809,8 +839,11 @@ export function enrichHop(ctx, prevKey, hop)
         }
     }
     const wantGps = ctx.wantGps ? true : false;
+    const txRxInfo = ctx.txRxInfo !== false;
+    const nodeVersion = ctx.nodeVersion ? true : false;
     const lat = wantGps && node ? node.lat : null;
     const lon = wantGps && node ? node.lon : null;
+    const firmwareVersion = node ? node.firmwareVersion : null;
     let nextKey = (node && node.key) ? node.key : (cacheKey(hop.ip || hop.hostname) || prevKey);
     // Prefer mesh-IP/hostname cache key when we rebound a failed tunnel entry.
     if (node && !node.failed && node.ip && hop.ip && node.ip !== hop.ip) {
@@ -848,20 +881,23 @@ export function enrichHop(ctx, prevKey, hop)
     if (!link.type && link.typeReason) {
         push(notes, `    # type -: ${link.typeReason}`);
     }
-    if ((link.txcost == null && link.rxcost == null) && link.costReason) {
+    if (txRxInfo && (link.txcost == null && link.rxcost == null) && link.costReason) {
         push(notes, `    # cost -: ${link.costReason}`);
     }
-    if ((link.txSuccess == null && link.rxSuccess == null) && link.qualityReason) {
+    if (txRxInfo && (link.txSuccess == null && link.rxSuccess == null) && link.qualityReason) {
         push(notes, `    # success -: ${link.qualityReason}`);
     }
     if (pathMetric.metric == null && pathMetric.reason) {
         push(notes, `    # metric -: ${pathMetric.reason}`);
     }
-    if (link.neighborErrors == null && link.errorsReason) {
+    if (txRxInfo && link.neighborErrors == null && link.errorsReason) {
         push(notes, `    # errors -: ${link.errorsReason}`);
     }
+    if (nodeVersion && (firmwareVersion == null || firmwareVersion === "")) {
+        push(notes, `    # version -: no firmware_version from sysinfo for ${hop.ip || hop.hostname}`);
+    }
     return {
-        line: formatHopLine(hop.hop, hostname, hop.ip, hop.rtt, lat, lon, link.type, link.txcost, link.rxcost, link.txSuccess, link.rxSuccess, pathMetric.metric, link.neighborErrors, wantGps),
+        line: formatHopLine(hop.hop, hostname, hop.ip, hop.rtt, lat, lon, link.type, link.txcost, link.rxcost, link.txSuccess, link.rxSuccess, pathMetric.metric, link.neighborErrors, firmwareVersion, wantGps, txRxInfo, nodeVersion),
         notes: notes,
         nextKey: nextKey
     };
@@ -869,7 +905,12 @@ export function enrichHop(ctx, prevKey, hop)
 
 /**
  * Run traceroute and emit lines via printFn(line).
- * options.verbose: when true, print why unset GPS/type/cost values are missing.
+ * options.verbose: when true, print why unset fields are missing.
+ * options.gps: include per-hop GPS (off by default).
+ * options.txRxInfo: include txcost/rxcost, success%, neighborErrors% (on by default).
+ * options.nodeVersion: append firmware_version from hop sysinfo (off by default).
+ * options.headerLine: printed immediately after the stock "traceroute to …" banner
+ *   so Tools → Traceroute (which skips lines until that banner) still shows it.
  * Returns true on success.
  */
 export function runEnrichedTraceroute(dest, printFn, options)
@@ -881,8 +922,12 @@ export function runEnrichedTraceroute(dest, printFn, options)
         dest = `${dest}.local.mesh`;
     }
     const verbose = options && options.verbose;
+    const headerLine = options && options.headerLine;
+    let headerPending = headerLine ? true : false;
     const ctx = createContext();
     ctx.wantGps = !!(options && options.gps);
+    ctx.txRxInfo = !(options && options.txRxInfo === false);
+    ctx.nodeVersion = !!(options && options.nodeVersion);
     seedLocalRouteMetrics(ctx);
     seedLocal(ctx);
     let prevKey = ctx.localKey;
@@ -895,6 +940,10 @@ export function runEnrichedTraceroute(dest, printFn, options)
         line = replace(line, /\r?\n$/, "");
         const hop = parseHopLine(line);
         if (hop) {
+            if (headerPending) {
+                printFn(headerLine);
+                headerPending = false;
+            }
             const enriched = enrichHop(ctx, prevKey, hop);
             printFn(enriched.line);
             if (verbose && enriched.notes) {
@@ -908,7 +957,14 @@ export function runEnrichedTraceroute(dest, printFn, options)
         }
         else {
             printFn(line);
+            if (headerPending && match(line, /^traceroute/)) {
+                printFn(headerLine);
+                headerPending = false;
+            }
         }
+    }
+    if (headerPending) {
+        printFn(headerLine);
     }
     running.close();
     return true;
