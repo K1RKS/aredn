@@ -253,7 +253,7 @@ export function shortMeshName(name)
 /* Keep in sync with build.sh -v/-r (and bump-traceroute-revision rule). */
 export function packageVersion()
 {
-    return "0.1.23-r0";
+    return "0.1.24-r0";
 };
 
 export function formatBanner(node, dest, destMetric)
