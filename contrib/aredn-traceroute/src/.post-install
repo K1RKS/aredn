@@ -1,0 +1,6 @@
+#!/bin/sh
+# Backup stock Tools traceroute CGI, then install our drop-in.
+. /usr/share/aredn-traceroute/cgi-swap.sh 2>/dev/null || exit 0
+backup_stock_cgi
+install_ours_cgi
+exit 0

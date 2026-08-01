@@ -35,7 +35,7 @@ else {
     print("<html><head><title>SUCCESS</title></head>\n");
     const destMetric = atr.lookupDestPathMetric(server);
     const metricPart = destMetric != null ? `${destMetric}` : "-";
-    print(`<body><pre>Aredn-Traceroute: ${atr.shortMeshName(node)} to ${atr.shortMeshName(server)}  Babel Metric ${metricPart}\n`);
+    print(`<body><pre>Aredn-Traceroute(${atr.packageVersion()}): ${atr.shortMeshName(node)} to ${atr.shortMeshName(server)}  Babel Metric ${metricPart}\n`);
     flush();
 
     const ok = atr.runEnrichedTraceroute(server, function (line) {

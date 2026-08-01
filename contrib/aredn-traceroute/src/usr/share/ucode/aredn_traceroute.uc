@@ -124,43 +124,37 @@ function findNeighbor(entry, nextIp, nextHost)
     return null;
 }
 
-function localBabelCost(device)
+function hasCostValue(v)
 {
-    if (!device) {
-        return null;
-    }
-    try {
-        const neighbors = babel.getNeighbors();
-        for (let i = 0; i < length(neighbors); i++) {
-            const n = neighbors[i];
-            if (n.interface === device && n.cost != null) {
-                return n.cost;
-            }
-        }
-    }
-    catch (_) {
-    }
-    return null;
+    return v != null && v !== "";
 }
 
-function linkCost(entry, tracker, local)
+/**
+ * Link costs and quality from previous-hop LQM (same fields as neighbor-device UI).
+ * tx success = rev_lq, rx success = lq, neighbor errors = 100 - rev_quality.
+ */
+function linkStats(tracker)
 {
     if (!tracker) {
-        return null;
+        return {
+            txcost: null,
+            rxcost: null,
+            txSuccess: null,
+            rxSuccess: null,
+            neighborErrors: null
+        };
     }
-    if (local) {
-        const c = localBabelCost(tracker.device);
-        if (c != null) {
-            return c;
-        }
+    let neighborErrors = null;
+    if (hasCostValue(tracker.rev_quality)) {
+        neighborErrors = 100 - tracker.rev_quality;
     }
-    if (tracker.rxcost != null) {
-        return tracker.rxcost;
-    }
-    if (tracker.txcost != null) {
-        return tracker.txcost;
-    }
-    return null;
+    return {
+        txcost: hasCostValue(tracker.txcost) ? tracker.txcost : null,
+        rxcost: hasCostValue(tracker.rxcost) ? tracker.rxcost : null,
+        txSuccess: hasCostValue(tracker.rev_lq) ? tracker.rev_lq : null,
+        rxSuccess: hasCostValue(tracker.lq) ? tracker.lq : null,
+        neighborErrors: neighborErrors
+    };
 }
 
 /**
@@ -254,6 +248,12 @@ export function shortMeshName(name)
         return name;
     }
     return replace(name, /\.local\.mesh$/, "");
+};
+
+/* Keep in sync with build.sh -v/-r (and bump-traceroute-revision rule). */
+export function packageVersion()
+{
+    return "0.1.18-r0";
 };
 
 function resolveDestIp(dest)
@@ -565,9 +565,15 @@ export function lookupLink(ctx, prevKey, nextIp, nextHost)
         const why = `no LQM data for previous hop (${prevKey})`;
         return {
             type: null,
-            cost: null,
+            txcost: null,
+            rxcost: null,
+            txSuccess: null,
+            rxSuccess: null,
+            neighborErrors: null,
             typeReason: why,
             costReason: why,
+            qualityReason: why,
+            errorsReason: why,
             viaHostname: false
         };
     }
@@ -575,9 +581,15 @@ export function lookupLink(ctx, prevKey, nextIp, nextHost)
         const why = prev.failReason || `previous hop ${prevLabel} sysinfo/LQM unavailable`;
         return {
             type: null,
-            cost: null,
+            txcost: null,
+            rxcost: null,
+            txSuccess: null,
+            rxSuccess: null,
+            neighborErrors: null,
             typeReason: `link type unknown: ${why}`,
             costReason: `link cost unknown: ${why}`,
+            qualityReason: `tx/rx success unknown: ${why}`,
+            errorsReason: `neighbor errors unknown: ${why}`,
             viaHostname: false
         };
     }
@@ -587,23 +599,33 @@ export function lookupLink(ctx, prevKey, nextIp, nextHost)
         const why = `${target} not found as a Babel/LQM neighbor of previous hop ${prevLabel}`;
         return {
             type: null,
-            cost: null,
+            txcost: null,
+            rxcost: null,
+            txSuccess: null,
+            rxSuccess: null,
+            neighborErrors: null,
             typeReason: `link type unknown: ${why}`,
             costReason: `link cost unknown: ${why}`,
+            qualityReason: `tx/rx success unknown: ${why}`,
+            errorsReason: `neighbor errors unknown: ${why}`,
             viaHostname: prev.refreshedViaHostname ? true : false
         };
     }
     const type = mapLinkType(tracker.type);
-    const cost = linkCost(prev, tracker, prev.local);
+    const stats = linkStats(tracker);
+    const haveCost = stats.txcost != null || stats.rxcost != null;
+    const haveQuality = stats.txSuccess != null || stats.rxSuccess != null;
     return {
         type: type,
-        cost: cost,
+        txcost: stats.txcost,
+        rxcost: stats.rxcost,
+        txSuccess: stats.txSuccess,
+        rxSuccess: stats.rxSuccess,
+        neighborErrors: stats.neighborErrors,
         typeReason: type ? null : `neighbor ${nextIp || nextHost} on ${prevLabel} has no link type`,
-        costReason: cost != null ? null : (
-            prev.local
-                ? `neighbor on ${prevLabel} has no Babel cost / LQM rxcost`
-                : `neighbor on ${prevLabel} has no LQM rxcost/txcost`
-        ),
+        costReason: haveCost ? null : `neighbor on ${prevLabel} has no LQM txcost/rxcost`,
+        qualityReason: haveQuality ? null : `neighbor on ${prevLabel} has no LQM lq/rev_lq (rx/tx success)`,
+        errorsReason: stats.neighborErrors != null ? null : `neighbor on ${prevLabel} has no LQM rev_quality (neighbor errors)`,
         viaHostname: prev.refreshedViaHostname ? true : false,
         prevLabel: prevLabel,
         neighborHostname: tracker.hostname || null
@@ -618,19 +640,31 @@ export function formatGps(lat, lon)
     return `${lat},${lon}`;
 };
 
-export function formatHopLine(hopNum, hostname, ip, rtt, lat, lon, type, cost, metric, includeGps)
+function fmtDash(v)
+{
+    return v != null && v !== "" ? `${v}` : "-";
+}
+
+function fmtPct(v)
+{
+    return v != null && v !== "" ? `${v}%` : "-";
+}
+
+export function formatHopLine(hopNum, hostname, ip, rtt, lat, lon, type, txcost, rxcost, txSuccess, rxSuccess, metric, neighborErrors, includeGps)
 {
     const host = hostname || ip || "?";
     const ipPart = ip ? ` (${ip})` : "";
     const rttPart = rtt != null ? ` ${rtt} ms` : "";
     const t = type || "-";
-    const c = cost != null ? `${cost}` : "-";
-    const m = metric != null ? `${metric}` : "-";
+    const costs = `${fmtDash(txcost)}/${fmtDash(rxcost)}`;
+    const success = `(${fmtPct(txSuccess)}/${fmtPct(rxSuccess)})`;
+    const m = fmtDash(metric);
+    const errors = fmtPct(neighborErrors);
     if (includeGps) {
         const gps = formatGps(lat, lon);
-        return ` ${hopNum}  ${host}${ipPart} ${rttPart}  ${gps}  ${t}  ${c}  ${m}`;
+        return ` ${hopNum}  ${host}${ipPart} ${rttPart}  ${gps}  ${t}  ${costs}  ${success}  ${m}  ${errors}`;
     }
-    return ` ${hopNum}  ${host}${ipPart} ${rttPart}  ${t}  ${c}  ${m}`;
+    return ` ${hopNum}  ${host}${ipPart} ${rttPart}  ${t}  ${costs}  ${success}  ${m}  ${errors}`;
 };
 
 /**
@@ -814,14 +848,20 @@ export function enrichHop(ctx, prevKey, hop)
     if (!link.type && link.typeReason) {
         push(notes, `    # type -: ${link.typeReason}`);
     }
-    if (link.cost == null && link.costReason) {
+    if ((link.txcost == null && link.rxcost == null) && link.costReason) {
         push(notes, `    # cost -: ${link.costReason}`);
+    }
+    if ((link.txSuccess == null && link.rxSuccess == null) && link.qualityReason) {
+        push(notes, `    # success -: ${link.qualityReason}`);
     }
     if (pathMetric.metric == null && pathMetric.reason) {
         push(notes, `    # metric -: ${pathMetric.reason}`);
     }
+    if (link.neighborErrors == null && link.errorsReason) {
+        push(notes, `    # errors -: ${link.errorsReason}`);
+    }
     return {
-        line: formatHopLine(hop.hop, hostname, hop.ip, hop.rtt, lat, lon, link.type, link.cost, pathMetric.metric, wantGps),
+        line: formatHopLine(hop.hop, hostname, hop.ip, hop.rtt, lat, lon, link.type, link.txcost, link.rxcost, link.txSuccess, link.rxSuccess, pathMetric.metric, link.neighborErrors, wantGps),
         notes: notes,
         nextKey: nextKey
     };

@@ -11,7 +11,8 @@ Whenever you change anything under `contrib/aredn-traceroute/` that affects the 
 
 1. In `contrib/aredn-traceroute/build.sh`, increment the patch segment of `-v` (e.g. `0.1.13` → `0.1.14`).
 2. Leave `-r r0` unless the user explicitly asks to bump only the APK release field.
-3. Update every APK filename / version string in `contrib/aredn-traceroute/README.md` (and any other docs touched in that change) to match the new `-v` value.
+3. Update `packageVersion()` in `contrib/aredn-traceroute/src/usr/share/ucode/aredn_traceroute.uc` to match (`0.1.N-r0`).
+4. Update every APK filename / version string in `contrib/aredn-traceroute/README.md` (and any other docs touched in that change) to match the new `-v` value.
 
 ## When
 

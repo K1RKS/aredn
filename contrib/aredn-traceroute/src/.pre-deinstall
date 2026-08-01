@@ -1,0 +1,5 @@
+#!/bin/sh
+# Restore firmware Tools traceroute CGI before package files are removed.
+. /usr/share/aredn-traceroute/cgi-swap.sh 2>/dev/null || exit 0
+restore_stock_cgi
+exit 0
