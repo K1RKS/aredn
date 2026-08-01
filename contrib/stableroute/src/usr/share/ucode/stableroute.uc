@@ -7,7 +7,7 @@ import * as fs from "fs";
 /* Keep in sync with build.sh -v/-r (and bump-stableroute-revision rule). */
 export function packageVersion()
 {
-    return "0.1.0-r0";
+    return "0.1.2-r0";
 };
 
 export function shortMeshName(name)
@@ -87,7 +87,7 @@ function pathKeyFromHops(hops)
     for (let i = 0; i < length(hops); i++) {
         push(parts, hopIdentity(hops[i]));
     }
-    return join(parts, "|");
+    return join("|", parts);
 };
 
 function hopDisplay(hop)
@@ -147,25 +147,30 @@ export function runReachedDest(hops, dest)
 };
 
 /**
- * Run one traceroute; return { hops, ok }.
+ * Run one traceroute; return { hops, ok, raw, events }.
+ * events[i] = { line, hop } where hop is null if the line was not a parsed hop.
  */
 export function runOneTraceroute(dest)
 {
     dest = normalizeDest(dest);
     const hops = [];
+    const raw = [];
+    const events = [];
     const running = fs.popen(`/bin/traceroute -q 1 -w 1 ${dest} 2>&1`);
     if (!running) {
-        return { hops: hops, ok: false };
+        return { hops: hops, ok: false, raw: raw, events: events };
     }
     for (let line = running.read("line"); length(line); line = running.read("line")) {
         line = replace(line, /\r?\n$/, "");
+        push(raw, line);
         const hop = parseHopLine(line);
+        push(events, { line: line, hop: hop });
         if (hop) {
             push(hops, hop);
         }
     }
     running.close();
-    return { hops: hops, ok: true };
+    return { hops: hops, ok: true, raw: raw, events: events };
 };
 
 function absDiff(a, b)
@@ -346,14 +351,67 @@ export function formatReport(agg)
             push(lines, "");
         }
     }
-    return join(lines, "\n") + "\n";
+    return join("\n", lines) + "\n";
+};
+
+/**
+ * Format per-run raw vs parse debug for one traceroute result.
+ */
+export function formatDebugRun(runIndex, runCount, one)
+{
+    const lines = [];
+    push(lines, `=== Run ${runIndex}/${runCount} ===`);
+    push(lines, "RAW:");
+    const raw = one.raw || [];
+    if (length(raw) === 0) {
+        push(lines, "  (no output)");
+    }
+    else {
+        for (let i = 0; i < length(raw); i++) {
+            push(lines, `  ${raw[i]}`);
+        }
+    }
+    push(lines, "PARSED:");
+    const events = one.events || [];
+    let kept = 0;
+    let dropped = 0;
+    for (let i = 0; i < length(events); i++) {
+        const ev = events[i];
+        const hop = ev.hop;
+        if (!hop) {
+            /* Banner / non-hop lines are expected; only flag hop-looking lines. */
+            if (match(ev.line, /^[0-9]+ /) || match(ev.line, /^[0-9]+\t/)) {
+                push(lines, `  DROP  ${ev.line}`);
+                dropped++;
+            }
+            else {
+                push(lines, `  skip  ${ev.line}`);
+            }
+            continue;
+        }
+        kept++;
+        if (hop.unreachable) {
+            push(lines, `  KEEP  hop ${hop.hop} id=* (timeout)  key=*`);
+        }
+        else {
+            const id = hopIdentity(hop);
+            const label = hopDisplay(hop);
+            const rtt = hop.rtt != null ? hop.rtt : "-";
+            push(lines, `  KEEP  hop ${hop.hop} ${label}  rtt=${rtt}ms  key=${id}`);
+        }
+    }
+    push(lines, `PATH KEY: ${pathKeyFromHops(one.hops || [])}`);
+    push(lines, `  kept=${kept} dropped=${dropped} hop_count=${length(one.hops || [])}`);
+    push(lines, "");
+    return join("\n", lines);
 };
 
 /**
  * Run traceroute N times and return formatted report text.
+ * options.debug: when true, prepend per-run raw vs parse dump.
  * Returns { ok, text }.
  */
-export function runStableRoute(dest, n)
+export function runStableRoute(dest, n, options)
 {
     if (!dest) {
         return { ok: false, text: "No destination\n" };
@@ -363,15 +421,24 @@ export function runStableRoute(dest, n)
         n = 10;
     }
     n = int(n);
+    const debug = !!(options && options.debug);
     const runs = [];
     let anyOk = false;
+    const debugParts = [];
     for (let i = 0; i < n; i++) {
         const one = runOneTraceroute(dest);
         if (one.ok) {
             anyOk = true;
         }
+        if (debug) {
+            push(debugParts, formatDebugRun(i + 1, n, one));
+        }
         push(runs, one);
     }
     const agg = aggregateRuns(dest, runs);
-    return { ok: anyOk, text: formatReport(agg) };
+    let text = formatReport(agg);
+    if (debug) {
+        text = join("\n", debugParts) + "=== REPORT ===\n" + text;
+    }
+    return { ok: anyOk, text: text };
 };

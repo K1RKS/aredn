@@ -8,18 +8,19 @@ equality — `nodea→nodeb→nodec` and `noded→nodee→nodec` are different p
 
 ## Install
 
-1. Build (or download) `stableroute-0.1.0-r0.apk`
+1. Build (or download) `stableroute-0.1.2-r0.apk`
 2. On the node: **Status → Packages** → upload / install with allow-untrusted  
-   or: `apk add --allow-untrusted stableroute-0.1.0-r0.apk`
+   or: `apk add --allow-untrusted stableroute-0.1.2-r0.apk`
 3. CLI: `stableroute <destination>`  
-   Custom run count: `stableroute -n 20 <destination>`
+   Custom run count: `stableroute -n 20 <destination>`  
+   Debug (raw vs parse): `stableroute -debug -n 3 <destination>`
 
 ## Build
 
 ```sh
 chmod +x build.sh
 ./build.sh
-# → dist/stableroute-0.1.0-r0.apk
+# → dist/stableroute-0.1.2-r0.apk
 ```
 
 Uses a vendored copy of [kn6plv/MakeAPK](https://github.com/kn6plv/MakeAPK) (`tools/mkapk.py`). No OpenWrt buildroot required.
@@ -54,7 +55,7 @@ Unreachable / partial paths are still listed as unique paths (marked `[unreachab
 ## Example
 
 ```text
-stableroute(0.1.0-r0): destination nodec  runs 10
+stableroute(0.1.2-r0): destination nodec  runs 10
 Summary:
   unique paths: 2
   shortest route: 3 hops
