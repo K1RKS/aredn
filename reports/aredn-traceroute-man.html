@@ -1,0 +1,156 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>aredn-traceroute — help</title>
+<style>
+  :root {
+    --bg: #0f1115;
+    --fg: #e8eaed;
+    --muted: #9aa0a6;
+    --card: #161a22;
+    --border: #2a2f3a;
+    --accent: #8ab4f8;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font: 15px/1.5 system-ui, sans-serif;
+    background: var(--bg);
+    color: var(--fg);
+    padding: 24px;
+    max-width: 780px;
+  }
+  h1 { font-size: 1.45rem; margin: 0 0 6px; }
+  h2 { font-size: 1.15rem; margin: 26px 0 8px; }
+  h3 { font-size: 1rem; margin: 16px 0 6px; }
+  p { margin: 0 0 10px; color: var(--muted); }
+  .lead { color: var(--muted); }
+  .pill {
+    display: inline-block;
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    padding: 2px 10px;
+    font-size: 12px;
+    color: var(--accent);
+    margin-left: 8px;
+    vertical-align: middle;
+  }
+  pre.help {
+    margin: 8px 0 12px;
+    padding: 14px;
+    border-radius: 8px;
+    border: 1px solid var(--border);
+    background: var(--card);
+    color: var(--fg);
+    font: 12.5px/1.45 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    white-space: pre-wrap;
+    overflow: auto;
+  }
+  code {
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: 0.9em;
+    color: var(--accent);
+  }
+  .field { margin: 0 0 12px; }
+  .field strong { display: block; margin-bottom: 2px; color: var(--fg); }
+  .field strong code { color: var(--accent); }
+  .callout {
+    border: 1px solid #5a4a1e;
+    border-radius: 8px;
+    padding: 12px 14px;
+    background: var(--card);
+    margin: 18px 0;
+    color: var(--muted);
+  }
+  .callout strong { display: block; margin-bottom: 4px; color: var(--fg); }
+  hr { border: none; border-top: 1px solid var(--border); margin: 20px 0; }
+  .src { font-size: 12px; margin-top: 20px; color: var(--muted); }
+  b { color: var(--fg); font-weight: 600; }
+</style>
+</head>
+<body>
+  <h1>aredn-traceroute — help <span class="pill">0.1.25-r0</span></h1>
+  <p class="lead">Expanded version of <code>aredn-traceroute -h</code>: what it is, how to run it, how to read a hop line, and common examples.</p>
+
+  <h2>Usage</h2>
+  <pre class="help">aredn-traceroute [options] &lt;destination&gt;</pre>
+  <p><code>destination</code> is a mesh node name, hostname, or IPv4 address. If you pass a bare node name (no dots), <code>.local.mesh</code> is added for the probe. Illegal characters are rejected.</p>
+
+  <h2>What this tool is</h2>
+  <p>A side-loaded AREDN package that runs the normal BusyBox traceroute, then adds mesh-aware columns so you can see <b>how</b> you reached each hop — not just that you did.</p>
+  <p>On the node it also replaces Tools → Traceroute’s CGI (<code>/www/cgi-bin/traceroute</code>), so the web UI shows the same enriched hops when this package is installed on the <b>source</b> node. Removing the package restores the stock firmware CGI.</p>
+  <p>Under the hood: one <code>/a/sysinfo?lqm=1</code> fetch per hop node (cached), link type and tx/rx quality from the <b>previous</b> hop’s LQM neighbor entry, and Babel path metric from <b>this</b> node’s installed host routes.</p>
+
+  <hr />
+
+  <h2>Typical output</h2>
+  <p>Stock traceroute banner first, then the package banner (so Tools UI still shows version/metric — it skips CGI lines until <code>traceroute to…</code>), then hop lines:</p>
+  <pre class="help">traceroute to nocall-far-node.local.mesh (10.9.8.7), 30 hops max, 46 byte packets
+Aredn-Traceroute(0.1.25-r0): Babel Metric 4078
+ 1 nocall-x86-node (10.1.2.3) 23 ms DtD 96/96 (100%/100%) 352 0%
+ 2 nocall-mid-node (10.1.2.4) 45 ms RF 3593/3520 (98%/99%) 3945 1%
+ 3 nocall-far-node (10.9.8.7) 61 ms WG 133/133 (100%/100%) 4078 0%</pre>
+  <p>Hostnames omit <code>.local.mesh</code>. RTT is whole milliseconds. Fields are single-spaced. Missing values are <code>-</code>.</p>
+
+  <h2>Example hop and field meanings</h2>
+  <pre class="help"> 1 nocall-x86-node (10.1.2.3) 23 ms DtD 96/96 (100%/100%) 352 0%</pre>
+
+  <div class="field"><strong><code>hop#</code></strong><p>Traceroute hop number (TTL). Same as stock traceroute.</p></div>
+  <div class="field"><strong><code>name (ip)</code></strong><p>Resolved hop hostname and the address traceroute actually saw. If traceroute only returned an IP, the name may be filled from that hop’s sysinfo or from the previous hop’s LQM neighbor list.</p></div>
+  <div class="field"><strong><code>RTT</code></strong><p>Round-trip time for the probe that got a reply at this hop, rounded to an integer number of milliseconds.</p></div>
+  <div class="field"><strong><code>type</code></strong><p>Incoming link type on the edge into this hop, from the previous hop’s LQM: DtD (device-to-device), RF (radio), WG (WireGuard tunnel), or Xlink.</p></div>
+  <div class="field"><strong><code>tx/rx</code></strong><p>Babel/LQM link costs from the previous hop’s neighbor entry: txcost/rxcost. Shown when -tx_rx_info is on (default).</p></div>
+  <div class="field"><strong><code>(tx%/rx%)</code></strong><p>TX and RX success percentages from LQM (rev_lq and lq — same idea as the neighbor-device UI). Shown with -tx_rx_info.</p></div>
+  <div class="field"><strong><code>met</code></strong><p>Babel path metric from the traceroute source node to this hop (installed host route). May show “-” for some tunnel/WG hop IPs that are not in local host routes; the final hop often matches the banner Babel Metric.</p></div>
+  <div class="field"><strong><code>err</code></strong><p>Neighbor errors percent from LQM: 100 − rev_quality. Shown with -tx_rx_info.</p></div>
+  <p>With <code>-gps</code>, <code>lat,lon</code> is inserted after RTT. With <code>--node_version</code>, the hop’s AREDN <code>firmware_version</code> is appended at the end.</p>
+
+  <hr />
+
+  <h2>Options</h2>
+  <pre class="help">  -tx_rx_info       Include txcost/rxcost, (tx%/rx%), neighborErrors% (default)
+  -no_tx_rx_info    Omit those tx/rx fields (wins over -tx_rx_info)
+  --node_version    Append each hop's AREDN firmware_version (off by default)
+  -gps              Include per-hop GPS coordinates (off by default)
+  -verbose          Explain why displayed fields are unset (-)
+  -h, --help        Show short help on the node</pre>
+  <p>If both <code>-tx_rx_info</code> and <code>-no_tx_rx_info</code> are given, <code>-no_tx_rx_info</code> always wins.</p>
+
+  <h2>How to use it</h2>
+  <h3>CLI on a node</h3>
+  <pre class="help"># Basic (tx/rx columns on)
+aredn-traceroute nocall-x86-node
+
+# Narrower line — type + Babel metric only
+aredn-traceroute -no_tx_rx_info nocall-far-node
+
+# Show firmware on each hop
+aredn-traceroute --node_version nocall-far-node
+
+# GPS + verbose notes for missing fields
+aredn-traceroute -gps -verbose nocall-far-node</pre>
+
+  <h3>Tools → Traceroute (web UI)</h3>
+  <p>Install the APK on the <b>source</b> node (the one in the Source field). The UI still draws its own “Traceroute test started / Source / Target” chrome, then streams the CGI. You should see the <code>Aredn-Traceroute(…)</code> banner right after <code>traceroute to…</code>, then enriched hops.</p>
+  <p>CGI query extras (if you call the CGI directly): <code>gps=1</code>, <code>verbose=1</code>, <code>node_version=1</code>, <code>tx_rx_info=0</code> or <code>no_tx_rx_info=1</code>.</p>
+
+  <h3>Install / remove</h3>
+  <pre class="help"># On the node (Status → Packages, allow untrusted), or:
+apk add --allow-untrusted aredn-traceroute-0.1.25-r0.apk
+
+# Remove restores stock Tools traceroute CGI
+apk del aredn-traceroute</pre>
+
+  <h2>More hop shapes</h2>
+  <p><b>Without tx/rx columns</b></p>
+  <pre class="help"> 1 nocall-x86-node (10.1.2.3) 23 ms DtD 352</pre>
+  <p><b>With firmware version</b></p>
+  <pre class="help"> 1 nocall-x86-node (10.1.2.3) 23 ms DtD 96/96 (100%/100%) 352 0% 4.26.7.0</pre>
+  <p><b>With GPS</b></p>
+  <pre class="help"> 1 nocall-x86-node (10.1.2.3) 23 ms 45.1234,-122.1234 DtD 96/96 (100%/100%) 352 0%</pre>
+
+  <p class="src">Mirror of contrib/aredn-traceroute help · package 0.1.25-r0</p>
+</body>
+</html>

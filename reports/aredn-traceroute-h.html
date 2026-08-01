@@ -1,0 +1,79 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>aredn-traceroute -h</title>
+<style>
+  :root {
+    --bg: #0f1115;
+    --fg: #e8eaed;
+    --muted: #9aa0a6;
+    --panel: #1a1d24;
+    --border: #2a2f3a;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font: 15px/1.45 system-ui, sans-serif;
+    background: var(--bg);
+    color: var(--fg);
+    padding: 24px;
+    max-width: 820px;
+  }
+  h1 { font-size: 1.4rem; margin: 0 0 6px; }
+  .meta { color: var(--muted); margin: 0 0 14px; font-size: 14px; }
+  .pill {
+    display: inline-block;
+    margin-left: 8px;
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    padding: 1px 10px;
+    font-size: 12px;
+    color: var(--muted);
+    vertical-align: middle;
+  }
+  pre {
+    margin: 0;
+    padding: 16px;
+    border-radius: 8px;
+    border: 1px solid var(--border);
+    background: var(--panel);
+    color: var(--fg);
+    font: 13px/1.45 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    white-space: pre-wrap;
+    overflow: auto;
+  }
+</style>
+</head>
+<body>
+  <h1>aredn-traceroute -h <span class="pill">0.1.25-r0</span></h1>
+  <p class="meta">Exact CLI help text from the package binary.</p>
+  <pre>Usage: aredn-traceroute [options] &lt;destination&gt;
+  Runs traceroute and appends per-hop link type and Babel path metric.
+  Link type (and optional tx/rx fields) come from the previous hop's LQM.
+  Each node is queried at most once via /a/sysinfo?lqm=1.
+  Banner (after traceroute to …) shows package version and Babel path metric.
+
+  Example hop (defaults; -tx_rx_info on):
+    1 nocall-x86-node (10.1.2.3) 23 ms DtD 96/96 (100%/100%) 352 0%
+
+  Fields:
+    hop#       Traceroute hop number (TTL).
+    name (ip)  Hop hostname and address.
+    RTT        Round-trip time in whole milliseconds.
+    type       Incoming link type: DtD, RF, WG, or Xlink.
+    tx/rx      LQM txcost/rxcost from the previous hop (with -tx_rx_info).
+    (tx%/rx%)  TX/RX success from LQM rev_lq/lq (with -tx_rx_info).
+    met        Babel path metric from this node to the hop.
+    err        Neighbor errors% = 100-rev_quality (with -tx_rx_info).
+    With -gps: lat,lon after RTT.  With --node_version: firmware at end.
+
+  -tx_rx_info       Include txcost/rxcost, (tx%/rx%), neighborErrors% (default)
+  -no_tx_rx_info    Omit those tx/rx fields (wins over -tx_rx_info)
+  --node_version    Append each hop's AREDN firmware_version (off by default)
+  -gps              Include per-hop GPS coordinates (off by default)
+  -verbose          Explain why displayed fields are unset (-)
+</pre>
+</body>
+</html>

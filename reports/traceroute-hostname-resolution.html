@@ -12,8 +12,6 @@
     --card: #1a1d24;
     --border: #2a2f3a;
     --accent: #8ab4f8;
-    --warn: #fdd663;
-    --info: #81c995;
   }
   * { box-sizing: border-box; }
   body {
@@ -24,12 +22,12 @@
     padding: 24px;
     max-width: 960px;
   }
-  h1 { font-size: 1.6rem; margin: 0 0 8px; }
-  h2 { font-size: 1.2rem; margin: 28px 0 10px; }
-  h3 { font-size: 1rem; margin: 16px 0 6px; }
+  h1 { font-size: 1.5rem; margin: 0 0 8px; }
+  h2 { font-size: 1.15rem; margin: 24px 0 10px; }
+  h3 { font-size: 1rem; margin: 0 0 6px; }
   p { margin: 0 0 10px; color: var(--muted); }
   .lead { color: var(--fg); }
-  .pills { display: flex; gap: 8px; flex-wrap: wrap; margin: 10px 0 18px; }
+  .pills { display: flex; gap: 8px; flex-wrap: wrap; margin: 10px 0 16px; }
   .pill {
     border: 1px solid var(--border);
     border-radius: 999px;
@@ -38,14 +36,12 @@
     color: var(--muted);
   }
   .callout {
-    border: 1px solid var(--border);
+    border: 1px solid #2e5a3c;
     border-radius: 8px;
     padding: 12px 14px;
     background: var(--card);
-    margin: 14px 0;
+    margin: 12px 0 16px;
   }
-  .callout.info { border-color: #2e5a3c; }
-  .callout.warn { border-color: #5a4a1e; }
   .callout strong { display: block; margin-bottom: 4px; color: var(--fg); }
   table {
     width: 100%;
@@ -61,7 +57,6 @@
   }
   th { background: var(--card); color: var(--fg); }
   td { color: var(--muted); }
-  td:first-child, td:nth-child(2) { color: var(--fg); }
   .grid {
     display: grid;
     grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
@@ -73,27 +68,26 @@
     padding: 12px;
     background: var(--card);
   }
-  .card h3 { margin: 0 0 6px; }
   code {
     font-family: ui-monospace, monospace;
     font-size: 0.9em;
     color: var(--accent);
   }
-  .src { font-size: 12px; margin-top: 28px; }
+  .src { font-size: 12px; margin-top: 24px; }
+  hr { border: none; border-top: 1px solid var(--border); margin: 20px 0; }
 </style>
 </head>
 <body>
   <h1>aredn-traceroute hostname resolution</h1>
-  <p class="lead">Review of how hop display names are filled when traceroute omits a hostname, and AREDN-backed enhancements that could close gaps.</p>
+  <p class="lead">How hop display names are filled when traceroute omits a hostname.</p>
   <div class="pills">
     <span class="pill">contrib/aredn-traceroute</span>
-    <span class="pill">0.1.15</span>
     <span class="pill">resolveDisplayHostname</span>
   </div>
 
-  <div class="callout info">
-    <strong>Verdict</strong>
-    Current logic already covers the three best live sources: traceroute name, hop sysinfo, and previous-hop LQM (with mesh-hostname refresh for tunnel IPs). The highest-value gaps are a local arednlink IP→name index (no extra fetches) and optional next-hop LQM look-back (needs buffering or a second pass).
+  <div class="callout">
+    <strong>Current behavior</strong>
+    Names come from traceroute, hop sysinfo, or previous-hop LQM (with mesh-hostname refresh when a tunnel IP fetch fails). Path metric uses local Babel host routes; Babel dumps do not carry hostnames.
   </div>
 
   <h2>Current pipeline</h2>
@@ -127,7 +121,9 @@
     <p>After a mesh name is learned (especially from previous LQM), if the hop was only fetched by numeric traceroute IP, enrichment re-fetches <code>http://{name}/a/sysinfo?lqm=1</code> and rebinds the cache entry. That improves later LQM lookups and can upgrade the displayed name to sysinfo’s <code>node</code> field. Unreachable hops (* * *) are not named or enriched.</p>
   </div>
 
-  <h2>Why names still go missing</h2>
+  <hr />
+
+  <h2>When names stay unresolved</h2>
   <div class="grid">
     <div class="card">
       <h3>Tunnel / WG hop IPs</h3>
@@ -141,63 +137,6 @@
       <h3>No local reverse index</h3>
       <p>Failed sysinfo is cached with no retry. <code>mesh.getNodeList</code> is used for destination metric IP only — not as an IP→name fallback for hop display names.</p>
     </div>
-  </div>
-
-  <h2>Enhancement ideas</h2>
-  <table>
-    <thead>
-      <tr><th>Idea</th><th>Effort</th><th>Value</th><th>Approach</th><th>Limitation</th></tr>
-    </thead>
-    <tbody>
-      <tr>
-        <td>Local arednlink reverse map (IP → name)</td><td>Low</td><td>High</td>
-        <td>Build IP→nodename from <code>/var/run/arednlink/hosts</code>. Zero network I/O; helps when traceroute IP equals a published mesh/dtdlink/lan IP.</td>
-        <td>Does not name pure tunnel endpoint IPs unless published in hosts.</td>
-      </tr>
-      <tr>
-        <td>Next-hop LQM look-back</td><td>Medium</td><td>High</td>
-        <td>When hop N+1 sysinfo is available, <code>findNeighbor(N+1, hopN.ip)</code> for hostname of N.</td>
-        <td>Streaming prints hop N before N+1 exists; needs one-hop buffer, two-pass, or late rewrite.</td>
-      </tr>
-      <tr>
-        <td>CLI destination name for final hop</td><td>Low</td><td>Medium</td>
-        <td>If last hop IP matches resolved dest IP, use the user-supplied destination name.</td>
-        <td>Only helps the last hop.</td>
-      </tr>
-      <tr>
-        <td>Broader arednlink / /etc/hosts aliases</td><td>Low</td><td>Medium</td>
-        <td>Match hop IP against dtdlink.*, lan.*, xlink* lines.</td>
-        <td>May be interface aliases, not the callsign users expect.</td>
-      </tr>
-      <tr>
-        <td>DNS / resolveip on hop IP</td><td>Low</td><td>Low–Med</td>
-        <td>Optional reverse or hosts lookup via mesh DNS for 10.x.</td>
-        <td>PTR often absent; 172.31 WG endpoints rarely reverse-resolve.</td>
-      </tr>
-      <tr>
-        <td>Scan any cached LQM (not only prev)</td><td>Low</td><td>Medium</td>
-        <td>If hop M’s trackers mention hop N’s IP, use that hostname.</td>
-        <td>Usually redundant with prev.</td>
-      </tr>
-      <tr>
-        <td>Babel host routes as name source</td><td>n/a</td><td>None alone</td>
-        <td>Routes give dst IP + metric + nexthop LL — no hostname.</td>
-        <td>Keep for metrics only.</td>
-      </tr>
-    </tbody>
-  </table>
-
-  <h2>Recommended order if implementing</h2>
-  <h3>1. Local arednlink IP → name</h3>
-  <p>Extend or mirror <code>mesh.getNodeList()</code> with a reverse index over arednlink host files. Call it from <code>resolveDisplayHostname</code> before declaring unresolved.</p>
-  <h3>2. Destination name for final hop</h3>
-  <p>If hop IP equals resolved dest IP (already computed for Babel Metric), prefer the CLI/CGI destination label.</p>
-  <h3>3. Next-hop look-back (if streaming allows)</h3>
-  <p>Buffer one hop before printing, or run a lightweight second pass over cached sysinfo only.</p>
-
-  <div class="callout warn">
-    <strong>Not worth chasing alone</strong>
-    Babel dump-installed-routes and babel.getNeighbors() do not carry AREDN hostnames (IPv6 LL + interface). Keep them for metrics/cost only.
   </div>
 
   <p class="src">Source: contrib/aredn-traceroute/src/usr/share/ucode/aredn_traceroute.uc · files/usr/share/ucode/aredn/mesh.uc</p>

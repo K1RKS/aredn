@@ -19,7 +19,7 @@ function usage()
     print("\n");
     print("  Fields:\n");
     print("    hop#       Traceroute hop number (TTL).\n");
-    print("    name (ip)  Hop hostname (no .local.mesh) and address.\n");
+    print("    name (ip)  Hop hostname and address.\n");
     print("    RTT        Round-trip time in whole milliseconds.\n");
     print("    type       Incoming link type: DtD, RF, WG, or Xlink.\n");
     print("    tx/rx      LQM txcost/rxcost from the previous hop (with -tx_rx_info).\n");
