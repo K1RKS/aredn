@@ -7,6 +7,7 @@
 {%
 const nodes = mesh.getNodeList();
 const mynode = configuration.getName();
+const hasArednTraceroute = !!fs.access("/usr/bin/aredn-traceroute");
 %}
 <div class="dialog wide">
     {{_R("tool-header", "StableRoute")}}
@@ -53,14 +54,14 @@ const mynode = configuration.getName();
         </div>
         <div class="cols">
             <div>
-                <div class="o">Legacy traceroute</div>
-                <div class="m">Force stock /bin/traceroute even if aredn-traceroute is present</div>
+                <div class="o">
+                    <label title="Use original traceroute" style="display:inline-flex;align-items:center;gap:8px;{{hasArednTraceroute ? "" : "opacity:0.55;cursor:not-allowed"}}">
+                        <input id="tool-legacy" type="checkbox" title="Use original traceroute" {{hasArednTraceroute ? "" : "checked disabled"}}>
+                        Use Legacy Traceroute
+                    </label>
+                </div>
             </div>
             <div>
-                <label style="display:flex;align-items:center;gap:8px">
-                    <input id="tool-legacy" type="checkbox">
-                    Use legacy
-                </label>
                 <div id="target-swap-dummy3" style="width:42px"></div>
             </div>
         </div>
