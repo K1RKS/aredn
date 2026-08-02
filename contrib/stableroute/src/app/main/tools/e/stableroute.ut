@@ -1,0 +1,210 @@
+{%
+/*
+ * StableRoute Tools dialog — path-stability traceroute (side-loaded package).
+ * Resembles Tools → Traceroute; console scrolls for long multi-run reports.
+ */
+%}
+{%
+const nodes = mesh.getNodeList();
+const mynode = configuration.getName();
+%}
+<div class="dialog wide">
+    {{_R("tool-header", "StableRoute")}}
+    <style>
+        #ctrl-modal .tool-console.stableroute pre {
+            overflow: auto scroll;
+            overscroll-behavior: contain;
+        }
+    </style>
+    <div class="simple-tool compact client-server">
+        <div class="cols">
+            <div>
+                <div class="o">Target A&zwnj;ddress</div>
+                <div class="m">IP A&zwnj;ddress, Hostname or Node</div>
+            </div>
+            <div>
+                <input id="tool-target" type="text" size="40" required list="mesh-nodes">
+                <button id="target-swap"><div class="icon updownarrow"></div></button>
+            </div>
+        </div>
+        <div class="cols">
+            <div>
+                <div class="o">Source A&zwnj;ddress</div>
+                <div class="m">Node with stableroute installed</div>
+            </div>
+            <div>
+                <input id="tool-client" type="text" size="40" required value="{{mynode}}" list="mesh-nodes">
+                <div id="target-swap-dummy" style="width:42px"></div>
+            </div>
+        </div>
+        <div class="cols">
+            <div>
+                <div class="o">Runs</div>
+                <div class="m">Number of traceroute iterations (1–100)</div>
+            </div>
+            <div>
+                <input id="tool-runs" type="number" min="1" max="100" value="10" style="width:5em">
+                <div id="target-swap-dummy2" style="width:42px"></div>
+            </div>
+        </div>
+        <div class="cols">
+            <div>
+                <div class="o">Legacy traceroute</div>
+                <div class="m">Force stock /bin/traceroute even if aredn-traceroute is present</div>
+            </div>
+            <div>
+                <label style="display:flex;align-items:center;gap:8px">
+                    <input id="tool-legacy" type="checkbox">
+                    Use legacy
+                </label>
+                <div id="target-swap-dummy3" style="width:42px"></div>
+            </div>
+        </div>
+        <datalist id="mesh-nodes">
+            <option value="{{mynode}}">{{mynode}}</option>
+            {%
+                for (let i = 0; i < length(nodes); i++) {
+                    const nn = nodes[i].name;
+                    if (nn !== mynode) {
+                        print(`<option value="${nn}">${nn}</option>`);
+                    }
+                }
+            %}
+        </datalist>
+        {{_H("Run traceroute repeatedly between a source node and a target, then group identical hop paths.
+        The source must have the stableroute package installed (by default this node). Long reports scroll in the console.")}}
+        <div class="cols">
+            <div class="tool-console stableroute">
+                <pre></pre>
+            </div>
+            <div>
+                <button id="tool-start">Go</button>
+            </div>
+        </div>
+    </div>
+    {{_R("tool-footer")}}
+    <script>
+    (function(){
+        {{_R("open")}}
+        {% if (!request.mobile) { %}
+        htmx.find("#tool-target").focus();
+        {% } %}
+        htmx.on("#target-swap", "click", _ => {
+            const v = htmx.find("#tool-target").value;
+            htmx.find("#tool-target").value = htmx.find("#tool-client").value;
+            htmx.find("#tool-client").value = v;
+        });
+        htmx.on("#tool-start", "click", async _ => {
+            const server = htmx.find("#tool-target").value;
+            const client = htmx.find("#tool-client").value;
+            let runs = parseInt(htmx.find("#tool-runs").value, 10);
+            if (!runs || runs < 1) runs = 10;
+            if (runs > 100) runs = 100;
+            const legacy = htmx.find("#tool-legacy").checked;
+            if (server && client) {
+                const con = htmx.find(".tool-console.stableroute pre");
+                con.innerText = "";
+                function out(line) {
+                    const nearBottom = (con.scrollHeight - con.scrollTop - con.clientHeight) < 48;
+                    con.innerHTML += `${line}\n`;
+                    if (nearBottom) {
+                        con.scrollTop = con.scrollHeight;
+                    }
+                }
+                out("StableRoute test started");
+                out("");
+                try {
+                    const host = `${client}${client.indexOf(".") == -1 ? ".local.mesh" : ""}`;
+                    const target = `${server}${server.indexOf(".") == -1 && !/^[0-9.]+$/.test(server) ? ".local.mesh" : ""}`;
+                    let url = `http://${host}/cgi-bin/stableroute?server=${encodeURIComponent(target)}&n=${runs}`;
+                    if (legacy) {
+                        url += "&legacy=1";
+                    }
+                    const r = await fetch(url);
+                    const reader = r.body.getReader();
+                    let state = "BEGIN";
+                    let buf = "";
+                    for (;;) {
+                        const { done, value } = await reader.read();
+                        if (done) {
+                            if (state !== "DONE") {
+                                out("StableRoute Terminated.");
+                            }
+                            break;
+                        }
+                        buf += String.fromCharCode.apply(null, value);
+                        const lines = buf.split("\n");
+                        buf = lines.pop();
+                        lines.forEach(line => {
+                            line = line.trim();
+                            switch (state) {
+                                case "BEGIN":
+                                {
+                                    const m = line.match(/<title>(.*)<\/title>/);
+                                    if (m) {
+                                        if (m[1] === "SUCCESS") {
+                                            state = "PRINT";
+                                            out(`Source: ${client}`);
+                                            out(`Target: ${server}`);
+                                            out(`Runs: ${runs}${legacy ? " (legacy)" : ""}`);
+                                            out("");
+                                        }
+                                        else {
+                                            state = "ERROR";
+                                            const em = line.match(/<pre>(.*)<\/pre>/);
+                                            if (em) {
+                                                out(`ERROR: ${em[1]}`);
+                                                state = "DONE";
+                                            }
+                                        }
+                                    }
+                                    break;
+                                }
+                                case "PRINT":
+                                    if (line) {
+                                        if (line === "</pre></body></html>") {
+                                            state = "DONE";
+                                            out("");
+                                            out("StableRoute done");
+                                            out("");
+                                            out(Date().toString());
+                                        }
+                                        else if (line.match(/^<body><pre>/)) {
+                                            line = line.replace(/^<body><pre>/, "");
+                                            if (line) {
+                                                out(line);
+                                            }
+                                        }
+                                        else {
+                                            const m = line.match(/^[0-9]+ +(.+\.local\.mesh) /);
+                                            if (m) {
+                                                line = line.replace(m[1], `<a href="http://${m[1]}">${m[1].replace(".local.mesh", "")}</a>`);
+                                            }
+                                            out(line);
+                                        }
+                                    }
+                                    break;
+                                case "ERROR":
+                                {
+                                    const em = line.match(/<pre>(.*)<\/pre>/);
+                                    if (em) {
+                                        out(`ERROR: ${em[1]}`);
+                                        state = "DONE";
+                                    }
+                                    break;
+                                }
+                                case "DONE":
+                                default:
+                                    break;
+                            }
+                        });
+                    }
+                }
+                catch (_) {
+                    out("StableRoute Failed.");
+                }
+            }
+        });
+    })();
+    </script>
+</div>

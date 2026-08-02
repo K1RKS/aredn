@@ -1,0 +1,9 @@
+#!/bin/sh
+# Register Tools → StableRoute menu entry.
+. /usr/share/stableroute/tools-menu.sh 2>/dev/null || exit 0
+install_tools_menu
+chmod 755 /www/cgi-bin/stableroute 2>/dev/null || true
+chmod 644 /app/main/tools/e/stableroute.ut 2>/dev/null || true
+# tools.ut is preloaded by the admin UI; reload so the menu entry appears.
+[ -x /etc/init.d/uhttpd ] && /etc/init.d/uhttpd restart 2>/dev/null || true
+exit 0

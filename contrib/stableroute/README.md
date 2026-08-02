@@ -11,11 +11,19 @@ node (`/usr/bin/aredn-traceroute`). Otherwise uses stock `/bin/traceroute`.
 Pass `-legacy` to force stock traceroute. This package does **not** install
 aredn-traceroute.
 
+## GUI
+
+Installs **Tools → StableRoute** (same style as Traceroute): target/source, run
+count, legacy checkbox, and a scrollable console for long reports. The source
+node must have this package installed. CGI endpoint: `/cgi-bin/stableroute`.
+Install/upgrade restarts uhttpd so the Tools menu picks up the new entry
+(the admin UI preloads tools.ut at process start).
+
 ## Install
 
-1. Build (or download) `stableroute-0.1.4-r0.apk`
+1. Build (or download) `stableroute-0.1.7-r0.apk`
 2. On the node: **Status → Packages** → upload / install with allow-untrusted  
-   or: `apk add --allow-untrusted stableroute-0.1.4-r0.apk`
+   or: `apk add --allow-untrusted stableroute-0.1.7-r0.apk`
 3. CLI: `stableroute <destination>`  
    Custom run count: `stableroute -n 20 <destination>`  
    Debug (raw vs parse): `stableroute -debug -n 3 <destination>`  
@@ -26,7 +34,7 @@ aredn-traceroute.
 ```sh
 chmod +x build.sh
 ./build.sh
-# → dist/stableroute-0.1.4-r0.apk
+# → dist/stableroute-0.1.7-r0.apk
 ```
 
 Uses a vendored copy of [kn6plv/MakeAPK](https://github.com/kn6plv/MakeAPK) (`tools/mkapk.py`). No OpenWrt buildroot required.
@@ -64,7 +72,7 @@ Unreachable / partial paths are still listed as unique paths (marked `[unreachab
 ## Example
 
 ```text
-stableroute(0.1.4-r0): destination nodec  runs 10
+stableroute(0.1.7-r0): destination nodec  runs 10
 using aredn-traceroute
 Summary:
   unique paths: 2
@@ -86,6 +94,7 @@ Path 2: 3/10 (30%)
 
 ## Compatibility
 
-- CLI only in v1 (no Tools UI / CGI swap).
+- Tools → StableRoute GUI plus CLI.
 - Optional use of `aredn-traceroute` when already installed; no hard package dependency.
 - Stock BusyBox traceroute remains available via `-legacy` or when aredn-traceroute is absent.
+- On remove, the Tools menu entry is cleaned up; other Tools items are left intact.

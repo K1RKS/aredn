@@ -1,0 +1,60 @@
+#!/usr/bin/ucode
+/*
+ * StableRoute CGI — run /usr/bin/stableroute and stream the report.
+ * Query: server=<dest>&n=<runs>&legacy=1
+ */
+
+import * as fs from "fs";
+import * as configuration from "aredn.configuration";
+
+const node = configuration.getName();
+const q = getenv("QUERY_STRING") || "";
+
+const mServer = match(q, /server=([^&]*)/);
+let server = mServer && mServer[1];
+const mN = match(q, /n=([0-9]+)/);
+let n = mN ? int(mN[1]) : 10;
+const legacy = match(q, /legacy=1/) ? true : false;
+
+print("Content-type: text/html\r\n");
+print("Cache-Control: no-store\r\n");
+print("Access-Control-Allow-Origin: *\r\n");
+print("\r\n");
+
+if (!server) {
+    print("<html><head><title>ERROR</title></head><body><pre>Provide a target [/cgi-bin/stableroute?server=&lt;Target&gt;]</pre></body></html>\n");
+}
+else if (match(server, /[^0-9a-zA-Z.\-]/)) {
+    print("<html><head><title>ERROR</title></head><body><pre>Illegal target name</pre></body></html>\n");
+}
+else if (n < 1 || n > 100) {
+    print("<html><head><title>ERROR</title></head><body><pre>n must be between 1 and 100</pre></body></html>\n");
+}
+else if (!fs.access("/usr/bin/stableroute")) {
+    print("<html><head><title>ERROR</title></head><body><pre>stableroute is not installed on this node</pre></body></html>\n");
+}
+else {
+    if (!match(server, /\./) && !match(server, /^[0-9.]+$/)) {
+        server += ".local.mesh";
+    }
+    let cmd = `/usr/bin/stableroute -n ${n}`;
+    if (legacy) {
+        cmd += " -legacy";
+    }
+    cmd += ` ${server}`;
+    const running = fs.popen(`${cmd} 2>&1`);
+    if (!running) {
+        print("<html><head><title>ERROR</title></head><body><pre>stableroute failed to start</pre></body></html>\n");
+    }
+    else {
+        print("<html><head><title>SUCCESS</title></head>\n");
+        print(`<body><pre>Client: ${node}\nTarget: ${server}\nRuns: ${n}${legacy ? "\nMode: legacy" : ""}\n\n`);
+        flush();
+        for (let line = running.read("line"); length(line); line = running.read("line")) {
+            print(line);
+            flush();
+        }
+        running.close();
+        print("</pre></body></html>\n");
+    }
+}
