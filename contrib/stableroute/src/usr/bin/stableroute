@@ -7,7 +7,7 @@ import * as sr from "stableroute";
 
 function usage()
 {
-    print("Usage: stableroute [-n N] [-debug] [-legacy] [-progress] <destination>\n");
+    print("Usage: stableroute [-n N] [-debug] [-legacy] [-noprogress] <destination>\n");
     print("  Run traceroute N times (default 10), group identical hop paths, report stability.\n");
     print("  Path identity is the full ordered hop list (hostname/IP/*); RTT does not affect equality.\n");
     print("  Per-hop timing is reported as avg Xms +- Yms (Y = max |rtt - avg|).\n");
@@ -15,17 +15,18 @@ function usage()
     print("\n");
     print("  Summary includes unique paths, shortest/longest hop counts, and Unreachable runs.\n");
     print("\n");
-    print("  -n N       Number of traceroute runs (default 10)\n");
-    print("  -debug     Show raw traceroute lines vs parse keep/drop per run\n");
-    print("  -legacy    Force stock /bin/traceroute even if aredn-traceroute is present\n");
-    print("  -progress  Update a single status line after each run (CGI/terminal)\n");
-    print("  -h         Show this help\n");
+    print("  -n N         Number of traceroute runs (default 10)\n");
+    print("  -debug       Show raw traceroute lines vs parse keep/drop per run\n");
+    print("  -legacy      Force stock /bin/traceroute even if aredn-traceroute is present\n");
+    print("  -noprogress  Do not print run x/N status while probing\n");
+    print("  -progress    Print run status (default; kept for compatibility)\n");
+    print("  -h           Show this help\n");
 };
 
 let runs = 10;
 let debug = false;
 let legacy = false;
-let progress = false;
+let progress = true;
 let dest = null;
 for (let i = 0; i < length(ARGV); i++) {
     const a = ARGV[i];
@@ -43,6 +44,10 @@ for (let i = 0; i < length(ARGV); i++) {
     }
     if (a === "-progress" || a === "--progress") {
         progress = true;
+        continue;
+    }
+    if (a === "-noprogress" || a === "--noprogress") {
+        progress = false;
         continue;
     }
     if (a === "-n" || a === "--runs") {

@@ -61,8 +61,13 @@ else {
         }
         print(`<body><pre>Client: ${node}\nTarget: ${server}\nRuns: ${n}${mode}\n\n`);
         flush();
-        for (let line = running.read("line"); length(line); line = running.read("line")) {
-            print(line);
+        // Byte chunks (not lines) so \\r progress keepalives flush without waiting for \\n.
+        for (;;) {
+            const chunk = running.read(256);
+            if (!chunk || !length(chunk)) {
+                break;
+            }
+            print(chunk);
             flush();
         }
         running.close();

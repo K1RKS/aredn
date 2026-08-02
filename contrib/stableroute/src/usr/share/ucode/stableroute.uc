@@ -7,7 +7,7 @@ import * as fs from "fs";
 /* Keep in sync with build.sh -v/-r (and bump-stableroute-revision rule). */
 export function packageVersion()
 {
-    return "0.1.19-r0";
+    return "0.1.21-r0";
 };
 
 const AREDN_TRACEROUTE = "/usr/bin/aredn-traceroute";
@@ -457,9 +457,22 @@ export function runStableRoute(dest, n, options)
     const runs = [];
     let anyOk = false;
     const debugParts = [];
-    if (progress) {
-        print(`probing ${n} run${n === 1 ? "" : "s"} (${probe.using})\n`);
+
+    /* Progress on stderr so it shows immediately (stdout may be fully buffered). */
+    function writeProgress(s)
+    {
+        const f = fs.open("/dev/stderr", "w");
+        if (f) {
+            f.write(s);
+            f.close();
+            return;
+        }
+        print(s);
         flush();
+    }
+
+    if (progress) {
+        writeProgress(`probing ${n} run${n === 1 ? "" : "s"} (${probe.using})\n`);
     }
     for (let i = 0; i < n; i++) {
         const one = runOneTraceroute(dest, probe.cmd);
@@ -471,14 +484,12 @@ export function runStableRoute(dest, n, options)
         }
         push(runs, one);
         if (progress) {
-            // Carriage return overwrites the same terminal/console line.
-            print(`\rrun ${i + 1}/${n}    `);
-            flush();
+            // Carriage return overwrites the same terminal line.
+            writeProgress(`\rrun ${i + 1}/${n}    `);
         }
     }
     if (progress) {
-        print("\n");
-        flush();
+        writeProgress("\n");
     }
     const agg = aggregateRuns(dest, runs);
     agg.using = probe.using;
