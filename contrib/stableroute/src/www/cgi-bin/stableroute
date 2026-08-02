@@ -61,8 +61,7 @@ else {
         }
         print(`<body><pre>Client: ${node}\nTarget: ${server}\nRuns: ${n}${mode}\n\n`);
         flush();
-        // Line reads: stableroute emits newline-terminated progress so each
-        // keepalive flushes immediately (byte reads of N can block until N bytes).
+        // Line reads: non-TTY stableroute emits newline progress keepalives.
         for (let line = running.read("line"); length(line); line = running.read("line")) {
             print(line);
             flush();

@@ -7,7 +7,7 @@ import * as fs from "fs";
 /* Keep in sync with build.sh -v/-r (and bump-stableroute-revision rule). */
 export function packageVersion()
 {
-    return "0.1.24-r0";
+    return "0.1.25-r0";
 };
 
 const AREDN_TRACEROUTE = "/usr/bin/aredn-traceroute";
@@ -437,7 +437,7 @@ export function formatDebugRun(runIndex, runCount, one)
  * Run traceroute N times and return formatted report text.
  * options.debug: when true, prepend per-run raw vs parse dump.
  * options.legacy: force stock /bin/traceroute even if aredn-traceroute is present.
- * options.progress: print/flush a line after each run (keeps CGI connections alive).
+ * options.progress: print/flush status after each run (keeps CGI connections alive).
  * Returns { ok, text }.
  */
 export function runStableRoute(dest, n, options)
@@ -458,7 +458,9 @@ export function runStableRoute(dest, n, options)
     let anyOk = false;
     const debugParts = [];
 
-    /* Progress on stdout + flush (once). Dual stdout/stderr duplicates on a TTY. */
+    /* TTY: overwrite one line with \\r. Pipe/CGI: newline keepalives for line readers. */
+    const progressNl = !fs.stdout.isatty();
+
     function writeProgress(s)
     {
         print(s);
@@ -478,9 +480,16 @@ export function runStableRoute(dest, n, options)
         }
         push(runs, one);
         if (progress) {
-            // Newline so CGI read("line") flushes each keepalive; GUI rewrites one row.
-            writeProgress(`run ${i + 1}/${n}\n`);
+            if (progressNl) {
+                writeProgress(`run ${i + 1}/${n}\n`);
+            }
+            else {
+                writeProgress(`\rrun ${i + 1}/${n}    `);
+            }
         }
+    }
+    if (progress && !progressNl) {
+        writeProgress("\n");
     }
     const agg = aggregateRuns(dest, runs);
     agg.using = probe.using;
