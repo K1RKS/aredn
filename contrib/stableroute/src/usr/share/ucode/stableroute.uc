@@ -7,7 +7,7 @@ import * as fs from "fs";
 /* Keep in sync with build.sh -v/-r (and bump-stableroute-revision rule). */
 export function packageVersion()
 {
-    return "0.1.27-r0";
+    return "0.1.31-r0";
 };
 
 const AREDN_TRACEROUTE = "/usr/bin/aredn-traceroute";
@@ -216,8 +216,9 @@ export function runReachedDest(hops, dest)
  * Run one traceroute probe; return { hops, ok, raw, events }.
  * events[i] = { line, hop } where hop is null if the line was not a parsed hop.
  * probeCmd defaults to stock /bin/traceroute.
+ * onLine: optional callback after each output line (for progress keepalives).
  */
-export function runOneTraceroute(dest, probeCmd)
+export function runOneTraceroute(dest, probeCmd, onLine)
 {
     dest = normalizeDest(dest);
     const cmd = probeCmd || STOCK_TRACEROUTE;
@@ -235,6 +236,9 @@ export function runOneTraceroute(dest, probeCmd)
         push(events, { line: line, hop: hop });
         if (hop) {
             push(hops, hop);
+        }
+        if (onLine) {
+            onLine();
         }
     }
     running.close();
@@ -404,6 +408,7 @@ export function formatReport(agg)
         if (!path.reached) {
             header += "  [unreachable]";
         }
+        push(lines, "-------------------------------------------------");
         push(lines, header);
         const hops = path.hops || [];
         for (let i = 0; i < length(hops); i++) {
@@ -520,14 +525,8 @@ export function runStableRoute(dest, n, options)
         writeProgress(`probing ${n} run${n === 1 ? "" : "s"} (${probe.using})\n`);
     }
     for (let i = 0; i < n; i++) {
-        const one = runOneTraceroute(dest, probe.cmd);
-        if (one.ok) {
-            anyOk = true;
-        }
-        if (debug) {
-            push(debugParts, formatDebugRun(i + 1, n, one));
-        }
-        push(runs, one);
+        // Emit at run start (and on each hop below) so a slow traceroute cannot
+        // idle past uhttpd network_timeout (~30s) between keepalives.
         if (progress) {
             if (progressNl) {
                 writeProgress(`run ${i + 1}/${n}\n`);
@@ -536,6 +535,21 @@ export function runStableRoute(dest, n, options)
                 writeProgress(`\rrun ${i + 1}/${n}    `);
             }
         }
+        const one = runOneTraceroute(dest, probe.cmd, progress ? function () {
+            if (progressNl) {
+                writeProgress(`run ${i + 1}/${n}\n`);
+            }
+            else {
+                writeProgress(`\rrun ${i + 1}/${n}    `);
+            }
+        } : null);
+        if (one.ok) {
+            anyOk = true;
+        }
+        if (debug) {
+            push(debugParts, formatDebugRun(i + 1, n, one));
+        }
+        push(runs, one);
     }
     if (progress && !progressNl) {
         writeProgress("\n");

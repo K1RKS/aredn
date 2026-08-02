@@ -22,9 +22,9 @@ Install/upgrade restarts uhttpd so the Tools menu picks up the new entry
 
 ## Install
 
-1. Build (or download) `stableroute-0.1.27-r0.apk`
+1. Build (or download) `stableroute-0.1.31-r0.apk`
 2. On the node: **Status → Packages** → upload / install with allow-untrusted  
-   or: `apk add --allow-untrusted stableroute-0.1.27-r0.apk`
+   or: `apk add --allow-untrusted stableroute-0.1.31-r0.apk`
 3. CLI: `stableroute <destination>`  
    Custom run count: `stableroute -n 20 <destination>`  
    Debug (raw vs parse): `stableroute -debug -n 3 <destination>`  
@@ -35,7 +35,7 @@ Install/upgrade restarts uhttpd so the Tools menu picks up the new entry
 ```sh
 chmod +x build.sh
 ./build.sh
-# → dist/stableroute-0.1.27-r0.apk
+# → dist/stableroute-0.1.31-r0.apk
 ```
 
 Uses a vendored copy of [kn6plv/MakeAPK](https://github.com/kn6plv/MakeAPK) (`tools/mkapk.py`). No OpenWrt buildroot required.
@@ -73,7 +73,7 @@ Unreachable / partial paths are still listed as unique paths (marked `[unreachab
 ## Example
 
 ```text
-stableroute(0.1.27-r0): destination nodec  runs 10
+stableroute(0.1.31-r0): destination nodec  runs 10
 using aredn-traceroute
 Summary:
   unique paths: 2
@@ -82,11 +82,13 @@ Summary:
   Unreachable: 0
   most common: 7/10 (70%)
 
+-------------------------------------------------
 Path 1: 7/10 (70%)
   1 nodea (10.1.2.3)  avg 12ms +- 3ms
   2 nodeb (10.1.2.4)  avg 45ms +- 8ms
   3 nodec (10.1.2.5)  avg 50ms +- 5ms
 
+-------------------------------------------------
 Path 2: 3/10 (30%)
   1 noded (10.2.0.1)  avg 20ms +- 1ms
   2 nodee (10.2.0.2)  avg 33ms +- 4ms

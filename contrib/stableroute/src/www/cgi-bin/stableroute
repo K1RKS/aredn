@@ -2,12 +2,13 @@
 /*
  * StableRoute CGI — run /usr/bin/stableroute and stream the report.
  * Query: server=<dest>&n=<runs>&legacy=1&debug=1
+ *
+ * uhttpd network_timeout is ~30s idle. A background keepalive beats that while
+ * a single traceroute is silent between hops (LQM stalls, long paths, etc.).
  */
 
 import * as fs from "fs";
-import * as configuration from "aredn.configuration";
 
-const node = configuration.getName();
 const q = getenv("QUERY_STRING") || "";
 
 const mServer = match(q, /server=([^&]*)/);
@@ -38,28 +39,23 @@ else {
     if (!match(server, /\./) && !match(server, /^[0-9.]+$/)) {
         server += ".local.mesh";
     }
-    let cmd = `/usr/bin/stableroute -progress -n ${n}`;
+    let args = `-progress -n ${n}`;
     if (legacy) {
-        cmd += " -legacy";
+        args += " -legacy";
     }
     if (debug) {
-        cmd += " -debug";
+        args += " -debug";
     }
-    cmd += ` ${server}`;
+    // Keepalive every 10s while stableroute may be blocked inside one probe.
+    const cmd = `sh -c 'while sleep 10; do echo __sr_ka__; done & KP=$!; /usr/bin/stableroute ${args} ${server}; EC=$?; kill $KP 2>/dev/null; wait $KP 2>/dev/null; exit $EC'`;
     const running = fs.popen(`${cmd} 2>&1`);
     if (!running) {
         print("<html><head><title>ERROR</title></head><body><pre>stableroute failed to start</pre></body></html>\n");
     }
     else {
         print("<html><head><title>SUCCESS</title></head>\n");
-        let mode = "";
-        if (legacy) {
-            mode += "\nMode: legacy";
-        }
-        if (debug) {
-            mode += "\nMode: debug";
-        }
-        print(`<body><pre>Client: ${node}\nTarget: ${server}\nRuns: ${n}${mode}\n\n`);
+        // Header (Source/Target/Runs) is rendered by the Tools UI, like traceroute.
+        print("<body><pre>");
         flush();
         // Line reads: non-TTY stableroute emits newline progress keepalives.
         for (let line = running.read("line"); length(line); line = running.read("line")) {

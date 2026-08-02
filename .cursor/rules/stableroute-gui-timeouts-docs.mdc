@@ -1,0 +1,13 @@
+---
+description: Note uhttpd timeouts when documenting StableRoute GUI/CGI
+alwaysApply: true
+---
+
+# StableRoute GUI timeout notes (for future docs)
+
+When the user asks for StableRoute documentation (README, help text, operator notes, etc.), include these uhttpd limits that affect Tools → StableRoute (CGI streaming), not the CLI over SSH:
+
+1. **`script_timeout` (default 240s)** — Hard ceiling for the **entire** CGI request. Very long jobs (high Runs, slow/unstable paths, Debug) can still be killed even with keepalives.
+2. **`network_timeout` (default 30s idle)** — Connection drops if no data is sent for ~30s. Mitigated by per-hop/run progress keepalives and CGI `__sr_ka__` heartbeats (~every 10s); still relevant if keepalives fail or something hangs without I/O.
+
+Do not invent other timeout numbers; confirm against the node’s `/etc/config/uhttpd` if documenting current defaults. Prefer explaining keepalives + these two limits over telling operators to raise global uhttpd timeouts unless they explicitly want that.
