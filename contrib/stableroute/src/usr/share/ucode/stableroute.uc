@@ -7,7 +7,7 @@ import * as fs from "fs";
 /* Keep in sync with build.sh -v/-r (and bump-stableroute-revision rule). */
 export function packageVersion()
 {
-    return "0.1.21-r0";
+    return "0.1.24-r0";
 };
 
 const AREDN_TRACEROUTE = "/usr/bin/aredn-traceroute";
@@ -458,15 +458,9 @@ export function runStableRoute(dest, n, options)
     let anyOk = false;
     const debugParts = [];
 
-    /* Progress on stderr so it shows immediately (stdout may be fully buffered). */
+    /* Progress on stdout + flush (once). Dual stdout/stderr duplicates on a TTY. */
     function writeProgress(s)
     {
-        const f = fs.open("/dev/stderr", "w");
-        if (f) {
-            f.write(s);
-            f.close();
-            return;
-        }
         print(s);
         flush();
     }
@@ -484,12 +478,9 @@ export function runStableRoute(dest, n, options)
         }
         push(runs, one);
         if (progress) {
-            // Carriage return overwrites the same terminal line.
-            writeProgress(`\rrun ${i + 1}/${n}    `);
+            // Newline so CGI read("line") flushes each keepalive; GUI rewrites one row.
+            writeProgress(`run ${i + 1}/${n}\n`);
         }
-    }
-    if (progress) {
-        writeProgress("\n");
     }
     const agg = aggregateRuns(dest, runs);
     agg.using = probe.using;

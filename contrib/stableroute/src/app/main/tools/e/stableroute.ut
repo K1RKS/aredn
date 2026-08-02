@@ -96,13 +96,38 @@ const hasArednTraceroute = !!fs.access("/usr/bin/aredn-traceroute");
     <script>
     (function(){
         {{_R("open")}}
+        const LS_TARGET = "stableroute.lastTarget";
+        function saveTarget(v) {
+            try {
+                if (v) {
+                    localStorage.setItem(LS_TARGET, v);
+                }
+            }
+            catch (_) {}
+        }
+        function loadTarget() {
+            try {
+                return localStorage.getItem(LS_TARGET) || "";
+            }
+            catch (_) {
+                return "";
+            }
+        }
+        const lastTarget = loadTarget();
+        if (lastTarget) {
+            htmx.find("#tool-target").value = lastTarget;
+        }
         {% if (!request.mobile) { %}
         htmx.find("#tool-target").focus();
         {% } %}
+        htmx.on("#tool-target", "change", _ => {
+            saveTarget(htmx.find("#tool-target").value.trim());
+        });
         htmx.on("#target-swap", "click", _ => {
             const v = htmx.find("#tool-target").value;
             htmx.find("#tool-target").value = htmx.find("#tool-client").value;
             htmx.find("#tool-client").value = v;
+            saveTarget(htmx.find("#tool-target").value.trim());
         });
         htmx.on("#tool-start", "click", async _ => {
             const server = htmx.find("#tool-target").value;
@@ -113,6 +138,7 @@ const hasArednTraceroute = !!fs.access("/usr/bin/aredn-traceroute");
             const legacy = htmx.find("#tool-legacy").checked;
             const debug = htmx.find("#tool-debug").checked;
             if (server && client) {
+                saveTarget(server.trim());
                 const con = htmx.find(".tool-console.stableroute pre");
                 con.innerText = "";
                 function out(line) {
@@ -226,8 +252,6 @@ const hasArednTraceroute = !!fs.access("/usr/bin/aredn-traceroute");
                         }
                     }
                 }
-                out("StableRoute test started");
-                out("");
                 try {
                     const host = `${client}${client.indexOf(".") == -1 ? ".local.mesh" : ""}`;
                     const target = `${server}${server.indexOf(".") == -1 && !/^[0-9.]+$/.test(server) ? ".local.mesh" : ""}`;
