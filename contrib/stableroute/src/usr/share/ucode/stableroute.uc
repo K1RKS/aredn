@@ -7,7 +7,7 @@ import * as fs from "fs";
 /* Keep in sync with build.sh -v/-r (and bump-stableroute-revision rule). */
 export function packageVersion()
 {
-    return "0.1.26-r0";
+    return "0.1.27-r0";
 };
 
 const AREDN_TRACEROUTE = "/usr/bin/aredn-traceroute";
@@ -49,6 +49,49 @@ export function normalizeDest(dest)
         return `${dest}.local.mesh`;
     }
     return dest;
+};
+
+/**
+ * True if dest is a plausible IPv4 or resolves via nslookup (not NXDOMAIN).
+ * Does not test L3 reachability — only name/address validity.
+ */
+export function destIsResolvable(dest)
+{
+    dest = normalizeDest(dest);
+    if (!dest) {
+        return false;
+    }
+    const ip = match(dest, /^([0-9]+)\.([0-9]+)\.([0-9]+)\.([0-9]+)$/);
+    if (ip) {
+        for (let i = 1; i <= 4; i++) {
+            const n = int(ip[i]);
+            if (n < 0 || n > 255) {
+                return false;
+            }
+        }
+        return true;
+    }
+    if (!fs.access("/usr/bin/nslookup")) {
+        return true;
+    }
+    const running = fs.popen(`nslookup ${dest} 2>&1`);
+    if (!running) {
+        return false;
+    }
+    let found = false;
+    for (let line = running.read("line"); length(line); line = running.read("line")) {
+        line = replace(line, /\r?\n$/, "");
+        if (match(line, /NXDOMAIN|can't find/i)) {
+            running.close();
+            return false;
+        }
+        /* Answer A record: "Address: 10.x.x.x" (not "Address: 127.0.0.1:53"). */
+        if (match(line, /^Address:\s*[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$/)) {
+            found = true;
+        }
+    }
+    running.close();
+    return found;
 };
 
 /**
@@ -450,6 +493,12 @@ export function runStableRoute(dest, n, options)
         n = 10;
     }
     n = int(n);
+    if (!destIsResolvable(dest)) {
+        return {
+            ok: false,
+            text: `Error: ${shortMeshName(dest)} is unreachable or invalid\n`
+        };
+    }
     const debug = !!(options && options.debug);
     const legacy = !!(options && options.legacy);
     const progress = !!(options && options.progress);
