@@ -22,9 +22,9 @@ Install/upgrade restarts uhttpd so the Tools menu picks up the new entry
 
 ## Install
 
-1. Build (or download) `stableroute-0.1.15-r0.apk`
+1. Build (or download) `stableroute-0.1.18-r0.apk`
 2. On the node: **Status → Packages** → upload / install with allow-untrusted  
-   or: `apk add --allow-untrusted stableroute-0.1.15-r0.apk`
+   or: `apk add --allow-untrusted stableroute-0.1.18-r0.apk`
 3. CLI: `stableroute <destination>`  
    Custom run count: `stableroute -n 20 <destination>`  
    Debug (raw vs parse): `stableroute -debug -n 3 <destination>`  
@@ -35,7 +35,7 @@ Install/upgrade restarts uhttpd so the Tools menu picks up the new entry
 ```sh
 chmod +x build.sh
 ./build.sh
-# → dist/stableroute-0.1.15-r0.apk
+# → dist/stableroute-0.1.18-r0.apk
 ```
 
 Uses a vendored copy of [kn6plv/MakeAPK](https://github.com/kn6plv/MakeAPK) (`tools/mkapk.py`). No OpenWrt buildroot required.
@@ -43,7 +43,7 @@ Uses a vendored copy of [kn6plv/MakeAPK](https://github.com/kn6plv/MakeAPK) (`to
 ## Usage
 
 ```text
-Usage: stableroute [-n N] [-debug] [-legacy] <destination>
+Usage: stableroute [-n N] [-debug] [-legacy] [-progress] <destination>
   Run traceroute N times (default 10), group identical hop paths, report stability.
 ```
 
@@ -73,7 +73,7 @@ Unreachable / partial paths are still listed as unique paths (marked `[unreachab
 ## Example
 
 ```text
-stableroute(0.1.15-r0): destination nodec  runs 10
+stableroute(0.1.18-r0): destination nodec  runs 10
 using aredn-traceroute
 Summary:
   unique paths: 2

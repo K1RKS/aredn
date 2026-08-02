@@ -38,7 +38,7 @@ else {
     if (!match(server, /\./) && !match(server, /^[0-9.]+$/)) {
         server += ".local.mesh";
     }
-    let cmd = `/usr/bin/stableroute -n ${n}`;
+    let cmd = `/usr/bin/stableroute -progress -n ${n}`;
     if (legacy) {
         cmd += " -legacy";
     }

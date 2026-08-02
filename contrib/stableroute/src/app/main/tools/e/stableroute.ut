@@ -122,6 +122,108 @@ const hasArednTraceroute = !!fs.access("/usr/bin/aredn-traceroute");
                         con.scrollTop = con.scrollHeight;
                     }
                 }
+                function outProgress(text) {
+                    // HTML console cannot honor \\r; rewrite one progress node instead.
+                    const nearBottom = (con.scrollHeight - con.scrollTop - con.clientHeight) < 48;
+                    let el = con.querySelector("[data-sr-progress]");
+                    if (!el) {
+                        el = document.createElement("span");
+                        el.setAttribute("data-sr-progress", "1");
+                        con.appendChild(el);
+                        con.appendChild(document.createTextNode("\n"));
+                    }
+                    el.textContent = text;
+                    if (nearBottom) {
+                        con.scrollTop = con.scrollHeight;
+                    }
+                }
+                function handlePrintLine(line) {
+                    line = line.replace(/\r/g, "").trim();
+                    if (!line) {
+                        return;
+                    }
+                    if (/^run [0-9]+\/[0-9]+/.test(line)) {
+                        outProgress(line.replace(/\s+$/, ""));
+                        return;
+                    }
+                    if (line === "</pre></body></html>") {
+                        state = "DONE";
+                        out("");
+                        out("StableRoute done");
+                        out("");
+                        out(Date().toString());
+                        return;
+                    }
+                    if (line.match(/^<body><pre>/)) {
+                        line = line.replace(/^<body><pre>/, "");
+                        if (!line) {
+                            return;
+                        }
+                    }
+                    const m = line.match(/^[0-9]+ +(.+\.local\.mesh) /);
+                    if (m) {
+                        line = line.replace(m[1], `<a href="http://${m[1]}">${m[1].replace(".local.mesh", "")}</a>`);
+                        out(line);
+                        return;
+                    }
+                    out(line);
+                }
+                function feed(text) {
+                    buf += text;
+                    for (;;) {
+                        const cr = buf.indexOf("\r");
+                        const nl = buf.indexOf("\n");
+                        if (cr < 0 && nl < 0) {
+                            break;
+                        }
+                        // Prefer newline; otherwise treat CR as in-place progress update.
+                        if (nl >= 0 && (cr < 0 || nl < cr)) {
+                            const line = buf.slice(0, nl);
+                            buf = buf.slice(nl + 1);
+                            if (state === "BEGIN") {
+                                const trimmed = line.trim();
+                                const m = trimmed.match(/<title>(.*)<\/title>/);
+                                if (m) {
+                                    if (m[1] === "SUCCESS") {
+                                        state = "PRINT";
+                                        out(`Source: ${client}`);
+                                        out(`Target: ${server}`);
+                                        out(`Runs: ${runs}${legacy ? " (legacy)" : ""}${debug ? " (debug)" : ""}`);
+                                        out("");
+                                    }
+                                    else {
+                                        state = "ERROR";
+                                        const em = trimmed.match(/<pre>(.*)<\/pre>/);
+                                        if (em) {
+                                            out(`ERROR: ${em[1]}`);
+                                            state = "DONE";
+                                        }
+                                    }
+                                }
+                            }
+                            else if (state === "PRINT") {
+                                handlePrintLine(line);
+                            }
+                            else if (state === "ERROR") {
+                                const em = line.trim().match(/<pre>(.*)<\/pre>/);
+                                if (em) {
+                                    out(`ERROR: ${em[1]}`);
+                                    state = "DONE";
+                                }
+                            }
+                        }
+                        else {
+                            const line = buf.slice(0, cr);
+                            buf = buf.slice(cr + 1);
+                            if (state === "PRINT") {
+                                const t = line.replace(/\r/g, "").trim();
+                                if (/^run [0-9]+\/[0-9]+/.test(t)) {
+                                    outProgress(t.replace(/\s+$/, ""));
+                                }
+                            }
+                        }
+                    }
+                }
                 out("StableRoute test started");
                 out("");
                 try {
@@ -135,87 +237,50 @@ const hasArednTraceroute = !!fs.access("/usr/bin/aredn-traceroute");
                         url += "&debug=1";
                     }
                     const r = await fetch(url);
+                    if (!r.ok) {
+                        throw new Error(`HTTP ${r.status}`);
+                    }
+                    if (!r.body) {
+                        throw new Error("empty response body");
+                    }
                     const reader = r.body.getReader();
+                    const decoder = typeof TextDecoder !== "undefined" ? new TextDecoder("utf-8") : null;
+                    function decodeChunk(value) {
+                        // fromCharCode.apply throws on large debug chunks; TextDecoder does not.
+                        if (decoder) {
+                            return decoder.decode(value, { stream: true });
+                        }
+                        let s = "";
+                        const step = 8192;
+                        for (let i = 0; i < value.length; i += step) {
+                            s += String.fromCharCode.apply(null, value.subarray(i, Math.min(i + step, value.length)));
+                        }
+                        return s;
+                    }
                     let state = "BEGIN";
                     let buf = "";
                     for (;;) {
                         const { done, value } = await reader.read();
                         if (done) {
+                            if (decoder) {
+                                feed(decoder.decode());
+                            }
+                            if (buf && state === "PRINT") {
+                                handlePrintLine(buf);
+                                buf = "";
+                            }
                             if (state !== "DONE") {
                                 out("StableRoute Terminated.");
                             }
                             break;
                         }
-                        buf += String.fromCharCode.apply(null, value);
-                        const lines = buf.split("\n");
-                        buf = lines.pop();
-                        lines.forEach(line => {
-                            line = line.trim();
-                            switch (state) {
-                                case "BEGIN":
-                                {
-                                    const m = line.match(/<title>(.*)<\/title>/);
-                                    if (m) {
-                                        if (m[1] === "SUCCESS") {
-                                            state = "PRINT";
-                                            out(`Source: ${client}`);
-                                            out(`Target: ${server}`);
-                                            out(`Runs: ${runs}${legacy ? " (legacy)" : ""}${debug ? " (debug)" : ""}`);
-                                            out("");
-                                        }
-                                        else {
-                                            state = "ERROR";
-                                            const em = line.match(/<pre>(.*)<\/pre>/);
-                                            if (em) {
-                                                out(`ERROR: ${em[1]}`);
-                                                state = "DONE";
-                                            }
-                                        }
-                                    }
-                                    break;
-                                }
-                                case "PRINT":
-                                    if (line) {
-                                        if (line === "</pre></body></html>") {
-                                            state = "DONE";
-                                            out("");
-                                            out("StableRoute done");
-                                            out("");
-                                            out(Date().toString());
-                                        }
-                                        else if (line.match(/^<body><pre>/)) {
-                                            line = line.replace(/^<body><pre>/, "");
-                                            if (line) {
-                                                out(line);
-                                            }
-                                        }
-                                        else {
-                                            const m = line.match(/^[0-9]+ +(.+\.local\.mesh) /);
-                                            if (m) {
-                                                line = line.replace(m[1], `<a href="http://${m[1]}">${m[1].replace(".local.mesh", "")}</a>`);
-                                            }
-                                            out(line);
-                                        }
-                                    }
-                                    break;
-                                case "ERROR":
-                                {
-                                    const em = line.match(/<pre>(.*)<\/pre>/);
-                                    if (em) {
-                                        out(`ERROR: ${em[1]}`);
-                                        state = "DONE";
-                                    }
-                                    break;
-                                }
-                                case "DONE":
-                                default:
-                                    break;
-                            }
-                        });
+                        feed(decodeChunk(value));
                     }
                 }
-                catch (_) {
-                    out("StableRoute Failed.");
+                catch (e) {
+                    const msg = e && e.message ? e.message : "";
+                    out(`StableRoute Failed.${msg ? ` ${msg}` : ""}`);
+                    out("(Long runs need progress keepalives; if this persists, try fewer Runs.)");
                 }
             }
         });

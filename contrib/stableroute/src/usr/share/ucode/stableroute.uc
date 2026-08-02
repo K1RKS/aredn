@@ -7,7 +7,7 @@ import * as fs from "fs";
 /* Keep in sync with build.sh -v/-r (and bump-stableroute-revision rule). */
 export function packageVersion()
 {
-    return "0.1.15-r0";
+    return "0.1.18-r0";
 };
 
 const AREDN_TRACEROUTE = "/usr/bin/aredn-traceroute";
@@ -437,6 +437,7 @@ export function formatDebugRun(runIndex, runCount, one)
  * Run traceroute N times and return formatted report text.
  * options.debug: when true, prepend per-run raw vs parse dump.
  * options.legacy: force stock /bin/traceroute even if aredn-traceroute is present.
+ * options.progress: print/flush a line after each run (keeps CGI connections alive).
  * Returns { ok, text }.
  */
 export function runStableRoute(dest, n, options)
@@ -451,10 +452,15 @@ export function runStableRoute(dest, n, options)
     n = int(n);
     const debug = !!(options && options.debug);
     const legacy = !!(options && options.legacy);
+    const progress = !!(options && options.progress);
     const probe = selectProbe(legacy);
     const runs = [];
     let anyOk = false;
     const debugParts = [];
+    if (progress) {
+        print(`probing ${n} run${n === 1 ? "" : "s"} (${probe.using})\n`);
+        flush();
+    }
     for (let i = 0; i < n; i++) {
         const one = runOneTraceroute(dest, probe.cmd);
         if (one.ok) {
@@ -464,6 +470,15 @@ export function runStableRoute(dest, n, options)
             push(debugParts, formatDebugRun(i + 1, n, one));
         }
         push(runs, one);
+        if (progress) {
+            // Carriage return overwrites the same terminal/console line.
+            print(`\rrun ${i + 1}/${n}    `);
+            flush();
+        }
+    }
+    if (progress) {
+        print("\n");
+        flush();
     }
     const agg = aggregateRuns(dest, runs);
     agg.using = probe.using;
