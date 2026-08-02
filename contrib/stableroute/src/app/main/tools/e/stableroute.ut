@@ -10,13 +10,17 @@ const mynode = configuration.getName();
 %}
 <div class="dialog wide">
     {{_R("tool-header", "StableRoute")}}
-    <style>
-        #ctrl-modal .tool-console.stableroute pre {
-            overflow: auto scroll;
-            overscroll-behavior: contain;
-        }
-    </style>
     <div class="simple-tool compact client-server">
+        <style>
+            /* Keep this inside .simple-tool so dialog > div:nth-child(2) still flexes. */
+            #ctrl-modal .tool-console.stableroute {
+                min-height: 260px;
+            }
+            #ctrl-modal .tool-console.stableroute pre {
+                overflow: auto scroll;
+                overscroll-behavior: contain;
+            }
+        </style>
         <div class="cols">
             <div>
                 <div class="o">Target A&zwnj;ddress</div>
