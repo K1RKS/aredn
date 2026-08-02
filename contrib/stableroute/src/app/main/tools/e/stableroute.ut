@@ -62,21 +62,12 @@ const hasArednTraceroute = !!fs.access("/usr/bin/aredn-traceroute");
                     </label>
                 </div>
             </div>
-            <div>
+            <div style="display:flex;align-items:center;gap:8px">
+                <label title="Show raw traceroute lines vs parse keep/drop per run" style="display:inline-flex;align-items:center;gap:8px">
+                    <input id="tool-debug" type="checkbox" title="Show raw traceroute lines vs parse keep/drop per run">
+                    Debug
+                </label>
                 <div id="target-swap-dummy3" style="width:42px"></div>
-            </div>
-        </div>
-        <div class="cols">
-            <div>
-                <div class="o">
-                    <label title="Show raw traceroute lines vs parse keep/drop per run" style="display:inline-flex;align-items:center;gap:8px">
-                        <input id="tool-debug" type="checkbox" title="Show raw traceroute lines vs parse keep/drop per run">
-                        Debug
-                    </label>
-                </div>
-            </div>
-            <div>
-                <div id="target-swap-dummy4" style="width:42px"></div>
             </div>
         </div>
         <datalist id="mesh-nodes">

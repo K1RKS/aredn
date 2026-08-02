@@ -13,7 +13,7 @@ chmod +x \
   tools/mkapk.py
 python3 tools/mkapk.py \
   -n stableroute \
-  -v 0.1.14 \
+  -v 0.1.15 \
   -r r0 \
   -a noarch \
   -d src \
