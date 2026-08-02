@@ -53,13 +53,13 @@ const hasArednTraceroute = !!fs.access("/usr/bin/aredn-traceroute");
                 <div id="target-swap-dummy" style="width:42px"></div>
             </div>
         </div>
-        <div class="cols">
-            <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
-                <div class="o">Runs</div>
-                <input id="tool-runs" type="number" min="1" max="100" value="10" style="width:5em">
-                <span style="font-size:0.85em;opacity:0.75;white-space:nowrap">(Error will occur if all runs take longer than 200s)</span>
+        <div class="cols" style="flex-wrap:nowrap;align-items:center">
+            <div style="display:flex;align-items:center;gap:8px;flex:1 1 auto;flex-wrap:nowrap;min-width:0">
+                <div class="o" style="flex:0 0 auto;margin:0">Runs</div>
+                <input id="tool-runs" type="number" min="1" max="100" value="10" style="width:5em;flex:0 0 auto">
+                <span style="font-size:0.85em;opacity:0.75;white-space:nowrap;flex:0 0 auto">(Error will occur if all runs take longer than 200s)</span>
             </div>
-            <div>
+            <div style="flex:0 0 auto">
                 <div id="target-swap-dummy2" style="width:42px"></div>
             </div>
         </div>
