@@ -163,6 +163,15 @@ const hasArednTraceroute = !!fs.access("/usr/bin/aredn-traceroute");
                         con.scrollTop = con.scrollHeight;
                     }
                 }
+                function missingPackageMsg() {
+                    return `Error: node ${client} is missing stableroute package`;
+                }
+                function isMissingPackageText(t) {
+                    return /stableroute is not installed/i.test(t || "");
+                }
+                function outMissingPackage() {
+                    out(missingPackageMsg());
+                }
                 let state = "BEGIN";
                 let buf = "";
                 function handlePrintLine(line) {
@@ -223,7 +232,12 @@ const hasArednTraceroute = !!fs.access("/usr/bin/aredn-traceroute");
                                         state = "ERROR";
                                         const em = trimmed.match(/<pre>(.*)<\/pre>/);
                                         if (em) {
-                                            out(`ERROR: ${em[1]}`);
+                                            if (isMissingPackageText(em[1])) {
+                                                outMissingPackage();
+                                            }
+                                            else {
+                                                out(`ERROR: ${em[1]}`);
+                                            }
                                             state = "DONE";
                                         }
                                     }
@@ -235,7 +249,12 @@ const hasArednTraceroute = !!fs.access("/usr/bin/aredn-traceroute");
                             else if (state === "ERROR") {
                                 const em = line.trim().match(/<pre>(.*)<\/pre>/);
                                 if (em) {
-                                    out(`ERROR: ${em[1]}`);
+                                    if (isMissingPackageText(em[1])) {
+                                        outMissingPackage();
+                                    }
+                                    else {
+                                        out(`ERROR: ${em[1]}`);
+                                    }
                                     state = "DONE";
                                 }
                             }
@@ -252,8 +271,8 @@ const hasArednTraceroute = !!fs.access("/usr/bin/aredn-traceroute");
                         }
                     }
                 }
+                const host = `${client}${client.indexOf(".") == -1 ? ".local.mesh" : ""}`;
                 try {
-                    const host = `${client}${client.indexOf(".") == -1 ? ".local.mesh" : ""}`;
                     const target = `${server}${server.indexOf(".") == -1 && !/^[0-9.]+$/.test(server) ? ".local.mesh" : ""}`;
                     let url = `http://${host}/cgi-bin/stableroute?server=${encodeURIComponent(target)}&n=${runs}`;
                     if (legacy) {
@@ -263,6 +282,11 @@ const hasArednTraceroute = !!fs.access("/usr/bin/aredn-traceroute");
                         url += "&debug=1";
                     }
                     const r = await fetch(url);
+                    // Missing CGI is 404; cross-origin 404s often omit CORS and land in catch instead.
+                    if (r.status === 404) {
+                        outMissingPackage();
+                        return;
+                    }
                     if (!r.ok) {
                         throw new Error(`HTTP ${r.status}`);
                     }
@@ -293,7 +317,11 @@ const hasArednTraceroute = !!fs.access("/usr/bin/aredn-traceroute");
                                 handlePrintLine(buf);
                                 buf = "";
                             }
-                            if (state !== "DONE") {
+                            if (state === "BEGIN") {
+                                // Reachable HTTP response but not a stableroute CGI page.
+                                outMissingPackage();
+                            }
+                            else if (state !== "DONE") {
                                 out("StableRoute Terminated.");
                             }
                             break;
@@ -302,6 +330,17 @@ const hasArednTraceroute = !!fs.access("/usr/bin/aredn-traceroute");
                     }
                 }
                 catch (e) {
+                    // Remote node up but /cgi-bin/stableroute missing → browser CORS error.
+                    let nodeUp = false;
+                    try {
+                        const probe = await fetch(`http://${host}/cgi-bin/sysinfo.json`);
+                        nodeUp = !!(probe && probe.ok);
+                    }
+                    catch (_) {}
+                    if (nodeUp) {
+                        outMissingPackage();
+                        return;
+                    }
                     const msg = e && e.message ? e.message : "";
                     out(`StableRoute Failed.${msg ? ` ${msg}` : ""}`);
                     out("(Long runs need progress keepalives; if this persists, try fewer Runs.)");
