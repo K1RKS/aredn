@@ -1,7 +1,7 @@
 #!/usr/bin/ucode
 /*
  * StableRoute CGI — run /usr/bin/stableroute and stream the report.
- * Query: server=<dest>&n=<runs>&legacy=1
+ * Query: server=<dest>&n=<runs>&legacy=1&debug=1
  */
 
 import * as fs from "fs";
@@ -15,6 +15,7 @@ let server = mServer && mServer[1];
 const mN = match(q, /n=([0-9]+)/);
 let n = mN ? int(mN[1]) : 10;
 const legacy = match(q, /legacy=1/) ? true : false;
+const debug = match(q, /debug=1/) ? true : false;
 
 print("Content-type: text/html\r\n");
 print("Cache-Control: no-store\r\n");
@@ -41,6 +42,9 @@ else {
     if (legacy) {
         cmd += " -legacy";
     }
+    if (debug) {
+        cmd += " -debug";
+    }
     cmd += ` ${server}`;
     const running = fs.popen(`${cmd} 2>&1`);
     if (!running) {
@@ -48,7 +52,14 @@ else {
     }
     else {
         print("<html><head><title>SUCCESS</title></head>\n");
-        print(`<body><pre>Client: ${node}\nTarget: ${server}\nRuns: ${n}${legacy ? "\nMode: legacy" : ""}\n\n`);
+        let mode = "";
+        if (legacy) {
+            mode += "\nMode: legacy";
+        }
+        if (debug) {
+            mode += "\nMode: debug";
+        }
+        print(`<body><pre>Client: ${node}\nTarget: ${server}\nRuns: ${n}${mode}\n\n`);
         flush();
         for (let line = running.read("line"); length(line); line = running.read("line")) {
             print(line);

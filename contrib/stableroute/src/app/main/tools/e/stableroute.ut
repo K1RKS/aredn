@@ -5,12 +5,13 @@
  */
 %}
 {%
+import * as sr from "stableroute";
 const nodes = mesh.getNodeList();
 const mynode = configuration.getName();
 const hasArednTraceroute = !!fs.access("/usr/bin/aredn-traceroute");
 %}
 <div class="dialog wide">
-    {{_R("tool-header", "StableRoute")}}
+    {{_R("tool-header", { label: `StableRoute ${sr.packageVersion()}`, help: false })}}
     <div class="simple-tool compact client-server">
         <style>
             /* Keep this inside .simple-tool so dialog > div:nth-child(2) still flexes. */
@@ -65,6 +66,19 @@ const hasArednTraceroute = !!fs.access("/usr/bin/aredn-traceroute");
                 <div id="target-swap-dummy3" style="width:42px"></div>
             </div>
         </div>
+        <div class="cols">
+            <div>
+                <div class="o">
+                    <label title="Show raw traceroute lines vs parse keep/drop per run" style="display:inline-flex;align-items:center;gap:8px">
+                        <input id="tool-debug" type="checkbox" title="Show raw traceroute lines vs parse keep/drop per run">
+                        Debug
+                    </label>
+                </div>
+            </div>
+            <div>
+                <div id="target-swap-dummy4" style="width:42px"></div>
+            </div>
+        </div>
         <datalist id="mesh-nodes">
             <option value="{{mynode}}">{{mynode}}</option>
             {%
@@ -106,6 +120,7 @@ const hasArednTraceroute = !!fs.access("/usr/bin/aredn-traceroute");
             if (!runs || runs < 1) runs = 10;
             if (runs > 100) runs = 100;
             const legacy = htmx.find("#tool-legacy").checked;
+            const debug = htmx.find("#tool-debug").checked;
             if (server && client) {
                 const con = htmx.find(".tool-console.stableroute pre");
                 con.innerText = "";
@@ -124,6 +139,9 @@ const hasArednTraceroute = !!fs.access("/usr/bin/aredn-traceroute");
                     let url = `http://${host}/cgi-bin/stableroute?server=${encodeURIComponent(target)}&n=${runs}`;
                     if (legacy) {
                         url += "&legacy=1";
+                    }
+                    if (debug) {
+                        url += "&debug=1";
                     }
                     const r = await fetch(url);
                     const reader = r.body.getReader();
@@ -151,7 +169,7 @@ const hasArednTraceroute = !!fs.access("/usr/bin/aredn-traceroute");
                                             state = "PRINT";
                                             out(`Source: ${client}`);
                                             out(`Target: ${server}`);
-                                            out(`Runs: ${runs}${legacy ? " (legacy)" : ""}`);
+                                            out(`Runs: ${runs}${legacy ? " (legacy)" : ""}${debug ? " (debug)" : ""}`);
                                             out("");
                                         }
                                         else {

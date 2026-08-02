@@ -7,7 +7,7 @@ import * as fs from "fs";
 /* Keep in sync with build.sh -v/-r (and bump-stableroute-revision rule). */
 export function packageVersion()
 {
-    return "0.1.9-r0";
+    return "0.1.14-r0";
 };
 
 const AREDN_TRACEROUTE = "/usr/bin/aredn-traceroute";

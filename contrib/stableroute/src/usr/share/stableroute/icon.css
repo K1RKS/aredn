@@ -1,0 +1,11 @@
+/* StableRoute Tools menu icon — offset-deck paper planes. */
+.icon.stableroute {
+    background-image: url("data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIGZpbGw9Im5vbmUiIHZpZXdCb3g9IjAgMCAyNCAyNCIgc3Ryb2tlLXdpZHRoPSIxLjUiIHN0cm9rZT0iY3VycmVudENvbG9yIj48ZyBvcGFjaXR5PSIwLjQiIHRyYW5zZm9ybT0idHJhbnNsYXRlKDAsMCkgc2NhbGUoMC44MikiPjxwYXRoIHN0cm9rZS1saW5lY2FwPSJyb3VuZCIgc3Ryb2tlLWxpbmVqb2luPSJyb3VuZCIgZD0iTTYgMTIgMy4yNjkgMy4xMjVBNTkuNzY5IDU5Ljc2OSAwIDAgMSAyMS40ODUgMTIgNTkuNzY4IDU5Ljc2OCAwIDAgMSAzLjI3IDIwLjg3NUw1Ljk5OSAxMlptMCAwaDcuNSIvPjwvZz48ZyBvcGFjaXR5PSIwLjY1IiB0cmFuc2Zvcm09InRyYW5zbGF0ZSgxLjYsMS42KSBzY2FsZSgwLjgyKSI+PHBhdGggc3Ryb2tlLWxpbmVjYXA9InJvdW5kIiBzdHJva2UtbGluZWpvaW49InJvdW5kIiBkPSJNNiAxMiAzLjI2OSAzLjEyNUE1OS43NjkgNTkuNzY5IDAgMCAxIDIxLjQ4NSAxMiA1OS43NjggNTkuNzY4IDAgMCAxIDMuMjcgMjAuODc1TDUuOTk5IDEyWm0wIDBoNy41Ii8+PC9nPjxnIHRyYW5zZm9ybT0idHJhbnNsYXRlKDMuMiwzLjIpIHNjYWxlKDAuODIpIj48cGF0aCBzdHJva2UtbGluZWNhcD0icm91bmQiIHN0cm9rZS1saW5lam9pbj0icm91bmQiIGQ9Ik02IDEyIDMuMjY5IDMuMTI1QTU5Ljc2OSA1OS43NjkgMCAwIDEgMjEuNDg1IDEyIDU5Ljc2OCA1OS43NjggMCAwIDEgMy4yNyAyMC44NzVMNS45OTkgMTJabTAgMGg3LjUiLz48L2c+PC9zdmc+") !important;
+    background-repeat: no-repeat !important;
+    background-position: center center !important;
+    background-size: 18px 18px !important;
+    filter: var(--nav-icon-filter);
+}
+#tools .menu > div[hx-trigger]:hover .icon.stableroute {
+    filter: var(--nav-icon-filter-select);
+}
