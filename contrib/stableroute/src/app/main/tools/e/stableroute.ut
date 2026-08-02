@@ -22,6 +22,16 @@ const hasArednTraceroute = !!fs.access("/usr/bin/aredn-traceroute");
                 overflow: auto scroll;
                 overscroll-behavior: contain;
             }
+            /*
+             * Stock admin.css targets .cols:first-child / :nth-child(2) for input
+             * alignment. Our <style> is the first child, so re-apply for Target/Source.
+             */
+            #ctrl-modal .simple-tool.client-server > div.cols:nth-of-type(1) > div:nth-child(2),
+            #ctrl-modal .simple-tool.client-server > div.cols:nth-of-type(2) > div:nth-child(2) {
+                display: flex;
+                height: 30px;
+                flex: 0;
+            }
         </style>
         <div class="cols">
             <div>
@@ -44,13 +54,12 @@ const hasArednTraceroute = !!fs.access("/usr/bin/aredn-traceroute");
             </div>
         </div>
         <div class="cols">
-            <div>
+            <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
                 <div class="o">Runs</div>
-                <div class="m">Number of traceroute iterations (1–100)</div>
-            </div>
-            <div style="display:flex;align-items:center;gap:8px">
                 <input id="tool-runs" type="number" min="1" max="100" value="10" style="width:5em">
                 <span style="font-size:0.85em;opacity:0.75;white-space:nowrap">(Error will occur if all runs take longer than 200s)</span>
+            </div>
+            <div>
                 <div id="target-swap-dummy2" style="width:42px"></div>
             </div>
         </div>
