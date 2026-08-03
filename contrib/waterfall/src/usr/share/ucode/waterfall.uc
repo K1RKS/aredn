@@ -1,7 +1,10 @@
 /**
  * Waterfall package library.
- * RF spectrum probe/capture for 5 GHz AREDN radios (ath9k first; ath10k experimental).
- * Focus: Rocket M5, PowerBeam 500 / 500 AC, MikroTik hAP ac lite (5 GHz).
+ * RF spectrum probe/capture for 5 GHz AREDN radios (ath9k only for capture).
+ * Focus: Rocket M5, PowerBeam 500 / 500 AC, MikroTik hAP ac lite.
+ *
+ * ath10k spectral_scan_ctl (background/trigger) can hard-lock QCA988x firmware
+ * (seen on hAP ac lite 5 GHz). Capture is refused on ath10k until a safe path exists.
  *
  * Spectral scan disrupts RF. Capture sessions are bounded (default 30s), always
  * restore spectral_scan_ctl to disable, and cache parsed sweeps in /tmp (RAM).
@@ -31,7 +34,7 @@ const TARGET_BINS = 64;
 
 export function packageVersion()
 {
-    return "0.2.5-r0";
+    return "0.2.6-r0";
 };
 
 function isMeshMode(mode)
@@ -75,22 +78,33 @@ function spectralPaths(phy, chipset)
     };
 }
 
-function focusNote(chipset, fftAvailable, board)
+/**
+ * Only ath9k spectral trigger is considered safe for mesh nodes.
+ * ath10k background/trigger has wedged QCA9887 (hAP ac lite 5 GHz) in the field.
+ */
+export function isCaptureSafe(chipset)
+{
+    return chipset === "ath9k";
+}
+
+function ath10kBlockedMessage()
+{
+    return "ath10k spectral capture is disabled: writing spectral_scan_ctl can lock up / crash the 5 GHz radio (QCA988x, e.g. hAP ac lite). Use an ath9k radio (e.g. hAP 2.4 GHz, Rocket M5) until a safe ath10k path exists.";
+}
+
+function focusNote(chipset, fftAvailable, board, captureSafe)
 {
     const bid = lc(board || "");
     const hapLite = match(bid, /952ui-5ac2nd|hap ac lite/);
 
     if (chipset === "ath9k" && fftAvailable) {
-        return "ath9k spectral FFT available (Rocket M5 / PowerBeam M5 class; also hAP ac lite 2.4 GHz radio). Current-channel capture supported. Prefer 5 GHz iface when present.";
-    }
-    if (chipset === "ath10k" && fftAvailable) {
-        if (hapLite) {
-            return "ath10k spectral FFT on hAP ac lite 5 GHz (QCA9887). Experimental at AREDN mesh bandwidths; this is the preferred waterfall radio on this board.";
-        }
-        return "ath10k spectral FFT present (PowerBeam 500 AC / similar). Experimental at AREDN mesh bandwidths; QCA988x scan caveats may apply. Some Ubiquiti AC boards also have an uncalibrated SoC spectrum radio.";
+        return "ath9k spectral FFT available (Rocket M5 / PowerBeam M5 class; also hAP ac lite 2.4 GHz). Current-channel capture supported.";
     }
     if (chipset === "ath10k") {
-        return "ath10k radio without spectral debugfs nodes (ATH_SPECTRAL may be unavailable on this build/driver).";
+        if (hapLite) {
+            return "hAP ac lite 5 GHz is ath10k (QCA9887): spectral capture is blocked to avoid radio lockups. Select the 2.4 GHz ath9k radio for waterfall, or use Rocket M5 / PowerBeam M5.";
+        }
+        return ath10kBlockedMessage();
     }
     if (chipset === "unknown") {
         return "Chipset not recognized for spectral capture.";
@@ -100,7 +114,7 @@ function focusNote(chipset, fftAvailable, board)
 
 function radioHasFft(r)
 {
-    if (!r?.phy) {
+    if (!r?.phy || !isCaptureSafe(r.chipset)) {
         return false;
     }
     const paths = spectralPaths(r.phy, r.chipset);
@@ -405,6 +419,8 @@ export function selectRadio(preferredIface)
         }
     }
 
+    let mesh5Safe = null;
+    let meshSafe = null;
     let mesh5 = null;
     let meshAny = null;
     let any = null;
@@ -423,12 +439,23 @@ export function selectRadio(preferredIface)
         if (!meshAny) {
             meshAny = r;
         }
+        const phy = hardware.getPhyDevice(r.iface);
+        const chipset = chipsetForPhy(phy);
+        const safe = isCaptureSafe(chipset);
         const ch = r.mode?.channel ?? -1;
-        if (!mesh5 && isFiveGhz(r.iface, ch)) {
+        const five = isFiveGhz(r.iface, ch);
+        if (five && !mesh5) {
             mesh5 = r;
         }
+        if (safe && !meshSafe) {
+            meshSafe = r;
+        }
+        if (safe && five && !mesh5Safe) {
+            mesh5Safe = r;
+        }
     }
-    return mesh5 || meshAny || any;
+    /* Prefer capture-safe radios; never auto-pick ath10k 5 GHz over ath9k. */
+    return mesh5Safe || meshSafe || mesh5 || meshAny || any;
 };
 
 export function listRadios()
@@ -445,7 +472,9 @@ export function listRadios()
         const channel = r.mode?.channel ?? -1;
         const five = isFiveGhz(r.iface, channel);
         const paths = spectralPaths(phy, chipset);
-        const fftAvailable = !!(paths && fs.access(paths.ctl) && fs.access(paths.relay));
+        const pathsOk = !!(paths && fs.access(paths.ctl) && fs.access(paths.relay));
+        const captureSafe = isCaptureSafe(chipset);
+        const fftAvailable = pathsOk && captureSafe;
         push(out, {
             iface: r.iface,
             phy: phy,
@@ -453,8 +482,9 @@ export function listRadios()
             mode: r.mode?.mode || "unknown",
             channel: channel,
             band: five ? "5GHz" : "other",
-            fft_paths: !!paths,
+            fft_paths: pathsOk,
             fft_available: fftAvailable,
+            capture_safe: captureSafe,
             selectable: fftAvailable
         });
     }
@@ -542,7 +572,10 @@ export function probeCapability(preferredIface)
     const paths = spectralPaths(phy, chipset);
     const hasCtl = paths ? !!fs.access(paths.ctl) : false;
     const hasRelay = paths ? !!fs.access(paths.relay) : false;
-    const fftAvailable = hasCtl && hasRelay && (chipset === "ath9k" || chipset === "ath10k");
+    const pathsOk = hasCtl && hasRelay;
+    const captureSafe = isCaptureSafe(chipset);
+    /* Capture only on ath9k — ath10k spectral_scan_ctl can wedge the radio. */
+    const fftAvailable = pathsOk && captureSafe;
 
     const mode = radio.mode?.mode || "unknown";
     const channel = radio.mode?.channel ?? -1;
@@ -564,10 +597,12 @@ export function probeCapability(preferredIface)
         frequency_mhz: freq,
         band: five ? "5GHz" : "other",
         fft_available: fftAvailable,
+        fft_paths: pathsOk,
+        capture_safe: captureSafe,
         spectral_ctl: hasCtl,
         spectral_relay: hasRelay,
         paths: paths,
-        note: focusNote(chipset, fftAvailable, board),
+        note: focusNote(chipset, fftAvailable, board, captureSafe),
         radios: listRadios()
     };
     const sup = supportStatus(cap);
@@ -728,6 +763,13 @@ export function captureSpectral(preferredIface)
     if (!cap.ok) {
         return cap;
     }
+    if (cap.chipset === "ath10k" || !cap.capture_safe) {
+        return {
+            ok: false,
+            error: ath10kBlockedMessage(),
+            capability: cap
+        };
+    }
     if (!cap.fft_available) {
         return {
             ok: false,
@@ -770,7 +812,7 @@ export function captureSpectral(preferredIface)
         fft_bytes: bytes,
         sweep: sweep,
         survey: getSurveySummary(cap.iface),
-        experimental: cap.chipset === "ath10k"
+        experimental: false
     };
 };
 
@@ -803,8 +845,10 @@ export function runSession(preferredIface, durationSec)
     let fStart = null;
     let fStop = null;
 
-    if (!cap.ok || !cap.fft_available) {
-        error = cap.unsupported_message || cap.error || "FFT not available";
+    if (!cap.ok || !cap.fft_available || !cap.capture_safe || cap.chipset === "ath10k") {
+        error = (cap.chipset === "ath10k" || !cap.capture_safe)
+            ? ath10kBlockedMessage()
+            : (cap.unsupported_message || cap.error || "FFT not available");
     }
     else {
         const ctl = cap.paths.ctl;
@@ -879,7 +923,7 @@ export function runSession(preferredIface, durationSec)
             requested_duration_sec: durationSec,
             sweep_count: length(sweeps),
             sample_interval_sec: sleepSec,
-            experimental: cap.chipset === "ath10k",
+            experimental: false,
             note: "RF spectral session complete; radio restored to normal use."
         },
         sweeps: sweeps
@@ -912,10 +956,12 @@ export function startSessionAsync(preferredIface, durationSec)
         };
     }
     const cap = probeCapability(preferredIface);
-    if (!cap.supported || !cap.fft_available) {
+    if (!cap.supported || !cap.fft_available || !cap.capture_safe || cap.chipset === "ath10k") {
         return {
             ok: false,
-            error: cap.unsupported_message || "Spectral FFT not available",
+            error: (cap.chipset === "ath10k" || !cap.capture_safe)
+                ? ath10kBlockedMessage()
+                : (cap.unsupported_message || "Spectral FFT not available"),
             capability: cap
         };
     }
@@ -1013,7 +1059,7 @@ export function formatProbeReport(cap)
     }
     push(lines, `selected ${cap.iface}  phy ${cap.phy}  chipset ${cap.chipset}  band ${cap.band}`);
     push(lines, `mode ${cap.mode}  channel ${cap.channel}  freq ${cap.frequency_mhz} MHz`);
-    push(lines, `fft_available ${cap.fft_available}  ctl ${cap.spectral_ctl}  relay ${cap.spectral_relay}`);
+    push(lines, `fft_available ${cap.fft_available}  capture_safe ${cap.capture_safe}  ctl ${cap.spectral_ctl}  relay ${cap.spectral_relay}`);
     if (cap.supported !== false) {
         push(lines, cap.note);
     }
@@ -1059,7 +1105,7 @@ export function formatCaptureReport(result)
         return join("\n", lines) + "\n";
     }
     if (result.experimental) {
-        push(lines, "NOTE: ath10k capture is experimental (hAP ac lite 5 GHz / PowerBeam 500 AC class).");
+        push(lines, "NOTE: capture marked experimental.");
     }
     push(lines, `fft_file ${result.fft_file}  bytes ${result.fft_bytes}`);
     if (result.sweep) {
