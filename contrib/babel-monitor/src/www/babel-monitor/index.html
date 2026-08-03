@@ -160,7 +160,8 @@
     <div class="tabs time" id="timeTabs" role="tablist" aria-label="Time range">
       <button type="button" data-sec="300" class="active">5m</button>
       <button type="button" data-sec="1800">30m</button>
-      <button type="button" data-sec="86400">24h</button>
+      <button type="button" data-sec="3600">1h</button>
+      <button type="button" data-sec="14400">4h</button>
     </div>
   </section>
   <section>
@@ -286,6 +287,12 @@
       const h = Math.floor(sec / 3600);
       return h + "h";
     }
+    if (windowSec >= 3600) {
+      const h = Math.floor(sec / 3600);
+      const m = Math.floor((sec % 3600) / 60);
+      if (m === 0) return h + "h";
+      return h + "h" + m + "m";
+    }
     if (windowSec >= 1800) {
       const m = Math.floor(sec / 60);
       return m + "m";
@@ -300,7 +307,8 @@
   function xTickStep(spanSec) {
     if (spanSec <= 300) return 60;
     if (spanSec <= 1800) return 300;
-    if (spanSec <= 7200) return 900;
+    if (spanSec <= 3600) return 600;
+    if (spanSec <= 14400) return 3600;
     if (spanSec <= 86400) return 14400;
     return Math.max(1, Math.round(spanSec / 6));
   }

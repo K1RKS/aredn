@@ -5,19 +5,20 @@ import * as math from "math";
 
 export function packageVersion()
 {
-    return "0.1.10-r0";
+    return "0.1.13-r0";
 };
 
-export const SCHEMA_VERSION = 3;
+export const SCHEMA_VERSION = 4;
 export const SOCK_PATH = "/var/run/babel-monitor.sock";
 export const RUN_DIR = "/var/run/babel-monitor";
-export const SAMPLE_CAP = 8640;   /* 24h @ 10s */
+export const SAMPLE_CAP = 1440;  /* 4h @ 10s */
 export const EVENT_CAP = 512;
 export const RF_NEIGHBOR_CAP = 12; /* per-sample RF SNR map size (RAM bound) */
+export const RETENTION_S_AT_DEFAULT = SAMPLE_CAP * 10;
 
 export function parseBool(v, dflt)
 {
-    if (v === null || v === undefined || v === "") {
+    if (v == null || v === "") {
         return dflt;
     }
     const s = lc(`${v}`);

@@ -18,7 +18,7 @@ function qparam(name)
 
 function parseCompress(raw, dflt)
 {
-    if (raw === null || raw === undefined || raw === "") {
+    if (raw == null || raw === "") {
         return dflt;
     }
     const s = lc(raw);

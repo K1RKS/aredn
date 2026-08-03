@@ -201,7 +201,7 @@
 
   <div class="stats">
     <div class="stat"><div class="v">10s</div><div class="l">default sample interval</div></div>
-    <div class="stat"><div class="v">≥24h</div><div class="l">aim if it fits in ~1MB</div></div>
+    <div class="stat"><div class="v">4h</div><div class="l">ring @ 10s (1440 slots)</div></div>
     <div class="stat"><div class="v">≤1MB</div><div class="l">RSS target (2MB hard)</div></div>
     <div class="stat"><div class="v">N pollers</div><div class="l">stateless node API</div></div>
   </div>
@@ -282,7 +282,7 @@
   <h2>On-node storage (maximize under RAM budget)</h2>
   <h3>Constraints</h3>
   <ul>
-    <li>Target RSS ~≤1MB; hard ceiling 2MB</li>
+    <li>History: maximize retention under ~1MB (ring is <strong class="inline">1440</strong> samples ≈ 4h @ 10s; packed arrays in RAM)</li>
     <li><strong class="inline">No flash for metrics</strong> — rings in RAM only</li>
     <li>Flash/UCI: package config only (CLI/GUI-driven) — never metrics</li>
     <li>Fixed preallocated structures; no unbounded growth</li>
@@ -291,17 +291,18 @@
   <ul>
     <li>Compact binary sample records in RAM (fixed-width integers)</li>
     <li>Node-level aggregates on configurable <code>sample_interval</code> (CLI <code>-interval</code>; default 10s; range 5–300)</li>
-    <li>Size ring to use the budget: aim for ≥24h at default 10s if it fits in ~1MB</li>
+    <li>Size ring to use the budget: <strong class="inline">1440</strong> samples ≈ 4h @ 10s (packed arrays)</li>
     <li>Live <code>-interval</code> changes the timer; ring capacity fixed (retention hours scale with interval)</li>
     <li>Event ring ~512; live neighbor snapshot for UI / <code>api=live</code></li>
   </ul>
-  <h3>Sample fields (schema 2)</h3>
+  <h3>Sample fields (schema 4)</h3>
   <ul>
+    <li>Ring stores dense arrays; API expands to named JSON</li>
     <li><code>t</code>, <code>seq</code>; neighbor/route counts; mean/min LQ; mean cost; bad_cost_count; add/remove deltas</li>
     <li>Link: tx_packets/retries/fail deltas; optional SNR/bitrate</li>
     <li>DNS/arednlink deltas; babel hard/soft reset deltas; <code>lqm_ok</code> / <code>babel_ok</code></li>
-    <li>Host: <code>uptime_s</code>, <code>reboot_delta</code>; <code>mem_total_kb</code> / <code>mem_available_kb</code> / <code>mem_used_pct</code>; <code>cpu_pct</code> (interval) + <code>cpu_peak_pct</code> (1s peak)</li>
-    <li>RF: <code>mean_snr</code> (AVG) + <code>rf</code> map of neighbor label → SNR (hostname when known; cap 12)</li>
+    <li>Host: <code>uptime_s</code>, <code>reboot_delta</code>; <code>mem_available_kb</code> / <code>mem_used_pct</code>; <code>cpu_pct</code> + <code>cpu_peak_pct</code></li>
+    <li><code>mem_total_kb</code> on meta only; <code>rf</code> map only when RF neighbors exist</li>
   </ul>
   <h3>Identity</h3>
   <ul>
@@ -354,7 +355,7 @@
   <ul>
     <li>Public URL only: <code>/www/babel-monitor/</code> (no Tools menu; optional manual service link)</li>
     <li>Realtime neighbors, routes, last reset, packet/retry rates</li>
-    <li>History graph: metric tabs; fixed time-scale X axis (5m / 30m / 24h, labeled Time, no stretch for partial buffers); hover crosshair + value popup; from RAM</li>
+    <li>History graph: metric tabs; fixed time-scale X axis (5m / 30m / 1h / 4h); hover crosshair + value popup; from RAM</li>
     <li>RF tab: SNR line per unique RF neighbor + AVG (<code>mean_snr</code>); sample field <code>rf</code> map capped at 12</li>
     <li>Viewing the UI does not write flash</li>
   </ul>

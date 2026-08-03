@@ -369,7 +369,7 @@ export function collectSample(store, cfg)
             if (tr.tx_fail || tr.tx_failed) {
                 tx_fail += int(tr.tx_fail || tr.tx_failed);
             }
-            if (tr.type === "RF" && tr.snr !== null && tr.snr !== undefined) {
+            if (tr.type === "RF" && tr.snr != null) {
                 const snr = int(tr.snr);
                 snr_sum += snr;
                 snr_n++;
@@ -474,6 +474,7 @@ export function collectSample(store, cfg)
     store.last.uptime_s = uptime_s;
 
     const mem = readMemInfo();
+    store.last.mem_total_kb = mem.total_kb;
     const cpu_cur = readCpuStat();
     let cpu_pct = 0;
     if (cpu_cur) {
@@ -514,7 +515,6 @@ export function collectSample(store, cfg)
         tx_fail_delta: tx_fail_delta,
         mean_snr: snr_n ? int(snr_sum / snr_n) : 0,
         mean_tx_bitrate: br_n ? int(br_sum / br_n) : 0,
-        rf: rf,
         host_count: host_count,
         host_change_delta: host_change_delta,
         dns_reload_delta: dns_reload_delta,
@@ -522,7 +522,6 @@ export function collectSample(store, cfg)
         babel_soft_delta: babel_soft_delta,
         uptime_s: uptime_s,
         reboot_delta: reboot_delta,
-        mem_total_kb: mem.total_kb,
         mem_available_kb: mem.available_kb,
         mem_used_pct: mem.used_pct,
         cpu_pct: cpu_pct,
@@ -530,6 +529,15 @@ export function collectSample(store, cfg)
         lqm_ok: lqm_ok ? 1 : 0,
         babel_ok: babel_ok ? 1 : 0
     };
+    /* Only attach rf map when non-empty (avoids 1440 empty objects) */
+    let rf_n = 0;
+    for (let _k in rf) {
+        rf_n++;
+        break;
+    }
+    if (rf_n) {
+        sample.rf = rf;
+    }
 
     if (cfg.enabled) {
         storelib.pushSample(store, sample);
