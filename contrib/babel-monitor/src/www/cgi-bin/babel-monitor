@@ -1,6 +1,6 @@
 #!/usr/bin/ucode
 /**
- * babel-monitor CGI — public JSON pull API (meta/hello/sync/events/live/series/syslog).
+ * babel-monitor CGI — public JSON pull API (meta/hello/sync/events/live/series/syslog/top).
  * Optional gzip L1 via ucode-mod-zlib. Does not touch Prometheus.
  */
 import * as zlib from "zlib";
@@ -67,6 +67,9 @@ else if (api === "series") {
 else if (api === "syslog") {
     const limit = qparam("limit") || "50";
     cmd = sprintf("syslog limit=%s", limit);
+}
+else if (api === "top") {
+    cmd = "top";
 }
 else {
     print("Status: 400 Bad Request\r\n");

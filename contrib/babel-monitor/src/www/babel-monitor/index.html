@@ -62,6 +62,11 @@
     flex-wrap: wrap;
     gap: 6px;
   }
+  .tabs[hidden],
+  .chart-wrap[hidden],
+  .syslog-wrap[hidden] {
+    display: none !important;
+  }
   .tabs.metric { margin-bottom: 10px; }
   .tabs.time { margin-top: 10px; }
   .tabs.syslog-ctl { margin-top: 10px; }
@@ -78,7 +83,7 @@
   .syslog-wrap { margin-top: 0; }
   .syslog-box {
     height: 280px;
-    overflow-y: auto;
+    overflow: auto;
     margin: 0;
     padding: 10px 12px;
     background: #1a1d23;
@@ -86,8 +91,7 @@
     border-radius: 4px;
     font: 11px/1.45 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
     color: var(--fg);
-    white-space: pre-wrap;
-    word-break: break-word;
+    white-space: pre;
   }
   .syslog-empty { color: var(--muted); }
   .legend {
@@ -175,14 +179,15 @@
       <button type="button" data-metric="ram">RAM</button>
       <button type="button" data-metric="rf">RF</button>
       <button type="button" data-metric="syslog">Syslog</button>
+      <button type="button" data-metric="top">Top</button>
     </div>
     <div class="chart-wrap" id="chartWrap">
       <div class="legend" id="legend"></div>
       <canvas id="chart" width="1000" height="210"></canvas>
       <div class="chart-tip" id="chartTip" hidden></div>
     </div>
-    <div class="syslog-wrap" id="syslogWrap" hidden>
-      <pre class="syslog-box" id="syslogBox"><span class="syslog-empty">Loading syslog…</span></pre>
+    <div class="syslog-wrap" id="textWrap" hidden>
+      <pre class="syslog-box" id="textBox"><span class="syslog-empty">Loading…</span></pre>
     </div>
     <div class="tabs time" id="timeTabs" role="tablist" aria-label="Time range">
       <button type="button" data-sec="300" class="active">5m</button>
@@ -305,11 +310,13 @@
   let tickBusy = false;
   let failStreak = 0;
   let syslogPaused = false;
-  let syslogBusy = false;
+  let textBusy = false;
 
   function $(id) { return document.getElementById(id); }
 
   function isSyslog() { return metricId === "syslog"; }
+  function isTop() { return metricId === "top"; }
+  function isTextPanel() { return isSyslog() || isTop(); }
 
   function syncSyslogPauseBtn() {
     const b = $("syslogPauseBtn");
@@ -319,41 +326,59 @@
   }
 
   function updateHistoryMode() {
-    const sys = isSyslog();
-    $("chartWrap").hidden = sys;
-    $("syslogWrap").hidden = !sys;
-    $("timeTabs").hidden = sys;
-    $("syslogControls").hidden = !sys;
-    if (sys) {
-      hideTip();
-      syncSyslogPauseBtn();
-    }
+    const text = isTextPanel();
+    $("chartWrap").hidden = text;
+    $("textWrap").hidden = !text;
+    $("timeTabs").hidden = text;
+    $("syslogControls").hidden = !isSyslog();
+    if (text) hideTip();
+    if (isSyslog()) syncSyslogPauseBtn();
   }
 
-  function renderSyslog(lines) {
-    const box = $("syslogBox");
+  function renderTextPanel(lines, emptyMsg) {
+    const box = $("textBox");
     if (!lines || !lines.length) {
       box.textContent = "";
       const span = document.createElement("span");
       span.className = "syslog-empty";
-      span.textContent = "No syslog lines";
+      span.textContent = emptyMsg || "No output";
       box.appendChild(span);
       return;
     }
     box.textContent = lines.join("\n");
-    if (!syslogPaused) {
-      box.scrollTop = box.scrollHeight;
-    }
+    box.scrollTop = 0;
   }
 
   async function refreshSyslog() {
-    if (syslogBusy) return;
-    syslogBusy = true;
+    if (textBusy) return;
+    textBusy = true;
     try {
       const data = await getJsonRetry(API + "?api=syslog&limit=50");
-      renderSyslog(data.lines || []);
+      const box = $("textBox");
+      const lines = data.lines || [];
+      if (!lines.length) {
+        box.textContent = "";
+        const span = document.createElement("span");
+        span.className = "syslog-empty";
+        span.textContent = "No syslog lines";
+        box.appendChild(span);
+      } else {
+        box.textContent = lines.join("\n");
+        if (!syslogPaused) box.scrollTop = box.scrollHeight;
+      }
     } finally {
-      syslogBusy = false;
+      textBusy = false;
+    }
+  }
+
+  async function refreshTop() {
+    if (textBusy) return;
+    textBusy = true;
+    try {
+      const data = await getJsonRetry(API + "?api=top");
+      renderTextPanel(data.lines || [], "No top output");
+    } finally {
+      textBusy = false;
     }
   }
 
@@ -820,7 +845,7 @@
   }
 
   function drawChart() {
-    if (isSyslog()) return;
+    if (isTextPanel()) return;
     const metric = resolveMetric();
     renderLegend(metric);
     const c = $("chart");
@@ -982,7 +1007,7 @@
   }
 
   function onChartMove(ev) {
-    if (isSyslog()) return;
+    if (isTextPanel()) return;
     const c = $("chart");
     const rect = c.getBoundingClientRect();
     const idx = indexFromCanvasX(ev.clientX - rect.left, rect.width);
@@ -1029,6 +1054,8 @@
       await refreshLive();
       if (isSyslog()) {
         if (!syslogPaused) await refreshSyslog();
+      } else if (isTop()) {
+        await refreshTop();
       } else {
         await refreshSeries();
       }
@@ -1067,13 +1094,18 @@
           if (failStreak >= 2) setErr(e.message);
         });
       }
+    } else if (isTop()) {
+      refreshTop().catch(function (e) {
+        failStreak++;
+        if (failStreak >= 2) setErr(e.message);
+      });
     } else {
       drawChart();
     }
   });
 
   bindTabGroup("timeTabs", function (b) {
-    if (isSyslog()) return;
+    if (isTextPanel()) return;
     windowSec = parseInt(b.getAttribute("data-sec"), 10);
     hoverIdx = -1;
     hideTip();

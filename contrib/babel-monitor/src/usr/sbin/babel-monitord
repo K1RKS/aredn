@@ -49,6 +49,22 @@ function readSyslogLines(limit)
     return lines;
 }
 
+/** One-shot process table via busybox top -bn1 (not stored in the ring). */
+function readTopLines()
+{
+    const lines = [];
+    const p = fs.popen("top -bn1 2>/dev/null");
+    if (!p) {
+        return lines;
+    }
+    for (let line = p.read("line"); length(line); line = p.read("line")) {
+        /* Keep leading spaces so columns stay aligned */
+        push(lines, replace(`${line}`, /\r?\n$/, ""));
+    }
+    p.close();
+    return lines;
+}
+
 function metaObj()
 {
     const oldest = storelib.oldestSample(store);
@@ -154,6 +170,12 @@ function handleRequest(line)
             boot_id: store.boot_id,
             limit: limit,
             lines: readSyslogLines(limit)
+        };
+    }
+    if (cmd === "top") {
+        return {
+            boot_id: store.boot_id,
+            lines: readTopLines()
         };
     }
     if (cmd === "get") {
