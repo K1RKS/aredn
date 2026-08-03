@@ -147,6 +147,7 @@
       <button type="button" data-metric="neighbors">Neighbors</button>
       <button type="button" data-metric="routes">Routes</button>
       <button type="button" data-metric="links">Links</button>
+      <button type="button" data-metric="linkio">Link I/O</button>
       <button type="button" data-metric="hosts">Hosts</button>
       <button type="button" data-metric="cpu">CPU</button>
       <button type="button" data-metric="ram">RAM</button>
@@ -169,7 +170,7 @@
     <div style="overflow-x:auto">
       <table>
         <thead>
-          <tr><th>Host</th><th>IPv6</th><th>Iface</th><th>LQ</th><th>Cost</th><th>Rx</th><th>Tx</th></tr>
+          <tr><th>Host</th><th>IPv6</th><th>Iface</th><th>LQ</th><th>Cost</th><th>RxCost</th><th>TxCost</th><th>RX Δ</th><th>TX Δ</th></tr>
         </thead>
         <tbody id="neigh"></tbody>
       </table>
@@ -201,7 +202,8 @@
     neighbors: {
       label: "Neighbors",
       series: [
-        { key: "neighbor_count", label: "neighbors", color: PALETTE[0] },
+        /* Drawn first (underneath): markers so it stays visible when values match */
+        { key: "neighbor_count", label: "neighbors", color: PALETTE[0], markers: true },
         { key: "routable_count", label: "routable", color: PALETTE[2] }
       ],
       minY: 0
@@ -219,10 +221,17 @@
       label: "Links",
       series: [
         { key: "tx_packets_delta", label: "TX Δ", color: PALETTE[0] },
+        { key: "rx_packets_delta", label: "RX Δ", color: PALETTE[2] },
         { key: "tx_retries_delta", label: "retry Δ", color: PALETTE[1] },
         { key: "tx_fail_delta", label: "fail Δ", color: PALETTE[3] }
       ],
       minY: 0
+    },
+    linkio: {
+      label: "Link I/O",
+      series: [],
+      minY: 0,
+      dynamic: "links"
     },
     hosts: {
       label: "Hosts",
@@ -264,8 +273,17 @@
   let hoverIdx = -1;
   let chartLayout = null; /* { padL, padR, padT, padB, plotW, plotH, t0, windowSec, n } */
   let memTotalKb = null;
+  let tickBusy = false;
+  let failStreak = 0;
 
   function $(id) { return document.getElementById(id); }
+
+  function formatIface(iface) {
+    if (!iface) return "—";
+    const m = /^br0\.(\d+)$/i.exec(String(iface));
+    if (m) return "X-Link(" + m[1] + ")";
+    return iface;
+  }
 
   function formatTime(t) {
     if (t == null) return "—";
@@ -340,31 +358,68 @@
 
   function resolveMetric() {
     const base = METRICS[metricId] || METRICS.lq;
-    if (base.dynamic !== "rf") {
-      return base;
-    }
-    const keys = {};
-    for (let i = 0; i < series.length; i++) {
-      const rf = series[i].rf;
-      if (!rf) continue;
-      for (const k in rf) {
-        if (Object.prototype.hasOwnProperty.call(rf, k)) keys[k] = true;
+    if (base.dynamic === "rf") {
+      const keys = {};
+      for (let i = 0; i < series.length; i++) {
+        const rf = series[i].rf;
+        if (!rf) continue;
+        for (const k in rf) {
+          if (Object.prototype.hasOwnProperty.call(rf, k)) keys[k] = true;
+        }
       }
+      const names = Object.keys(keys).sort();
+      const out = [
+        { key: "mean_snr", label: "AVG", color: "#e6e8eb", width: 2.5 }
+      ];
+      for (let i = 0; i < names.length; i++) {
+        out.push({
+          key: names[i],
+          label: names[i],
+          color: colorAt(i),
+          width: 1.4,
+          fromRf: true
+        });
+      }
+      return { label: "RF", series: out, minY: 0 };
     }
-    const names = Object.keys(keys).sort();
-    const out = [
-      { key: "mean_snr", label: "AVG", color: "#e6e8eb", width: 2.5 }
-    ];
-    for (let i = 0; i < names.length; i++) {
-      out.push({
-        key: names[i],
-        label: names[i],
-        color: colorAt(i),
-        width: 1.4,
-        fromRf: true
-      });
+    if (base.dynamic === "links") {
+      const keys = {};
+      for (let i = 0; i < series.length; i++) {
+        const links = series[i].links;
+        if (!links) continue;
+        for (const k in links) {
+          if (Object.prototype.hasOwnProperty.call(links, k)) keys[k] = true;
+        }
+      }
+      const names = Object.keys(keys).sort();
+      const out = [
+        { key: "tx_packets_delta", label: "Σ TX", color: "#e6e8eb", width: 2.2 },
+        { key: "rx_packets_delta", label: "Σ RX", color: "#9aa3ad", width: 2.2 }
+      ];
+      for (let i = 0; i < names.length; i++) {
+        const c0 = colorAt(i * 2);
+        const c1 = colorAt(i * 2 + 1);
+        out.push({
+          key: names[i],
+          label: names[i] + " TX",
+          color: c0,
+          width: 1.3,
+          fromLinks: true,
+          linkIdx: 0
+        });
+        out.push({
+          key: names[i],
+          label: names[i] + " RX",
+          color: c1,
+          width: 1.3,
+          fromLinks: true,
+          linkIdx: 1,
+          dash: true
+        });
+      }
+      return { label: "Link I/O", series: out, minY: 0 };
     }
-    return { label: "RF", series: out, minY: 0 };
+    return base;
   }
 
   function sampleValue(row, spec) {
@@ -373,14 +428,43 @@
       const v = row.rf[spec.key];
       return v == null ? null : Number(v);
     }
+    if (spec.fromLinks) {
+      if (!row.links) return null;
+      const pair = row.links[spec.key];
+      if (pair == null) return null;
+      if (Array.isArray(pair)) {
+        const v = pair[spec.linkIdx];
+        return v == null ? null : Number(v);
+      }
+      if (spec.linkIdx === 0) return pair.tx == null ? null : Number(pair.tx);
+      return pair.rx == null ? null : Number(pair.rx);
+    }
     const v = row[spec.key];
     return v == null ? null : Number(v);
+  }
+
+  function sleep(ms) {
+    return new Promise(function (resolve) { setTimeout(resolve, ms); });
   }
 
   async function getJson(url) {
     const r = await fetch(url, { cache: "no-store" });
     if (!r.ok) throw new Error("HTTP " + r.status);
     return r.json();
+  }
+
+  async function getJsonRetry(url, tries) {
+    tries = tries || 2;
+    let last = null;
+    for (let i = 0; i < tries; i++) {
+      try {
+        return await getJson(url);
+      } catch (e) {
+        last = e;
+        if (i + 1 < tries) await sleep(350);
+      }
+    }
+    throw last;
   }
 
   function setErr(msg) {
@@ -406,6 +490,7 @@
       ["Mean LQ", s.mean_lq != null ? s.mean_lq + "%" : "—"],
       ["Mean cost", s.mean_cost ?? "—"],
       ["TX Δ", s.tx_packets_delta ?? "—"],
+      ["RX Δ", s.rx_packets_delta ?? "—"],
       ["Retry Δ", s.tx_retries_delta ?? "—"],
       ["Fail Δ", s.tx_fail_delta ?? "—"],
       ["CPU", s.cpu_pct != null ? s.cpu_pct + "%" : "—"],
@@ -425,19 +510,26 @@
   function renderNeigh(list) {
     const tb = $("neigh");
     if (!list || !list.length) {
-      tb.innerHTML = '<tr><td colspan="7" style="color:var(--muted)">No neighbors</td></tr>';
+      tb.innerHTML = '<tr><td colspan="9" style="color:var(--muted)">No neighbors</td></tr>';
       return;
     }
     tb.innerHTML = list.map(function (n) {
       const host = n.hostname || "—";
-      return "<tr><td>" + host + "</td><td>" + n.ipv6 + "</td><td>" + n.iface +
+      const iface = formatIface(n.iface);
+      const rxd = n.rx_packets_delta != null ? n.rx_packets_delta : "—";
+      const txd = n.tx_packets_delta != null ? n.tx_packets_delta : "—";
+      return "<tr><td>" + host + "</td><td>" + n.ipv6 + "</td><td>" + iface +
         "</td><td>" + n.lq + "%</td><td>" + n.cost + "</td><td>" + n.rxcost +
-        "</td><td>" + n.txcost + "</td></tr>";
+        "</td><td>" + n.txcost + "</td><td>" + rxd + "</td><td>" + txd + "</td></tr>";
     }).join("");
   }
 
   function renderLegend(metric) {
     $("legend").innerHTML = metric.series.map(function (s) {
+      if (s.markers) {
+        return '<span><i style="background:' + s.color +
+          ';height:8px;width:8px;border-radius:50%"></i>' + s.label + "</span>";
+      }
       return '<span><i style="background:' + s.color + '"></i>' + s.label + "</span>";
     }).join("");
   }
@@ -635,6 +727,22 @@
       }
     }
 
+    if (metricId === "linkio") {
+      const anyLinks = series.some(function (s) {
+        return (s.links && Object.keys(s.links).length) ||
+          (s.tx_packets_delta != null && s.tx_packets_delta > 0) ||
+          (s.rx_packets_delta != null && s.rx_packets_delta > 0);
+      });
+      if (!anyLinks) {
+        drawAxes(ctx, w, h, chartLayout, emptyBounds);
+        ctx.fillStyle = "#9aa3ad";
+        ctx.font = "11px ui-sans-serif, system-ui, sans-serif";
+        ctx.fillText("No link I/O in window", padL + 10, padT + plotH / 2);
+        hideTip();
+        return;
+      }
+    }
+
     const lines = metric.series.map(function (s) {
       return series.map(function (row) { return sampleValue(row, s); });
     });
@@ -644,13 +752,17 @@
 
     const n = series.length;
     const axisY = h - padB;
+    const markerPasses = [];
     for (let si = 0; si < metric.series.length; si++) {
       const spec = metric.series[si];
       const vals = lines[si];
       ctx.strokeStyle = spec.color;
       ctx.lineWidth = spec.width || 1.5;
+      if (spec.dash) ctx.setLineDash([5, 4]);
+      else ctx.setLineDash([]);
       ctx.beginPath();
       let started = false;
+      const pts = [];
       for (let i = 0; i < n; i++) {
         const v = vals[i];
         if (v == null || v !== v) {
@@ -671,8 +783,40 @@
         const y = axisY - ((v - bounds.lo) / span) * plotH;
         if (!started) { ctx.moveTo(x, y); started = true; }
         else ctx.lineTo(x, y);
+        if (spec.markers) pts.push({ x: x, y: y });
       }
       ctx.stroke();
+      ctx.setLineDash([]);
+      if (spec.markers && pts.length) {
+        markerPasses.push({ color: spec.color, pts: pts });
+      }
+    }
+
+    /* Markers after all strokes so underneath series stay visible when values match */
+    for (let mi = 0; mi < markerPasses.length; mi++) {
+      const pass = markerPasses[mi];
+      const pts = pass.pts;
+      const step = pts.length > 90 ? 3 : (pts.length > 45 ? 2 : 1);
+      for (let pi = 0; pi < pts.length; pi += step) {
+        const p = pts[pi];
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, 2.75, 0, Math.PI * 2);
+        ctx.fillStyle = pass.color;
+        ctx.fill();
+        ctx.strokeStyle = "#15181c";
+        ctx.lineWidth = 1;
+        ctx.stroke();
+      }
+      if ((pts.length - 1) % step !== 0) {
+        const p = pts[pts.length - 1];
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, 2.75, 0, Math.PI * 2);
+        ctx.fillStyle = pass.color;
+        ctx.fill();
+        ctx.strokeStyle = "#15181c";
+        ctx.lineWidth = 1;
+        ctx.stroke();
+      }
     }
 
     if (hoverIdx >= 0 && hoverIdx < n) {
@@ -729,13 +873,13 @@
   }
 
   async function refreshLive() {
-    const live = await getJson(API + "?api=live&compress=0");
+    const live = await getJsonRetry(API + "?api=live");
     renderKpis(live);
     renderNeigh(live.neighbors || []);
   }
 
   async function refreshSeries() {
-    const data = await getJson(API + "?api=series&seconds=" + windowSec + "&compress=0");
+    const data = await getJsonRetry(API + "?api=series&seconds=" + windowSec);
     series = data.samples || [];
     if (hoverIdx >= series.length) {
       hoverIdx = series.length ? series.length - 1 : -1;
@@ -745,12 +889,20 @@
   }
 
   async function tick() {
+    if (tickBusy) return;
+    tickBusy = true;
     try {
       await refreshLive();
       await refreshSeries();
+      failStreak = 0;
       setErr(null);
     } catch (e) {
-      setErr("API error: " + e.message + " (is babel-monitord running?)");
+      failStreak++;
+      if (failStreak >= 2) {
+        setErr("API error: " + e.message + " (is babel-monitord running?)");
+      }
+    } finally {
+      tickBusy = false;
     }
   }
 
@@ -776,7 +928,10 @@
     windowSec = parseInt(b.getAttribute("data-sec"), 10);
     hoverIdx = -1;
     hideTip();
-    refreshSeries().catch(function (e) { setErr(e.message); });
+    refreshSeries().catch(function (e) {
+      failStreak++;
+      if (failStreak >= 2) setErr(e.message);
+    });
   });
 
   (function bindChartHover() {

@@ -17,12 +17,16 @@ function babelDump(cmd)
     }
     c.send(`${cmd}\nquit\n`);
     let d = "";
-    for (;;) {
-        const v = c.recv();
+    /* Bound reads so a stuck babel.sock cannot grow forever in monitord */
+    for (let n = 0; n < 256; n++) {
+        const v = c.recv(8192);
         if (!v || v === "") {
             break;
         }
         d += v;
+        if (length(d) > 1048576) {
+            break;
+        }
     }
     c.close();
     return split(d, "\n");
@@ -112,6 +116,42 @@ function babelPid()
         return null;
     }
     return int(trim(f));
+}
+
+/** Read interface TX/RX packet counters from sysfs (null if device missing). */
+function readDevCounters(dev)
+{
+    if (!dev || dev === "") {
+        return null;
+    }
+    const tp = `/sys/class/net/${dev}/statistics/tx_packets`;
+    if (!fs.access(tp)) {
+        return null;
+    }
+    const tx = int(trim(fs.readfile(tp) || "0"));
+    const rx = int(trim(fs.readfile(`/sys/class/net/${dev}/statistics/rx_packets`) || "0"));
+    return { tx: tx || 0, rx: rx || 0 };
+}
+
+function linkLabelForTracker(tr, mac, device)
+{
+    if (tr.type === "RF") {
+        if (tr.hostname && tr.hostname !== "") {
+            return `${tr.hostname}`;
+        }
+        if (tr.canonical_ip && tr.canonical_ip !== "") {
+            return `${tr.canonical_ip}`;
+        }
+        return `${mac}`;
+    }
+    const lab = common.formatIfaceLabel(device);
+    if (lab && lab !== "") {
+        return lab;
+    }
+    if (tr.hostname && tr.hostname !== "") {
+        return `${tr.hostname}`;
+    }
+    return device ? `${device}` : `${mac}`;
 }
 
 function readUptimeS()
@@ -261,7 +301,6 @@ export function collectSample(store, cfg)
     let babel_ok = false;
     let lqm_ok = false;
 
-    let tx_packets = 0;
     let tx_retries = 0;
     let tx_fail = 0;
     let snr_sum = 0;
@@ -284,6 +323,17 @@ export function collectSample(store, cfg)
             const tr = lqm.trackers[mac];
             if (tr.ipv6ll && tr.hostname) {
                 host_by_ll[tr.ipv6ll] = tr.hostname;
+            }
+        }
+    }
+
+    /* Unique mesh devices for aggregate iface TX/RX (avoids double-counting) */
+    const devices = {};
+    if (lqm && lqm.trackers) {
+        for (let mac in lqm.trackers) {
+            const tr = lqm.trackers[mac];
+            if (tr.device) {
+                devices[tr.device] = true;
             }
         }
     }
@@ -320,6 +370,9 @@ export function collectSample(store, cfg)
             if (!store.last.neighbor_keys[key]) {
                 neighbor_add++;
             }
+            if (m[2]) {
+                devices[m[2]] = true;
+            }
             const hn = host_by_ll[m[1]];
             push(live, {
                 hostname: hn ? hn : "",
@@ -328,7 +381,9 @@ export function collectSample(store, cfg)
                 lq: lq,
                 rxcost: int(m[4]),
                 txcost: int(m[5]),
-                cost: cost
+                cost: cost,
+                tx_packets_delta: 0,
+                rx_packets_delta: 0
             });
         }
         for (let k in store.last.neighbor_keys) {
@@ -368,14 +423,65 @@ export function collectSample(store, cfg)
         }
     }
 
-    /* Collect RF SNR candidates (hostname||mac, snr) then keep top by SNR */
+    /* Device counters → aggregate TX/RX Δ (A) + per-device deltas for live/history */
+    const prev_dev = store.last.link_dev || {};
+    const new_dev = {};
+    const prev_sta = store.last.link_sta || {};
+    const new_sta = {};
+    let iface_tx = 0;
+    let iface_rx = 0;
+    let have_prev_dev = false;
+    for (let _d in prev_dev) {
+        have_prev_dev = true;
+        break;
+    }
+    for (let dev in devices) {
+        const c = readDevCounters(dev);
+        if (!c) {
+            continue;
+        }
+        new_dev[dev] = c;
+        iface_tx += c.tx;
+        iface_rx += c.rx;
+    }
+
+    let tx_packets_delta = 0;
+    let rx_packets_delta = 0;
+    if (have_prev_dev) {
+        for (let dev in new_dev) {
+            const cur = new_dev[dev];
+            const prev = prev_dev[dev];
+            if (prev) {
+                tx_packets_delta += max(0, cur.tx - prev.tx);
+                rx_packets_delta += max(0, cur.rx - prev.rx);
+            }
+        }
+    }
+    store.last.link_dev = new_dev;
+    store.last.rx_packets = iface_rx;
+    store.last.tx_packets = iface_tx;
+
+    /* Collect RF SNR + LQM retry/fail + per-link I/O candidates */
     const rf_cands = [];
+    const link_cands = [];
+    const link_delta_by_dev = {};
+    const link_delta_by_ll = {};
+
+    for (let dev in new_dev) {
+        const cur = new_dev[dev];
+        const prev = prev_dev[dev];
+        let dtx = 0;
+        let drx = 0;
+        if (have_prev_dev && prev) {
+            dtx = max(0, cur.tx - prev.tx);
+            drx = max(0, cur.rx - prev.rx);
+        }
+        link_delta_by_dev[dev] = { tx: dtx, rx: drx };
+    }
+
     if (lqm && lqm.trackers) {
         for (let mac in lqm.trackers) {
             const tr = lqm.trackers[mac];
-            if (tr.tx_packets) {
-                tx_packets += int(tr.tx_packets);
-            }
             if (tr.tx_retries) {
                 tx_retries += int(tr.tx_retries);
             }
@@ -396,8 +502,50 @@ export function collectSample(store, cfg)
                 br_sum += int(tr.tx_bitrate);
                 br_n++;
             }
+
+            let dtx = 0;
+            let drx = 0;
+            if (tr.type === "RF" && tr.tx_packets != null) {
+                const sta_tx = int(tr.tx_packets);
+                new_sta[mac] = sta_tx;
+                if (prev_sta[mac] != null) {
+                    dtx = max(0, sta_tx - prev_sta[mac]);
+                }
+                /* LQM has no per-station RX; leave rx at 0 for RF stations */
+            }
+            else if (tr.device && link_delta_by_dev[tr.device]) {
+                dtx = link_delta_by_dev[tr.device].tx;
+                drx = link_delta_by_dev[tr.device].rx;
+            }
+            if (tr.ipv6ll) {
+                link_delta_by_ll[tr.ipv6ll] = { tx: dtx, rx: drx };
+            }
+            const id = linkLabelForTracker(tr, mac, tr.device);
+            push(link_cands, { id: id, tx: dtx, rx: drx, score: dtx + drx, device: tr.device || "" });
         }
     }
+
+    /* Neighbors without LQM tracker still get iface-level deltas */
+    for (let i = 0; i < length(live); i++) {
+        const n = live[i];
+        const byll = link_delta_by_ll[n.ipv6];
+        if (byll) {
+            n.tx_packets_delta = byll.tx;
+            n.rx_packets_delta = byll.rx;
+        }
+        else if (n.iface && link_delta_by_dev[n.iface]) {
+            n.tx_packets_delta = link_delta_by_dev[n.iface].tx;
+            n.rx_packets_delta = link_delta_by_dev[n.iface].rx;
+            push(link_cands, {
+                id: common.formatIfaceLabel(n.iface),
+                tx: n.tx_packets_delta,
+                rx: n.rx_packets_delta,
+                score: n.tx_packets_delta + n.rx_packets_delta,
+                device: n.iface
+            });
+        }
+    }
+    store.last.link_sta = new_sta;
 
     /* Sort descending SNR; cap map size for RAM */
     for (let i = 0; i < length(rf_cands); i++) {
@@ -416,15 +564,45 @@ export function collectSample(store, cfg)
         rf[rf_cands[i].id] = rf_cands[i].snr;
     }
 
-    let tx_packets_delta = 0;
+    /* Deduplicate link candidates by id (prefer highest score), sort, cap */
+    const link_best = {};
+    for (let i = 0; i < length(link_cands); i++) {
+        const c = link_cands[i];
+        if (!c.id || c.id === "") {
+            continue;
+        }
+        const prev = link_best[c.id];
+        if (!prev || c.score > prev.score) {
+            link_best[c.id] = c;
+        }
+    }
+    const link_sorted = [];
+    for (let id in link_best) {
+        push(link_sorted, link_best[id]);
+    }
+    for (let i = 0; i < length(link_sorted); i++) {
+        for (let j = i + 1; j < length(link_sorted); j++) {
+            if (link_sorted[j].score > link_sorted[i].score) {
+                const tmp = link_sorted[i];
+                link_sorted[i] = link_sorted[j];
+                link_sorted[j] = tmp;
+            }
+        }
+    }
+    const links = {};
+    const link_cap = common.LINK_IO_CAP;
+    const link_take = length(link_sorted) < link_cap ? length(link_sorted) : link_cap;
+    for (let i = 0; i < link_take; i++) {
+        const c = link_sorted[i];
+        links[c.id] = [ int(c.tx), int(c.rx) ];
+    }
+
     let tx_retries_delta = 0;
     let tx_fail_delta = 0;
-    if (store.last.tx_packets !== null) {
-        tx_packets_delta = max(0, tx_packets - store.last.tx_packets);
+    if (store.last.tx_retries !== null) {
         tx_retries_delta = max(0, tx_retries - store.last.tx_retries);
         tx_fail_delta = max(0, tx_fail - store.last.tx_fail);
     }
-    store.last.tx_packets = tx_packets;
     store.last.tx_retries = tx_retries;
     store.last.tx_fail = tx_fail;
 
@@ -540,9 +718,10 @@ export function collectSample(store, cfg)
         cpu_pct: cpu_pct,
         cpu_peak_pct: cpu_peak_pct,
         lqm_ok: lqm_ok ? 1 : 0,
-        babel_ok: babel_ok ? 1 : 0
+        babel_ok: babel_ok ? 1 : 0,
+        rx_packets_delta: rx_packets_delta
     };
-    /* Only attach rf map when non-empty (avoids 1440 empty objects) */
+    /* Only attach rf/links maps when non-empty (avoids 1440 empty objects) */
     let rf_n = 0;
     for (let _k in rf) {
         rf_n++;
@@ -550,6 +729,14 @@ export function collectSample(store, cfg)
     }
     if (rf_n) {
         sample.rf = rf;
+    }
+    let links_n = 0;
+    for (let _k in links) {
+        links_n++;
+        break;
+    }
+    if (links_n) {
+        sample.links = links;
     }
 
     if (cfg.enabled) {

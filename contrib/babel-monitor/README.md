@@ -4,7 +4,7 @@ Side-loaded AREDN APK that keeps Babel / LQM / arednlink metrics in RAM, exposes
 stateless JSON pull API for external historians, a public status page, and a
 live-config CLI.
 
-- Package: `babel-monitor-0.1.15-r0.apk`
+- Package: `babel-monitor-0.1.17-r0.apk`
 - Daemon: `babel-monitord`
 - CLI: `babel-monitor`
 - Status UI: `/babel-monitor/`
@@ -18,7 +18,7 @@ cd contrib/babel-monitor
 ./build.sh
 ```
 
-APK lands in `dist/babel-monitor-0.1.15-r0.apk`.
+APK lands in `dist/babel-monitor-0.1.17-r0.apk`.
 
 ## Install on a node
 
@@ -31,15 +31,16 @@ From the work-area root (after configuring `install_package_remotely.conf`):
 Or copy the APK and:
 
 ```sh
-apk add --allow-untrusted /tmp/babel-monitor-0.1.15-r0.apk
+apk add --allow-untrusted /tmp/babel-monitor-0.1.17-r0.apk
 ```
 
 ## On-node storage
 
 - Fixed in-RAM sample ring (`1440` slots ≈ **4h @ 10s**) + event ring (`512`)
 - Samples stored as **packed arrays** in the ring (expanded to named JSON on the API)
-- `mem_total_kb` lives in meta only (not every sample); empty `rf` maps are omitted
-- Target RSS ~≤1MB (hard ceiling 2MB); reboot clears history
+- `mem_total_kb` lives in meta only (not every sample); empty `rf` / `links` maps are omitted
+- Per-sample optional maps capped at 12 entries each (`rf` SNR, `links` TX/RX Δ)
+- Target RSS ~≤1–1.5MB with maps (hard ceiling 2MB); reboot clears history
 - Flash/UCI holds **config only** — never metrics
 
 ## CLI
@@ -77,7 +78,7 @@ Optional `compress=1|0|on|off` (default from UCI; gzip level 1 when body ≥ `co
 
 Gap-tolerant: HTTP 200 when the daemon is up; responses include `truncated`, `gap_before`, `next_seq`, `complete`, `boot_id`. No per-poller state on the node.
 
-### Sample host / RF fields (schema 4)
+### Sample host / RF / link fields (schema 5)
 
 Wire samples (sync/series/live) use named fields. Internally the ring stores packed arrays.
 
@@ -90,8 +91,13 @@ Wire samples (sync/series/live) use named fields. Internally the ring stores pac
 | `cpu_peak_pct` | Peak busy % from 1s windows within the interval |
 | `mean_snr` | Average SNR across RF LQM trackers (AVG on the RF graph) |
 | `rf` | Present only when RF neighbors exist: label → SNR (hostname when known; capped at 12) |
+| `tx_packets_delta` / `rx_packets_delta` | Node-wide packet Δ since last sample (unique mesh ifaces via sysfs) |
+| `tx_retries_delta` / `tx_fail_delta` | LQM TX retry/fail Δ (mainly RF) |
+| `links` | Present when link I/O exists: label → `[tx_delta, rx_delta]` (capped at 12; `br0.N` labeled `X-Link(N)`) |
 
 `mem_total_kb` is on `?api=meta` / live `meta` (nearly constant), not repeated per sample.
+
+Live neighbors also include `tx_packets_delta` / `rx_packets_delta` per neighbor (iface or LQM station). Xlink ifaces `br0.N` display as `X-Link(N)`.
 
 Central pollers should treat a falling `uptime_s` (or `reboot_delta=1` / new `boot_id`) as a reboot gap.
 
@@ -109,7 +115,7 @@ State/logs: `~/.babel-monitor/` (override with `BABEL_MONITOR_STATE`).
 
 ## Status page
 
-Open `http://<node>/babel-monitor/` — live neighbors, KPIs, and a history graph with metric tabs (LQ, Cost, Neighbors, Routes, Links, Hosts, CPU, RAM, RF) and 5m / 30m / 1h / 4h ranges from RAM (ring retains ~4h @ 10s). The X axis is fixed to the selected window (partial buffers are not stretched). Hover for a crosshair and values at that sample. The RF tab plots SNR for each RF neighbor plus AVG (up to 12 neighbors per sample). Viewing the UI does not write flash. No Tools menu entry.
+Open `http://<node>/babel-monitor/` — live neighbors, KPIs, and a history graph with metric tabs (LQ, Cost, Neighbors, Routes, Links, Link I/O, Hosts, CPU, RAM, RF) and 5m / 30m / 1h / 4h ranges from RAM (ring retains ~4h @ 10s). The X axis is fixed to the selected window (partial buffers are not stretched). Hover for a crosshair and values at that sample. **Links** plots node-wide TX/RX/retry/fail Δ; **Link I/O** plots per-link TX/RX Δ (plus Σ). The RF tab plots SNR for each RF neighbor plus AVG (up to 12 neighbors per sample). Viewing the UI does not write flash. No Tools menu entry.
 
 ## Layout
 

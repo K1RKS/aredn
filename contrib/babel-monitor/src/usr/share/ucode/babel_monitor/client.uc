@@ -12,7 +12,7 @@ export function query(cmd)
     }
     c.send(cmd + "\nquit\n");
     let d = "";
-    for (;;) {
+    for (let n = 0; n < 256; n++) {
         const v = c.recv(8192);
         if (!v || v === "") {
             break;
@@ -20,6 +20,9 @@ export function query(cmd)
         d += v;
         /* stop once we have a complete JSON value (compact one-liner preferred) */
         if (index(d, "\n") >= 0) {
+            break;
+        }
+        if (length(d) > 8 * 1048576) {
             break;
         }
     }

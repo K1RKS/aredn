@@ -5,16 +5,30 @@ import * as math from "math";
 
 export function packageVersion()
 {
-    return "0.1.15-r0";
+    return "0.1.17-r0";
 };
 
-export const SCHEMA_VERSION = 4;
+export const SCHEMA_VERSION = 5;
 export const SOCK_PATH = "/var/run/babel-monitor.sock";
 export const RUN_DIR = "/var/run/babel-monitor";
 export const SAMPLE_CAP = 1440;  /* 4h @ 10s */
 export const EVENT_CAP = 512;
 export const RF_NEIGHBOR_CAP = 12; /* per-sample RF SNR map size (RAM bound) */
+export const LINK_IO_CAP = 12; /* per-sample per-link TX/RX map size (RAM bound) */
 export const RETENTION_S_AT_DEFAULT = SAMPLE_CAP * 10;
+
+/** Display label for babel/LQM ifaces (br0.N → X-Link(N)). */
+export function formatIfaceLabel(iface)
+{
+    if (!iface) {
+        return "";
+    }
+    const m = match(`${iface}`, /^br0\.([0-9]+)$/);
+    if (m) {
+        return sprintf("X-Link(%s)", m[1]);
+    }
+    return `${iface}`;
+};
 
 export function parseBool(v, dflt)
 {

@@ -4,7 +4,7 @@
  * Samples are stored as dense arrays (not keyed objects) to cut ucode RAM.
  * Wire/API responses expand back to named fields via expandSample().
  *
- * Packed layout (schema 4):
+ * Packed layout (schema 5):
  *  0 t, 1 seq,
  *  2 neighbor_count, 3 routable_count,
  *  4 route_count_20, 5 route_count_21, 6 route_count_22,
@@ -18,7 +18,9 @@
  *  25 mem_used_pct, 26 mem_available_kb,
  *  27 cpu_pct, 28 cpu_peak_pct,
  *  29 lqm_ok, 30 babel_ok,
- *  31 rf (null or {label: snr, ...} when non-empty)
+ *  31 rf (null or {label: snr, ...} when non-empty),
+ *  32 rx_packets_delta,
+ *  33 links (null or {label: [tx_delta, rx_delta], ...} when non-empty)
  */
 import * as common from "babel_monitor.common";
 
@@ -49,6 +51,9 @@ export function createStore()
             tx_packets: null,
             tx_retries: null,
             tx_fail: null,
+            rx_packets: null,
+            link_dev: {},
+            link_sta: {},
             host_count: null,
             babel_state_seen: null,
             babel_pid: null,
@@ -71,13 +76,13 @@ export function createStore()
     };
 };
 
-function rfNonEmpty(rf)
+function mapNonEmpty(m)
 {
-    if (rf == null) {
+    if (m == null) {
         return null;
     }
-    for (let k in rf) {
-        return rf;
+    for (let k in m) {
+        return m;
     }
     return null;
 };
@@ -99,7 +104,9 @@ export function packSample(s)
         int(s.mem_used_pct), int(s.mem_available_kb),
         int(s.cpu_pct), int(s.cpu_peak_pct),
         int(s.lqm_ok), int(s.babel_ok),
-        rfNonEmpty(s.rf)
+        mapNonEmpty(s.rf),
+        int(s.rx_packets_delta),
+        mapNonEmpty(s.links)
     ];
 };
 
@@ -143,10 +150,14 @@ export function expandSample(p)
         cpu_pct: p[27],
         cpu_peak_pct: p[28],
         lqm_ok: p[29],
-        babel_ok: p[30]
+        babel_ok: p[30],
+        rx_packets_delta: length(p) > 32 ? p[32] : 0
     };
     if (p[31] != null) {
         o.rf = p[31];
+    }
+    if (length(p) > 33 && p[33] != null) {
+        o.links = p[33];
     }
     return o;
 };
@@ -306,6 +317,6 @@ export function oldestSample(store)
 
 export function estimateBytes(store)
 {
-    /* Packed arrays ~40 ints + optional rf map; ucode still has overhead */
-    return 98304 + store.sample_count * 350 + store.event_count * 64;
+    /* Packed arrays + optional rf/links maps; ucode still has overhead */
+    return 98304 + store.sample_count * 480 + store.event_count * 64;
 };
