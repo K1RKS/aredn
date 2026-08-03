@@ -4,7 +4,7 @@ Side-loaded AREDN APK that keeps Babel / LQM / arednlink metrics in RAM, exposes
 stateless JSON pull API for external historians, a public status page, and a
 live-config CLI.
 
-- Package: `babel-monitor-0.1.7-r0.apk`
+- Package: `babel-monitor-0.1.8-r0.apk`
 - Daemon: `babel-monitord`
 - CLI: `babel-monitor`
 - Status UI: `/babel-monitor/`
@@ -18,7 +18,7 @@ cd contrib/babel-monitor
 ./build.sh
 ```
 
-APK lands in `dist/babel-monitor-0.1.7-r0.apk`.
+APK lands in `dist/babel-monitor-0.1.8-r0.apk`.
 
 ## Install on a node
 
@@ -31,7 +31,7 @@ From the work-area root (after configuring `install_package_remotely.conf`):
 Or copy the APK and:
 
 ```sh
-apk add --allow-untrusted /tmp/babel-monitor-0.1.7-r0.apk
+apk add --allow-untrusted /tmp/babel-monitor-0.1.8-r0.apk
 ```
 
 ## On-node storage
@@ -86,6 +86,8 @@ Each sync sample also includes:
 | `mem_total_kb` / `mem_available_kb` / `mem_used_pct` | RAM from `/proc/meminfo` |
 | `cpu_pct` | Busy % over the full sample interval (`/proc/stat`) |
 | `cpu_peak_pct` | Peak busy % from 1s windows within the interval |
+| `mean_snr` | Average SNR across RF LQM trackers (AVG on the RF graph) |
+| `rf` | Map of RF neighbor label → SNR (hostname when known; capped at 12) |
 
 Central pollers should treat a falling `uptime_s` (or `reboot_delta=1` / new `boot_id`) as a reboot gap.
 
@@ -103,7 +105,7 @@ State/logs: `~/.babel-monitor/` (override with `BABEL_MONITOR_STATE`).
 
 ## Status page
 
-Open `http://<node>/babel-monitor/` — live neighbors, KPIs, and a history graph with metric tabs (LQ, Cost, Neighbors, Routes, Links, Hosts, CPU, RAM, RF) and 5m / 30m / 24h ranges from RAM. Viewing the UI does not write flash. No Tools menu entry.
+Open `http://<node>/babel-monitor/` — live neighbors, KPIs, and a history graph with metric tabs (LQ, Cost, Neighbors, Routes, Links, Hosts, CPU, RAM, RF) and 5m / 30m / 24h ranges from RAM. The RF tab plots SNR for each RF neighbor plus AVG (up to 12 neighbors per sample). Viewing the UI does not write flash. No Tools menu entry.
 
 ## Layout
 

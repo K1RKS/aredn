@@ -353,6 +353,8 @@ export function collectSample(store, cfg)
         }
     }
 
+    /* Collect RF SNR candidates (hostname||mac, snr) then keep top by SNR */
+    const rf_cands = [];
     const lqm = readJsonFile("/tmp/lqm.info");
     if (lqm && lqm.trackers) {
         lqm_ok = true;
@@ -367,15 +369,38 @@ export function collectSample(store, cfg)
             if (tr.tx_fail || tr.tx_failed) {
                 tx_fail += int(tr.tx_fail || tr.tx_failed);
             }
-            if (tr.snr !== null && tr.snr !== undefined) {
-                snr_sum += int(tr.snr);
+            if (tr.type === "RF" && tr.snr !== null && tr.snr !== undefined) {
+                const snr = int(tr.snr);
+                snr_sum += snr;
                 snr_n++;
+                let label = tr.hostname;
+                if (!label || label === "") {
+                    label = tr.canonical_ip || mac;
+                }
+                push(rf_cands, { id: `${label}`, snr: snr });
             }
-            if (tr.tx_bitrate) {
+            if (tr.type === "RF" && tr.tx_bitrate) {
                 br_sum += int(tr.tx_bitrate);
                 br_n++;
             }
         }
+    }
+
+    /* Sort descending SNR; cap map size for RAM */
+    for (let i = 0; i < length(rf_cands); i++) {
+        for (let j = i + 1; j < length(rf_cands); j++) {
+            if (rf_cands[j].snr > rf_cands[i].snr) {
+                const tmp = rf_cands[i];
+                rf_cands[i] = rf_cands[j];
+                rf_cands[j] = tmp;
+            }
+        }
+    }
+    const rf = {};
+    const rf_cap = common.RF_NEIGHBOR_CAP;
+    const rf_take = length(rf_cands) < rf_cap ? length(rf_cands) : rf_cap;
+    for (let i = 0; i < rf_take; i++) {
+        rf[rf_cands[i].id] = rf_cands[i].snr;
     }
 
     let tx_packets_delta = 0;
@@ -489,6 +514,7 @@ export function collectSample(store, cfg)
         tx_fail_delta: tx_fail_delta,
         mean_snr: snr_n ? int(snr_sum / snr_n) : 0,
         mean_tx_bitrate: br_n ? int(br_sum / br_n) : 0,
+        rf: rf,
         host_count: host_count,
         host_change_delta: host_change_delta,
         dns_reload_delta: dns_reload_delta,

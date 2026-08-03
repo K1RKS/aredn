@@ -208,10 +208,10 @@
     },
     rf: {
       label: "RF",
-      series: [
-        { key: "mean_snr", label: "mean SNR", color: PALETTE[0] },
-        { key: "mean_tx_bitrate", label: "TX bitrate", color: PALETTE[1] }
-      ]
+      /* series filled dynamically: AVG + each unique RF neighbor SNR */
+      series: [],
+      minY: 0,
+      dynamic: "rf"
     }
   };
 
@@ -220,6 +220,49 @@
   let series = [];
 
   function $(id) { return document.getElementById(id); }
+
+  function colorAt(i) {
+    return PALETTE[i % PALETTE.length];
+  }
+
+  function resolveMetric() {
+    const base = METRICS[metricId] || METRICS.lq;
+    if (base.dynamic !== "rf") {
+      return base;
+    }
+    const keys = {};
+    for (let i = 0; i < series.length; i++) {
+      const rf = series[i].rf;
+      if (!rf) continue;
+      for (const k in rf) {
+        if (Object.prototype.hasOwnProperty.call(rf, k)) keys[k] = true;
+      }
+    }
+    const names = Object.keys(keys).sort();
+    const out = [
+      { key: "mean_snr", label: "AVG", color: "#e6e8eb", width: 2.5 }
+    ];
+    for (let i = 0; i < names.length; i++) {
+      out.push({
+        key: names[i],
+        label: names[i],
+        color: colorAt(i),
+        width: 1.4,
+        fromRf: true
+      });
+    }
+    return { label: "RF", series: out, minY: 0 };
+  }
+
+  function sampleValue(row, spec) {
+    if (spec.fromRf) {
+      if (!row.rf) return null;
+      const v = row.rf[spec.key];
+      return v == null ? null : Number(v);
+    }
+    const v = row[spec.key];
+    return v == null ? null : Number(v);
+  }
 
   async function getJson(url) {
     const r = await fetch(url, { cache: "no-store" });
@@ -303,7 +346,7 @@
   }
 
   function drawChart() {
-    const metric = METRICS[metricId] || METRICS.lq;
+    const metric = resolveMetric();
     renderLegend(metric);
     const c = $("chart");
     const ctx = c.getContext("2d");
@@ -323,11 +366,19 @@
       return;
     }
 
-    const lines = metric.series.map(function (s) {
-      return series.map(function (row) {
-        const v = row[s.key];
-        return v == null ? null : Number(v);
+    if (metricId === "rf") {
+      const anyRf = series.some(function (s) {
+        return (s.rf && Object.keys(s.rf).length) || (s.mean_snr != null && s.mean_snr > 0);
       });
+      if (!anyRf) {
+        ctx.fillStyle = "#9aa3ad";
+        ctx.fillText("No RF neighbors in window", padL + 10, h / 2);
+        return;
+      }
+    }
+
+    const lines = metric.series.map(function (s) {
+      return series.map(function (row) { return sampleValue(row, s); });
     });
     const bounds = yBounds(metric, lines);
     const span = bounds.hi - bounds.lo;
@@ -342,7 +393,7 @@
       const spec = metric.series[si];
       const vals = lines[si];
       ctx.strokeStyle = spec.color;
-      ctx.lineWidth = 1.5;
+      ctx.lineWidth = spec.width || 1.5;
       ctx.beginPath();
       let started = false;
       for (let i = 0; i < n; i++) {

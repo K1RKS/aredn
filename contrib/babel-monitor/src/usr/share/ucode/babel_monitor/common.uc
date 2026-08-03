@@ -5,14 +5,15 @@ import * as math from "math";
 
 export function packageVersion()
 {
-    return "0.1.7-r0";
+    return "0.1.8-r0";
 };
 
-export const SCHEMA_VERSION = 2;
+export const SCHEMA_VERSION = 3;
 export const SOCK_PATH = "/var/run/babel-monitor.sock";
 export const RUN_DIR = "/var/run/babel-monitor";
 export const SAMPLE_CAP = 8640;   /* 24h @ 10s */
 export const EVENT_CAP = 512;
+export const RF_NEIGHBOR_CAP = 12; /* per-sample RF SNR map size (RAM bound) */
 
 export function parseBool(v, dflt)
 {

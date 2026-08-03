@@ -301,6 +301,7 @@
     <li>Link: tx_packets/retries/fail deltas; optional SNR/bitrate</li>
     <li>DNS/arednlink deltas; babel hard/soft reset deltas; <code>lqm_ok</code> / <code>babel_ok</code></li>
     <li>Host: <code>uptime_s</code>, <code>reboot_delta</code>; <code>mem_total_kb</code> / <code>mem_available_kb</code> / <code>mem_used_pct</code>; <code>cpu_pct</code> (interval) + <code>cpu_peak_pct</code> (1s peak)</li>
+    <li>RF: <code>mean_snr</code> (AVG) + <code>rf</code> map of neighbor label → SNR (hostname when known; cap 12)</li>
   </ul>
   <h3>Identity</h3>
   <ul>
@@ -354,6 +355,7 @@
     <li>Public URL only: <code>/www/babel-monitor/</code> (no Tools menu; optional manual service link)</li>
     <li>Realtime neighbors, routes, last reset, packet/retry rates</li>
     <li>History graph: metric tabs (LQ, Cost, Neighbors, Routes, Links, Hosts, CPU, RAM, RF); time range 5m / 30m / 24h on bottom; from RAM</li>
+    <li>RF tab: SNR line per unique RF neighbor + AVG (<code>mean_snr</code>); sample field <code>rf</code> map capped at 12</li>
     <li>Viewing the UI does not write flash</li>
   </ul>
 
