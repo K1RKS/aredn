@@ -7,7 +7,7 @@ import * as fs from "fs";
 /* Keep in sync with build.sh -v/-r (and bump-stableroute-revision rule). */
 export function packageVersion()
 {
-    return "0.1.33-r0";
+    return "0.1.34-r0";
 };
 
 const AREDN_TRACEROUTE = "/usr/bin/aredn-traceroute";
@@ -95,8 +95,31 @@ export function destIsResolvable(dest)
 };
 
 /**
+ * After "… ms", aredn-traceroute may have optional GPS then link type
+ * (DtD / RF / WG / Xlink / -). Stock traceroute has nothing here.
+ */
+function parseLinkTypeAfterMs(rest)
+{
+    rest = trim(rest || "");
+    if (!rest) {
+        return null;
+    }
+    /* Skip optional lat,lon from -gps. */
+    let m = match(rest, /^([0-9.+-]+,[0-9.+-]+) +(.*)$/);
+    if (m) {
+        rest = m[2];
+    }
+    m = match(rest, /^(DtD|RF|WG|Xlink|-)(\s|$)/);
+    if (m) {
+        return m[1];
+    }
+    return null;
+};
+
+/**
  * Parse a hop line from BusyBox traceroute or aredn-traceroute enrichment.
- * Returns null if not a hop line.
+ * Returns null if not a hop line. Sets linkType when aredn-traceroute
+ * appended DtD/RF/WG/Xlink (or "-").
  */
 export function parseHopLine(line)
 {
@@ -109,23 +132,25 @@ export function parseHopLine(line)
     if (m) {
         return { hop: int(m[1]), unreachable: true };
     }
-    m = match(line, /^([0-9]+) +([^ ]+) \(([0-9.]+)\) +([0-9.]+) +ms/);
+    m = match(line, /^([0-9]+) +([^ ]+) \(([0-9.]+)\) +([0-9.]+) +ms(.*)$/);
     if (m) {
         return {
             hop: int(m[1]),
             hostname: m[2],
             ip: m[3],
             rtt: m[4],
+            linkType: parseLinkTypeAfterMs(m[5]),
             unreachable: false
         };
     }
-    m = match(line, /^([0-9]+) +([0-9.]+) +([0-9.]+) +ms/);
+    m = match(line, /^([0-9]+) +([0-9.]+) +([0-9.]+) +ms(.*)$/);
     if (m) {
         return {
             hop: int(m[1]),
             hostname: m[2],
             ip: m[2],
             rtt: m[3],
+            linkType: parseLinkTypeAfterMs(m[4]),
             unreachable: false
         };
     }
@@ -162,13 +187,21 @@ function hopDisplay(hop)
         return "*";
     }
     const host = shortMeshName(hop.hostname);
+    let label;
     if (host && hop.ip && host !== hop.ip) {
-        return `${host} (${hop.ip})`;
+        label = `${host} (${hop.ip})`;
     }
-    if (hop.ip) {
-        return hop.ip;
+    else if (hop.ip) {
+        label = hop.ip;
     }
-    return host || "*";
+    else {
+        label = host || "*";
+    }
+    /* Link type from aredn-traceroute only; not part of path identity. */
+    if (hop.linkType) {
+        label = `${label} ${hop.linkType}`;
+    }
+    return label;
 };
 
 function rttNumber(hop)
