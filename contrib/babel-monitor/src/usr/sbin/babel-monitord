@@ -20,6 +20,19 @@ samplelib.refreshIdentity(store);
 let sample_timer = null;
 let peak_timer = null;
 
+function readDaemonRssKb()
+{
+    const raw = fs.readfile("/proc/self/status");
+    if (!raw) {
+        return null;
+    }
+    const m = match(raw, /VmRSS:\s+([0-9]+)/);
+    if (!m) {
+        return null;
+    }
+    return int(m[1]);
+}
+
 function metaObj()
 {
     const oldest = storelib.oldestSample(store);
@@ -44,7 +57,8 @@ function metaObj()
         enabled: cfg.enabled ? "on" : "off",
         sync_limit: cfg.sync_limit,
         compress_min_bytes: cfg.compress_min_bytes,
-        rss_estimate_bytes: storelib.estimateBytes(store)
+        rss_estimate_bytes: storelib.estimateBytes(store),
+        daemon_rss_kb: readDaemonRssKb()
     };
 }
 

@@ -4,7 +4,7 @@ Side-loaded AREDN APK that keeps Babel / LQM / arednlink metrics in RAM, exposes
 stateless JSON pull API for external historians, a public status page, and a
 live-config CLI.
 
-- Package: `babel-monitor-0.1.17-r0.apk`
+- Package: `babel-monitor-0.1.23-r0.apk`
 - Daemon: `babel-monitord`
 - CLI: `babel-monitor`
 - Status UI: `/babel-monitor/`
@@ -18,7 +18,7 @@ cd contrib/babel-monitor
 ./build.sh
 ```
 
-APK lands in `dist/babel-monitor-0.1.17-r0.apk`.
+APK lands in `dist/babel-monitor-0.1.23-r0.apk`.
 
 ## Install on a node
 
@@ -31,7 +31,7 @@ From the work-area root (after configuring `install_package_remotely.conf`):
 Or copy the APK and:
 
 ```sh
-apk add --allow-untrusted /tmp/babel-monitor-0.1.17-r0.apk
+apk add --allow-untrusted /tmp/babel-monitor-0.1.23-r0.apk
 ```
 
 ## On-node storage
@@ -95,7 +95,7 @@ Wire samples (sync/series/live) use named fields. Internally the ring stores pac
 | `tx_retries_delta` / `tx_fail_delta` | LQM TX retry/fail Δ (mainly RF) |
 | `links` | Present when link I/O exists: label → `[tx_delta, rx_delta]` (capped at 12; `br0.N` labeled `X-Link(N)`) |
 
-`mem_total_kb` is on `?api=meta` / live `meta` (nearly constant), not repeated per sample.
+`mem_total_kb` and `daemon_rss_kb` (babel-monitord VmRSS from `/proc/self`) are on `?api=meta` / live `meta` only — not stored in the sample ring. `rss_estimate_bytes` remains a packed-ring size heuristic.
 
 Live neighbors also include `tx_packets_delta` / `rx_packets_delta` per neighbor (iface or LQM station). Xlink ifaces `br0.N` display as `X-Link(N)`.
 

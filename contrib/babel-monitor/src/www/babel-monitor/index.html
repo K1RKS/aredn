@@ -40,6 +40,7 @@
     border-radius: 6px;
     padding: 10px 12px;
     min-width: 110px;
+    cursor: help;
   }
   .kpi .v { font-size: 1.25rem; font-weight: 600; }
   .kpi .l { color: var(--muted); font-size: 11px; margin-top: 2px; }
@@ -146,7 +147,7 @@
       <button type="button" data-metric="cost">Cost</button>
       <button type="button" data-metric="neighbors">Neighbors</button>
       <button type="button" data-metric="routes">Routes</button>
-      <button type="button" data-metric="links">Links</button>
+      <button type="button" data-metric="links">Packets</button>
       <button type="button" data-metric="linkio">Link I/O</button>
       <button type="button" data-metric="hosts">Hosts</button>
       <button type="button" data-metric="cpu">CPU</button>
@@ -218,7 +219,7 @@
       minY: 0
     },
     links: {
-      label: "Links",
+      label: "Packets",
       series: [
         { key: "tx_packets_delta", label: "TX Δ", color: PALETTE[0] },
         { key: "rx_packets_delta", label: "RX Δ", color: PALETTE[2] },
@@ -474,6 +475,21 @@
     el.textContent = msg;
   }
 
+  function escAttr(s) {
+    return String(s)
+      .replace(/&/g, "&amp;")
+      .replace(/"/g, "&quot;")
+      .replace(/</g, "&lt;");
+  }
+
+  function fmtRss(kb) {
+    if (kb == null || kb === "") return "—";
+    const n = Number(kb);
+    if (n !== n) return "—";
+    if (n >= 1024) return (n / 1024).toFixed(1) + " MB";
+    return n + " KB";
+  }
+
   function renderKpis(live) {
     const m = live.meta || {};
     const s = live.latest || {};
@@ -484,26 +500,46 @@
       (m.hostname || "?") + " · " + (m.node_id || "?") +
       " · boot " + (m.boot_id || "?") +
       " · " + (m.package_version || "");
+    /* [label, value, title] — titles explain the latest sample */
     const items = [
-      ["Neighbors", s.neighbor_count ?? "—"],
-      ["Routable", s.routable_count ?? "—"],
-      ["Mean LQ", s.mean_lq != null ? s.mean_lq + "%" : "—"],
-      ["Mean cost", s.mean_cost ?? "—"],
-      ["TX Δ", s.tx_packets_delta ?? "—"],
-      ["RX Δ", s.rx_packets_delta ?? "—"],
-      ["Retry Δ", s.tx_retries_delta ?? "—"],
-      ["Fail Δ", s.tx_fail_delta ?? "—"],
-      ["CPU", s.cpu_pct != null ? s.cpu_pct + "%" : "—"],
-      ["CPU peak", s.cpu_peak_pct != null ? s.cpu_peak_pct + "%" : "—"],
-      ["RAM used", s.mem_used_pct != null ? s.mem_used_pct + "%" : "—"],
-      ["Uptime", s.uptime_s != null ? s.uptime_s + "s" : "—"],
-      ["Hosts", s.host_count ?? "—"],
-      ["Samples", (m.sample_count ?? 0) + "/" + (m.sample_cap ?? 0)],
-      ["LQM", s.lqm_ok ? "ok" : "—"],
-      ["Babel", s.babel_ok ? "ok" : "—"]
+      ["Neighbors", s.neighbor_count ?? "—",
+        "Babel neighbors currently heard on this node"],
+      ["Routable", s.routable_count ?? "—",
+        "Neighbors Babel currently considers routable"],
+      ["Mean LQ", s.mean_lq != null ? s.mean_lq + "%" : "—",
+        "Average link quality across Babel neighbors (from reachability bits)"],
+      ["Mean cost", s.mean_cost ?? "—",
+        "Average Babel cost across neighbors (lower is better; 65535 = unreachable)"],
+      ["TX Δ", s.tx_packets_delta ?? "—",
+        "Transmit packets counted since the previous sample (all mesh links)"],
+      ["RX Δ", s.rx_packets_delta ?? "—",
+        "Receive packets counted since the previous sample (all mesh links)"],
+      ["Retry Δ", s.tx_retries_delta ?? "—",
+        "Wireless TX retries since the previous sample"],
+      ["Fail Δ", s.tx_fail_delta ?? "—",
+        "Wireless TX failures since the previous sample"],
+      ["CPU", s.cpu_pct != null ? s.cpu_pct + "%" : "—",
+        "CPU busy percent over the last sample interval"],
+      ["CPU peak", s.cpu_peak_pct != null ? s.cpu_peak_pct + "%" : "—",
+        "Highest short-window CPU busy % seen since the previous sample"],
+      ["RAM used", s.mem_used_pct != null ? s.mem_used_pct + "%" : "—",
+        "System memory in use (percent of total RAM)"],
+      ["Self RSS", fmtRss(m.daemon_rss_kb),
+        "babel-monitord resident memory (VmRSS from /proc/self)"],
+      ["Uptime", s.uptime_s != null ? s.uptime_s + "s" : "—",
+        "Node uptime when this sample was taken"],
+      ["Hosts", s.host_count ?? "—",
+        "Host entries published via arednlink on this node"],
+      ["Samples", (m.sample_count ?? 0) + "/" + (m.sample_cap ?? 0),
+        "History ring fill: samples stored / maximum capacity"],
+      ["LQM", s.lqm_ok ? "ok" : "—",
+        "Link Quality Manager data was readable for this sample"],
+      ["Babel", s.babel_ok ? "ok" : "—",
+        "Babel neighbor dump was readable for this sample"]
     ];
     $("kpis").innerHTML = items.map(function (it) {
-      return '<div class="kpi"><div class="v">' + it[1] + '</div><div class="l">' + it[0] + '</div></div>';
+      return '<div class="kpi" title="' + escAttr(it[2]) + '"><div class="v">' +
+        it[1] + '</div><div class="l">' + it[0] + "</div></div>";
     }).join("");
   }
 
@@ -793,29 +829,29 @@
     }
 
     /* Markers after all strokes so underneath series stay visible when values match */
+    function drawMark(x, y, color) {
+      ctx.beginPath();
+      ctx.arc(x, y, 4, 0, Math.PI * 2);
+      ctx.fillStyle = "#f4f6f8";
+      ctx.fill();
+      ctx.beginPath();
+      ctx.arc(x, y, 3, 0, Math.PI * 2);
+      ctx.fillStyle = color;
+      ctx.fill();
+      ctx.strokeStyle = "#15181c";
+      ctx.lineWidth = 1;
+      ctx.stroke();
+    }
     for (let mi = 0; mi < markerPasses.length; mi++) {
       const pass = markerPasses[mi];
       const pts = pass.pts;
       const step = pts.length > 90 ? 3 : (pts.length > 45 ? 2 : 1);
       for (let pi = 0; pi < pts.length; pi += step) {
-        const p = pts[pi];
-        ctx.beginPath();
-        ctx.arc(p.x, p.y, 2.75, 0, Math.PI * 2);
-        ctx.fillStyle = pass.color;
-        ctx.fill();
-        ctx.strokeStyle = "#15181c";
-        ctx.lineWidth = 1;
-        ctx.stroke();
+        drawMark(pts[pi].x, pts[pi].y, pass.color);
       }
       if ((pts.length - 1) % step !== 0) {
         const p = pts[pts.length - 1];
-        ctx.beginPath();
-        ctx.arc(p.x, p.y, 2.75, 0, Math.PI * 2);
-        ctx.fillStyle = pass.color;
-        ctx.fill();
-        ctx.strokeStyle = "#15181c";
-        ctx.lineWidth = 1;
-        ctx.stroke();
+        drawMark(p.x, p.y, pass.color);
       }
     }
 

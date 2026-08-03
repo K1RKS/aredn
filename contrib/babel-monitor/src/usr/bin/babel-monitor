@@ -45,6 +45,7 @@ function printStatus(resp)
     print(sprintf("  samples            %s / %s\n", st.sample_count, st.sample_cap));
     print(sprintf("  newest_seq         %s\n", st.newest_seq || 0));
     print(sprintf("  retention_s        %s\n", st.retention_s || 0));
+    print(sprintf("  daemon_rss_kb      %s\n", st.daemon_rss_kb != null ? st.daemon_rss_kb : "—"));
     print(sprintf("  rss_estimate       %s bytes\n", st.rss_estimate_bytes || 0));
     return 0;
 }
