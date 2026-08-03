@@ -13,6 +13,7 @@
     --line: #3a424d;
     --accent: #5b9fd4;
     --ok: #6fbf73;
+    --warn: #d4a84b;
     --bad: #d97b7b;
   }
   * { box-sizing: border-box; }
@@ -44,6 +45,10 @@
   }
   .kpi .v { font-size: 1.25rem; font-weight: 600; }
   .kpi .l { color: var(--muted); font-size: 11px; margin-top: 2px; }
+  .kpi.ok { border-color: var(--ok); }
+  .kpi.ok .v { color: var(--ok); }
+  .kpi.warn { border-color: var(--warn); }
+  .kpi.warn .v { color: var(--warn); }
   section {
     background: var(--panel);
     border: 1px solid var(--line);
@@ -59,6 +64,7 @@
   }
   .tabs.metric { margin-bottom: 10px; }
   .tabs.time { margin-top: 10px; }
+  .tabs.syslog-ctl { margin-top: 10px; }
   .tabs button {
     background: transparent;
     color: var(--muted);
@@ -69,6 +75,21 @@
   }
   .tabs button.active { color: var(--fg); border-color: var(--accent); }
   .chart-wrap { position: relative; }
+  .syslog-wrap { margin-top: 0; }
+  .syslog-box {
+    height: 280px;
+    overflow-y: auto;
+    margin: 0;
+    padding: 10px 12px;
+    background: #1a1d23;
+    border: 1px solid var(--line);
+    border-radius: 4px;
+    font: 11px/1.45 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    color: var(--fg);
+    white-space: pre-wrap;
+    word-break: break-word;
+  }
+  .syslog-empty { color: var(--muted); }
   .legend {
     display: flex;
     flex-wrap: wrap;
@@ -153,17 +174,24 @@
       <button type="button" data-metric="cpu">CPU</button>
       <button type="button" data-metric="ram">RAM</button>
       <button type="button" data-metric="rf">RF</button>
+      <button type="button" data-metric="syslog">Syslog</button>
     </div>
-    <div class="chart-wrap">
+    <div class="chart-wrap" id="chartWrap">
       <div class="legend" id="legend"></div>
       <canvas id="chart" width="1000" height="210"></canvas>
       <div class="chart-tip" id="chartTip" hidden></div>
+    </div>
+    <div class="syslog-wrap" id="syslogWrap" hidden>
+      <pre class="syslog-box" id="syslogBox"><span class="syslog-empty">Loading syslog…</span></pre>
     </div>
     <div class="tabs time" id="timeTabs" role="tablist" aria-label="Time range">
       <button type="button" data-sec="300" class="active">5m</button>
       <button type="button" data-sec="1800">30m</button>
       <button type="button" data-sec="3600">1h</button>
       <button type="button" data-sec="14400">4h</button>
+    </div>
+    <div class="tabs syslog-ctl" id="syslogControls" hidden>
+      <button type="button" id="syslogPauseBtn">Pause</button>
     </div>
   </section>
   <section>
@@ -276,8 +304,58 @@
   let memTotalKb = null;
   let tickBusy = false;
   let failStreak = 0;
+  let syslogPaused = false;
+  let syslogBusy = false;
 
   function $(id) { return document.getElementById(id); }
+
+  function isSyslog() { return metricId === "syslog"; }
+
+  function syncSyslogPauseBtn() {
+    const b = $("syslogPauseBtn");
+    if (!b) return;
+    b.textContent = syslogPaused ? "Auto" : "Pause";
+    b.classList.toggle("active", !syslogPaused);
+  }
+
+  function updateHistoryMode() {
+    const sys = isSyslog();
+    $("chartWrap").hidden = sys;
+    $("syslogWrap").hidden = !sys;
+    $("timeTabs").hidden = sys;
+    $("syslogControls").hidden = !sys;
+    if (sys) {
+      hideTip();
+      syncSyslogPauseBtn();
+    }
+  }
+
+  function renderSyslog(lines) {
+    const box = $("syslogBox");
+    if (!lines || !lines.length) {
+      box.textContent = "";
+      const span = document.createElement("span");
+      span.className = "syslog-empty";
+      span.textContent = "No syslog lines";
+      box.appendChild(span);
+      return;
+    }
+    box.textContent = lines.join("\n");
+    if (!syslogPaused) {
+      box.scrollTop = box.scrollHeight;
+    }
+  }
+
+  async function refreshSyslog() {
+    if (syslogBusy) return;
+    syslogBusy = true;
+    try {
+      const data = await getJsonRetry(API + "?api=syslog&limit=50");
+      renderSyslog(data.lines || []);
+    } finally {
+      syslogBusy = false;
+    }
+  }
 
   function formatIface(iface) {
     if (!iface) return "—";
@@ -490,6 +568,21 @@
     return n + " KB";
   }
 
+  function fmtUptime(sec) {
+    if (sec == null || sec === "") return "—";
+    let n = Math.floor(Number(sec));
+    if (n !== n || n < 0) return "—";
+    const days = Math.floor(n / 86400);
+    n %= 86400;
+    const h = Math.floor(n / 3600);
+    n %= 3600;
+    const m = Math.floor(n / 60);
+    const s = n % 60;
+    function pad(v) { return v < 10 ? "0" + v : String(v); }
+    const hms = pad(h) + ":" + pad(m) + ":" + pad(s);
+    return days > 0 ? days + "D " + hms : hms;
+  }
+
   function renderKpis(live) {
     const m = live.meta || {};
     const s = live.latest || {};
@@ -499,7 +592,9 @@
     $("identity").textContent =
       (m.hostname || "?") + " · " + (m.node_id || "?") +
       " · boot " + (m.boot_id || "?") +
-      " · " + (m.package_version || "");
+      " · " + (m.package_version || "") +
+      " · Uptime " + fmtUptime(s.uptime_s);
+    document.title = (m.hostname || "?") + " · babel-monitor";
     /* [label, value, title] — titles explain the latest sample */
     const items = [
       ["Neighbors", s.neighbor_count ?? "—",
@@ -526,20 +621,21 @@
         "System memory in use (percent of total RAM)"],
       ["Self RSS", fmtRss(m.daemon_rss_kb),
         "babel-monitord resident memory (VmRSS from /proc/self)"],
-      ["Uptime", s.uptime_s != null ? s.uptime_s + "s" : "—",
-        "Node uptime when this sample was taken"],
       ["Hosts", s.host_count ?? "—",
         "Host entries published via arednlink on this node"],
       ["Samples", (m.sample_count ?? 0) + "/" + (m.sample_cap ?? 0),
         "History ring fill: samples stored / maximum capacity"],
-      ["LQM", s.lqm_ok ? "ok" : "—",
-        "Link Quality Manager data was readable for this sample"],
-      ["Babel", s.babel_ok ? "ok" : "—",
-        "Babel neighbor dump was readable for this sample"]
+      ["LQM", s.lqm_ok ? "ok" : "not ok",
+        "Link Quality Manager data was readable for this sample",
+        s.lqm_ok ? "ok" : "warn"],
+      ["Babel", s.babel_ok ? "ok" : "not ok",
+        "Babel neighbor dump was readable for this sample",
+        s.babel_ok ? "ok" : "warn"]
     ];
     $("kpis").innerHTML = items.map(function (it) {
-      return '<div class="kpi" title="' + escAttr(it[2]) + '"><div class="v">' +
-        it[1] + '</div><div class="l">' + it[0] + "</div></div>";
+      const klass = it[3] ? " " + it[3] : "";
+      return '<div class="kpi' + klass + '" title="' + escAttr(it[2]) +
+        '"><div class="v">' + it[1] + '</div><div class="l">' + it[0] + "</div></div>";
     }).join("");
   }
 
@@ -724,6 +820,7 @@
   }
 
   function drawChart() {
+    if (isSyslog()) return;
     const metric = resolveMetric();
     renderLegend(metric);
     const c = $("chart");
@@ -885,6 +982,7 @@
   }
 
   function onChartMove(ev) {
+    if (isSyslog()) return;
     const c = $("chart");
     const rect = c.getBoundingClientRect();
     const idx = indexFromCanvasX(ev.clientX - rect.left, rect.width);
@@ -929,7 +1027,11 @@
     tickBusy = true;
     try {
       await refreshLive();
-      await refreshSeries();
+      if (isSyslog()) {
+        if (!syslogPaused) await refreshSyslog();
+      } else {
+        await refreshSeries();
+      }
       failStreak = 0;
       setErr(null);
     } catch (e) {
@@ -957,10 +1059,21 @@
     metricId = b.getAttribute("data-metric") || "lq";
     hoverIdx = -1;
     hideTip();
-    drawChart();
+    updateHistoryMode();
+    if (isSyslog()) {
+      if (!syslogPaused) {
+        refreshSyslog().catch(function (e) {
+          failStreak++;
+          if (failStreak >= 2) setErr(e.message);
+        });
+      }
+    } else {
+      drawChart();
+    }
   });
 
   bindTabGroup("timeTabs", function (b) {
+    if (isSyslog()) return;
     windowSec = parseInt(b.getAttribute("data-sec"), 10);
     hoverIdx = -1;
     hideTip();
@@ -970,12 +1083,24 @@
     });
   });
 
+  $("syslogPauseBtn").addEventListener("click", function () {
+    syslogPaused = !syslogPaused;
+    syncSyslogPauseBtn();
+    if (!syslogPaused) {
+      refreshSyslog().catch(function (e) {
+        failStreak++;
+        if (failStreak >= 2) setErr(e.message);
+      });
+    }
+  });
+
   (function bindChartHover() {
     const c = $("chart");
     c.addEventListener("mousemove", onChartMove);
     c.addEventListener("mouseleave", onChartLeave);
   })();
 
+  updateHistoryMode();
   tick();
   setInterval(tick, 10000);
 })();

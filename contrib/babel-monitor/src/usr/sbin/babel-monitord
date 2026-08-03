@@ -33,6 +33,22 @@ function readDaemonRssKb()
     return int(m[1]);
 }
 
+/** Last N syslog lines via logread (not stored in the sample ring). */
+function readSyslogLines(limit)
+{
+    const n = common.clampInt(limit, 1, 200, 50);
+    const lines = [];
+    const p = fs.popen(sprintf("logread -l %d 2>/dev/null", n));
+    if (!p) {
+        return lines;
+    }
+    for (let line = p.read("line"); length(line); line = p.read("line")) {
+        push(lines, trim(line));
+    }
+    p.close();
+    return lines;
+}
+
 function metaObj()
 {
     const oldest = storelib.oldestSample(store);
@@ -130,6 +146,14 @@ function handleRequest(line)
             boot_id: store.boot_id,
             seconds: sec,
             samples: storelib.seriesWindow(store, sec)
+        };
+    }
+    if (cmd === "syslog") {
+        const limit = common.clampInt(args.limit || 50, 1, 200, 50);
+        return {
+            boot_id: store.boot_id,
+            limit: limit,
+            lines: readSyslogLines(limit)
         };
     }
     if (cmd === "get") {
