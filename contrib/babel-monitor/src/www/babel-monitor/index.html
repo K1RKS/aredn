@@ -51,7 +51,13 @@
     margin-bottom: 14px;
   }
   section h2 { margin: 0 0 10px; font-size: 0.95rem; }
-  .tabs { display: flex; gap: 6px; margin-bottom: 10px; }
+  .tabs {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+  }
+  .tabs.metric { margin-bottom: 10px; }
+  .tabs.time { margin-top: 10px; }
   .tabs button {
     background: transparent;
     color: var(--muted);
@@ -61,13 +67,27 @@
     cursor: pointer;
   }
   .tabs button.active { color: var(--fg); border-color: var(--accent); }
-  canvas { width: 100%; height: 160px; display: block; background: #15181c; border-radius: 4px; }
+  .chart-wrap { position: relative; }
+  .legend {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px 14px;
+    margin: 0 0 8px;
+    font-size: 11px;
+    color: var(--muted);
+  }
+  .legend span { display: inline-flex; align-items: center; gap: 6px; }
+  .legend i {
+    display: inline-block;
+    width: 12px;
+    height: 3px;
+    border-radius: 1px;
+  }
+  canvas { width: 100%; height: 180px; display: block; background: #15181c; border-radius: 4px; }
   table { width: 100%; border-collapse: collapse; font-size: 13px; }
   th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--line); }
   th { color: var(--muted); font-weight: 600; font-size: 11px; }
   .err { color: var(--bad); padding: 12px 18px; }
-  .okdot { color: var(--ok); }
-  .baddot { color: var(--bad); }
 </style>
 </head>
 <body>
@@ -80,12 +100,26 @@
   <div class="row" id="kpis"></div>
   <section>
     <h2>History</h2>
-    <div class="tabs" id="tabs">
-      <button data-sec="300" class="active">5m</button>
-      <button data-sec="1800">30m</button>
-      <button data-sec="86400">24h</button>
+    <div class="tabs metric" id="metricTabs" role="tablist" aria-label="Metric">
+      <button type="button" data-metric="lq" class="active">LQ</button>
+      <button type="button" data-metric="cost">Cost</button>
+      <button type="button" data-metric="neighbors">Neighbors</button>
+      <button type="button" data-metric="routes">Routes</button>
+      <button type="button" data-metric="links">Links</button>
+      <button type="button" data-metric="hosts">Hosts</button>
+      <button type="button" data-metric="cpu">CPU</button>
+      <button type="button" data-metric="ram">RAM</button>
+      <button type="button" data-metric="rf">RF</button>
     </div>
-    <canvas id="chart" width="1000" height="160"></canvas>
+    <div class="chart-wrap">
+      <div class="legend" id="legend"></div>
+      <canvas id="chart" width="1000" height="180"></canvas>
+    </div>
+    <div class="tabs time" id="timeTabs" role="tablist" aria-label="Time range">
+      <button type="button" data-sec="300" class="active">5m</button>
+      <button type="button" data-sec="1800">30m</button>
+      <button type="button" data-sec="86400">24h</button>
+    </div>
   </section>
   <section>
     <h2>Neighbors (live)</h2>
@@ -102,7 +136,87 @@
 <script>
 (function () {
   const API = "/cgi-bin/babel-monitor";
+  const PALETTE = ["#5b9fd4", "#e0a458", "#6fbf73", "#d97b7b", "#b39ddb"];
+
+  const METRICS = {
+    lq: {
+      label: "LQ",
+      series: [
+        { key: "mean_lq", label: "mean LQ %", color: PALETTE[0] },
+        { key: "min_lq", label: "min LQ %", color: PALETTE[1] }
+      ],
+      minY: 0,
+      maxY: 100
+    },
+    cost: {
+      label: "Cost",
+      series: [
+        { key: "mean_cost", label: "mean cost", color: PALETTE[0] },
+        { key: "bad_cost_count", label: "bad cost #", color: PALETTE[3] }
+      ]
+    },
+    neighbors: {
+      label: "Neighbors",
+      series: [
+        { key: "neighbor_count", label: "neighbors", color: PALETTE[0] },
+        { key: "routable_count", label: "routable", color: PALETTE[2] }
+      ],
+      minY: 0
+    },
+    routes: {
+      label: "Routes",
+      series: [
+        { key: "route_count_20", label: "/20", color: PALETTE[0] },
+        { key: "route_count_21", label: "/21", color: PALETTE[1] },
+        { key: "route_count_22", label: "/22", color: PALETTE[2] }
+      ],
+      minY: 0
+    },
+    links: {
+      label: "Links",
+      series: [
+        { key: "tx_packets_delta", label: "TX Δ", color: PALETTE[0] },
+        { key: "tx_retries_delta", label: "retry Δ", color: PALETTE[1] },
+        { key: "tx_fail_delta", label: "fail Δ", color: PALETTE[3] }
+      ],
+      minY: 0
+    },
+    hosts: {
+      label: "Hosts",
+      series: [
+        { key: "host_count", label: "hosts", color: PALETTE[0] },
+        { key: "host_change_delta", label: "change Δ", color: PALETTE[1] }
+      ],
+      minY: 0
+    },
+    cpu: {
+      label: "CPU",
+      series: [
+        { key: "cpu_pct", label: "CPU %", color: PALETTE[0] },
+        { key: "cpu_peak_pct", label: "peak %", color: PALETTE[3] }
+      ],
+      minY: 0,
+      maxY: 100
+    },
+    ram: {
+      label: "RAM",
+      series: [
+        { key: "mem_used_pct", label: "used %", color: PALETTE[0] }
+      ],
+      minY: 0,
+      maxY: 100
+    },
+    rf: {
+      label: "RF",
+      series: [
+        { key: "mean_snr", label: "mean SNR", color: PALETTE[0] },
+        { key: "mean_tx_bitrate", label: "TX bitrate", color: PALETTE[1] }
+      ]
+    }
+  };
+
   let windowSec = 300;
+  let metricId = "lq";
   let series = [];
 
   function $(id) { return document.getElementById(id); }
@@ -161,32 +275,89 @@
     }).join("");
   }
 
+  function renderLegend(metric) {
+    $("legend").innerHTML = metric.series.map(function (s) {
+      return '<span><i style="background:' + s.color + '"></i>' + s.label + "</span>";
+    }).join("");
+  }
+
+  function yBounds(metric, lines) {
+    let lo = metric.minY != null ? metric.minY : Infinity;
+    let hi = metric.maxY != null ? metric.maxY : -Infinity;
+    if (metric.minY == null || metric.maxY == null) {
+      for (let li = 0; li < lines.length; li++) {
+        const vals = lines[li];
+        for (let i = 0; i < vals.length; i++) {
+          const v = vals[i];
+          if (v == null || v !== v) continue;
+          if (metric.minY == null && v < lo) lo = v;
+          if (metric.maxY == null && v > hi) hi = v;
+        }
+      }
+    }
+    if (!isFinite(lo)) lo = 0;
+    if (!isFinite(hi) || hi <= lo) hi = lo + 1;
+    if (metric.minY != null) lo = metric.minY;
+    if (metric.maxY != null) hi = Math.max(metric.maxY, hi);
+    return { lo: lo, hi: hi };
+  }
+
   function drawChart() {
+    const metric = METRICS[metricId] || METRICS.lq;
+    renderLegend(metric);
     const c = $("chart");
     const ctx = c.getContext("2d");
     const w = c.width, h = c.height;
+    const padL = 44, padR = 12, padT = 14, padB = 22;
     ctx.clearRect(0, 0, w, h);
     ctx.strokeStyle = "#3a424d";
     ctx.beginPath();
-    ctx.moveTo(40, 10); ctx.lineTo(40, h - 20); ctx.lineTo(w - 10, h - 20);
+    ctx.moveTo(padL, padT);
+    ctx.lineTo(padL, h - padB);
+    ctx.lineTo(w - padR, h - padB);
     ctx.stroke();
+
     if (!series.length) {
       ctx.fillStyle = "#9aa3ad";
-      ctx.fillText("No samples in window", 50, h / 2);
+      ctx.fillText("No samples in window", padL + 10, h / 2);
       return;
     }
-    const vals = series.map(function (s) { return s.mean_lq || 0; });
-    const max = Math.max(100, Math.max.apply(null, vals));
-    ctx.strokeStyle = "#5b9fd4";
-    ctx.beginPath();
-    for (let i = 0; i < series.length; i++) {
-      const x = 40 + (i / Math.max(1, series.length - 1)) * (w - 55);
-      const y = (h - 20) - (vals[i] / max) * (h - 35);
-      if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
-    }
-    ctx.stroke();
+
+    const lines = metric.series.map(function (s) {
+      return series.map(function (row) {
+        const v = row[s.key];
+        return v == null ? null : Number(v);
+      });
+    });
+    const bounds = yBounds(metric, lines);
+    const span = bounds.hi - bounds.lo;
+
     ctx.fillStyle = "#9aa3ad";
-    ctx.fillText("mean LQ %", 48, 18);
+    ctx.font = "11px ui-sans-serif, system-ui, sans-serif";
+    ctx.fillText(String(bounds.hi), 4, padT + 8);
+    ctx.fillText(String(bounds.lo), 4, h - padB);
+
+    const n = series.length;
+    for (let si = 0; si < metric.series.length; si++) {
+      const spec = metric.series[si];
+      const vals = lines[si];
+      ctx.strokeStyle = spec.color;
+      ctx.lineWidth = 1.5;
+      ctx.beginPath();
+      let started = false;
+      for (let i = 0; i < n; i++) {
+        const v = vals[i];
+        if (v == null || v !== v) {
+          started = false;
+          continue;
+        }
+        const x = padL + (i / Math.max(1, n - 1)) * (w - padL - padR);
+        const y = (h - padB) - ((v - bounds.lo) / span) * (h - padT - padB);
+        if (!started) { ctx.moveTo(x, y); started = true; }
+        else ctx.lineTo(x, y);
+      }
+      ctx.stroke();
+    }
   }
 
   async function refreshLive() {
@@ -211,12 +382,23 @@
     }
   }
 
-  document.getElementById("tabs").addEventListener("click", function (ev) {
-    const b = ev.target.closest("button");
-    if (!b) return;
-    [].forEach.call(document.querySelectorAll("#tabs button"), function (x) {
-      x.classList.toggle("active", x === b);
+  function bindTabGroup(id, onPick) {
+    $(id).addEventListener("click", function (ev) {
+      const b = ev.target.closest("button");
+      if (!b || !$(id).contains(b)) return;
+      [].forEach.call($(id).querySelectorAll("button"), function (x) {
+        x.classList.toggle("active", x === b);
+      });
+      onPick(b);
     });
+  }
+
+  bindTabGroup("metricTabs", function (b) {
+    metricId = b.getAttribute("data-metric") || "lq";
+    drawChart();
+  });
+
+  bindTabGroup("timeTabs", function (b) {
     windowSec = parseInt(b.getAttribute("data-sec"), 10);
     refreshSeries().catch(function (e) { setErr(e.message); });
   });
