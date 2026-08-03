@@ -1,0 +1,37 @@
+{%
+/*
+ * Secured JSON API: /a/waterfall/e/api?action=start|stop|status|cache
+ * Admin required by AREDN /e/ routing.
+ */
+import * as wf from "waterfall";
+response.headers["Content-Type"] = "application/json";
+
+if (!auth.isAdmin) {
+    response.statusCode = 401;
+    print(sprintf("%J", { ok: false, error: "Admin authentication required" }));
+    return;
+}
+
+const q = request.env.QUERY_STRING || "";
+const mAction = match(q, /(?:^|&)action=([a-zA-Z0-9_-]+)/);
+const mIface = match(q, /(?:^|&)iface=([a-zA-Z0-9]+)/);
+const action = (request.args && request.args.action) || (mAction ? mAction[1] : "status");
+const iface = (request.args && request.args.iface) || (mIface ? mIface[1] : null);
+
+if (action === "start") {
+    print(sprintf("%J", wf.startSessionAsync(iface, 30)));
+}
+else if (action === "stop") {
+    print(sprintf("%J", wf.stopSession()));
+}
+else if (action === "cache") {
+    print(sprintf("%J", wf.readCache()));
+}
+else if (action === "status" || action === "session_status" || action === "probe") {
+    print(sprintf("%J", wf.sessionStatus(iface)));
+}
+else {
+    response.statusCode = 400;
+    print(sprintf("%J", { ok: false, error: "Unknown action", version: wf.packageVersion() }));
+}
+%}

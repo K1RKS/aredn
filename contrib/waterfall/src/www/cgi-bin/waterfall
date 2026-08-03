@@ -1,7 +1,8 @@
 #!/usr/bin/ucode
 /*
- * Waterfall CGI — status / capture for Tools → Waterfall.
- * Query: action=status|capture  [&iface=wlan0]
+ * Waterfall CGI — text + JSON API.
+ * JSON (admin cookie required): action=start|stop|status|cache
+ * Text (legacy): action=status|capture  — status is read-only; capture disrupts RF briefly
  */
 
 import * as wf from "waterfall";
@@ -11,22 +12,83 @@ const mAction = match(q, /action=([a-zA-Z0-9_-]+)/);
 const action = mAction ? mAction[1] : "status";
 const mIface = match(q, /iface=([a-zA-Z0-9]+)/);
 const iface = mIface ? mIface[1] : null;
+const mFmt = match(q, /format=([a-zA-Z0-9]+)/);
+const wantJson = (mFmt && mFmt[1] === "json") ||
+    action === "start" || action === "stop" || action === "cache" ||
+    action === "session_status" || match(q, /json=1/);
 
-print("Content-type: text/html\r\n");
-print("Cache-Control: no-store\r\n");
-print("Access-Control-Allow-Origin: *\r\n");
-print("\r\n");
-print("<html><head><title>Waterfall</title></head><body><pre>");
+function jsonOut(obj, code)
+{
+    print(`Status: ${code || 200} OK\r\n`);
+    print("Content-type: application/json\r\n");
+    print("Cache-Control: no-store\r\n");
+    print("Access-Control-Allow-Origin: *\r\n");
+    print("\r\n");
+    print(sprintf("%J", obj));
+}
 
+function htmlOut(text)
+{
+    print("Content-type: text/html\r\n");
+    print("Cache-Control: no-store\r\n");
+    print("Access-Control-Allow-Origin: *\r\n");
+    print("\r\n");
+    print("<html><head><title>Waterfall</title></head><body><pre>");
+    print(text);
+    print("</pre></body></html>\n");
+}
+
+const admin = wf.isAdminRequest();
+
+if (wantJson) {
+    if (action === "start" || action === "stop") {
+        if (!admin) {
+            jsonOut({ ok: false, error: "Admin authentication required" }, 401);
+            exit(0);
+        }
+    }
+    /* status/cache also admin-only per plan */
+    if (!admin && (action === "status" || action === "session_status" || action === "cache" || action === "probe")) {
+        jsonOut({ ok: false, error: "Admin authentication required" }, 401);
+        exit(0);
+    }
+
+    if (action === "start") {
+        jsonOut(wf.startSessionAsync(iface, 30));
+    }
+    else if (action === "stop") {
+        jsonOut(wf.stopSession());
+    }
+    else if (action === "cache") {
+        jsonOut(wf.readCache());
+    }
+    else if (action === "status" || action === "session_status" || action === "probe") {
+        jsonOut(wf.sessionStatus(iface));
+    }
+    else if (action === "capture") {
+        if (!admin) {
+            jsonOut({ ok: false, error: "Admin authentication required" }, 401);
+            exit(0);
+        }
+        jsonOut(wf.captureSpectral(iface));
+    }
+    else {
+        jsonOut({ ok: false, error: "Unknown action", version: wf.packageVersion() }, 400);
+    }
+    exit(0);
+}
+
+/* Text HTML responses */
 if (action === "capture") {
-    print(wf.formatCaptureReport(wf.captureSpectral(iface)));
+    if (!admin) {
+        htmlOut("Admin authentication required\n");
+        exit(0);
+    }
+    htmlOut(wf.formatCaptureReport(wf.captureSpectral(iface)));
 }
 else if (action === "status" || action === "probe") {
-    print(wf.formatProbeReport(wf.probeCapability(iface)));
+    htmlOut(wf.formatProbeReport(wf.probeCapability(iface)));
 }
 else {
-    print(`waterfall ${wf.packageVersion()}\n`);
-    print("Unknown action. Use action=status or action=capture\n");
+    htmlOut(`waterfall ${wf.packageVersion()}\nUnknown action.\n`);
 }
-
-print("</pre></body></html>\n");

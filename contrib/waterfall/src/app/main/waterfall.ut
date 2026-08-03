@@ -1,0 +1,98 @@
+{%
+/*
+ * Dedicated admin Waterfall page — /a/waterfall
+ * Full HTML document (package cannot hook app.ut page switcher).
+ */
+%}
+{%
+import * as wf from "waterfall";
+const nodename = configuration.getName();
+if (!auth.isAdmin) {
+    response.statusCode = 401;
+%}
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>{{nodename}} waterfall</title>
+    <link href="/a/css/theme.css" rel="stylesheet">
+    <link href="/a/css/admin.css" rel="stylesheet">
+</head>
+<body>
+    <div style="max-width:40rem;margin:2rem auto;padding:1rem">
+        <h1>Waterfall</h1>
+        <p>Admin login required. Spectral capture disrupts RF and is restricted to administrators.</p>
+        <p><a href="/a/status">Go to Status / login</a></p>
+    </div>
+</body>
+</html>
+{%
+    return;
+}
+const cap = wf.probeCapability();
+const supported = !!cap.supported;
+const unsupportedMsg = cap.unsupported_message || "Waterfall is not supported on this hardware.";
+%}
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>{{nodename}} waterfall</title>
+    <link href="/a/css/theme.css" rel="stylesheet">
+    <link href="/a/css/admin.css" rel="stylesheet">
+    <style>
+        body { margin: 0; background: #1a1a1a; color: #e8e8e8; }
+        #waterfall-page { max-width: 960px; margin: 0 auto; padding: 16px 16px 32px; }
+        .wf-canvas { width: 100%; background: #000; border-radius: 4px; display: block; }
+        .wf-status { margin: 8px 0; font-size: 0.9em; min-height: 1.2em; opacity: 0.9; }
+        .wf-banner { margin: 10px 0 12px; opacity: 0.9; max-width: 52rem; line-height: 1.4; }
+        .wf-err { margin: 12px 0; padding: 10px 12px; border: 1px solid #a44; background: #2a1515; color: #f0c0c0; border-radius: 4px; }
+        .wf-actions { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin-top: 8px; }
+        button { cursor: pointer; }
+    </style>
+</head>
+<body class="authenticated">
+<div id="waterfall-page">
+    <div style="display:flex;align-items:baseline;justify-content:space-between;gap:12px;flex-wrap:wrap">
+        <h1 style="margin:0;font-size:1.4rem">Waterfall {{wf.packageVersion()}}</h1>
+        <a href="/a/status" style="color:#9cf">← Status</a>
+    </div>
+    {% if (!supported) { %}
+    <div class="wf-err">
+        <div style="font-weight:600;margin-bottom:4px">Hardware not supported</div>
+        <div>{{unsupportedMsg}}</div>
+    </div>
+    {% } else { %}
+    <p class="wf-banner">
+        Spectral capture <strong>disrupts RF for up to 30 seconds</strong>, then the radio is restored automatically.
+        Results stay in RAM only (<code>/tmp</code>). If your connection drops during capture, reconnect and reload this page to view the cached waterfall.
+    </p>
+    {% } %}
+    <div class="waterfall-tool">
+        <div class="wf-radio-row" style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin:0 0 10px">
+            <label for="wf-radio" style="font-size:0.9em">Radio</label>
+            <select id="wf-radio" class="wf-radio" style="min-width:16rem;max-width:100%;flex:1"></select>
+        </div>
+        <canvas class="wf-canvas" width="800" height="400"></canvas>
+        <div class="wf-status"></div>
+        <div class="wf-actions">
+            {% if (supported) { %}
+            <button type="button" class="wf-start">Start (30s)</button>
+            <button type="button" class="wf-stop">Stop</button>
+            {% } %}
+        </div>
+    </div>
+</div>
+<script src="/waterfall/waterfall-ui.js"></script>
+<script>
+(function () {
+    const root = document.querySelector("#waterfall-page .waterfall-tool");
+    if (root && window.WaterfallUI) {
+        WaterfallUI.mount(root, { modal: false });
+    }
+})();
+</script>
+</body>
+</html>

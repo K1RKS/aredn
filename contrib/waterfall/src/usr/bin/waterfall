@@ -1,21 +1,25 @@
 #!/usr/bin/ucode
 /*
- * waterfall CLI — probe spectral capability and optionally capture FFT dump.
+ * waterfall CLI — probe, one-shot capture, or bounded RF session.
  */
 
 import * as wf from "waterfall";
 
 function usage()
 {
-    print("Usage: waterfall [-i iface] [status|capture]\n");
-    print("  status   Probe radio chipset / spectral FFT availability (default)\n");
-    print("  capture  Trigger current-channel spectral dump to /tmp/waterfall-fft.bin\n");
-    print("  -i IFACE Prefer this wifi interface (e.g. wlan0)\n");
-    print("  -h       Show this help\n");
+    print("Usage: waterfall [-i iface] [-d secs] [status|capture|session|stop|cache]\n");
+    print("  status   Probe radio / spectral availability (default; no RF change)\n");
+    print("  capture  One-shot spectral dump (disrupts RF briefly; always disables)\n");
+    print("  session  Bounded capture (default 30s max); caches sweeps in /tmp RAM\n");
+    print("  stop     Request early session stop and force spectral disable\n");
+    print("  cache    Print cached waterfall JSON meta\n");
+    print("  -i IFACE Prefer wifi interface\n");
+    print("  -d SECS  Session duration 1-30 (default 30)\n");
 };
 
 let iface = null;
 let cmd = "status";
+let duration = 30;
 for (let i = 0; i < length(ARGV); i++) {
     const a = ARGV[i];
     if (a === "-h" || a === "--help") {
@@ -27,7 +31,12 @@ for (let i = 0; i < length(ARGV); i++) {
         iface = ARGV[i];
         continue;
     }
-    if (a === "status" || a === "probe" || a === "capture") {
+    if (a === "-d" || a === "--duration") {
+        i++;
+        duration = int(ARGV[i]);
+        continue;
+    }
+    if (a === "status" || a === "probe" || a === "capture" || a === "session" || a === "stop" || a === "cache") {
         cmd = a === "probe" ? "status" : a;
         continue;
     }
@@ -38,6 +47,26 @@ for (let i = 0; i < length(ARGV); i++) {
 
 if (cmd === "capture") {
     print(wf.formatCaptureReport(wf.captureSpectral(iface)));
+    exit(0);
+}
+if (cmd === "session") {
+    const cache = wf.runSession(iface, duration);
+    print(sprintf("%J\n", { ok: cache.ok, sweeps: length(cache.sweeps || []), meta: cache.meta, error: cache.error }));
+    exit(cache.ok ? 0 : 1);
+}
+if (cmd === "stop") {
+    print(sprintf("%J\n", wf.stopSession()));
+    exit(0);
+}
+if (cmd === "cache") {
+    const c = wf.readCache();
+    print(sprintf("%J\n", {
+        ok: c.ok,
+        have_cache: c.have_cache,
+        sweep_count: length(c.sweeps || []),
+        meta: c.meta,
+        error: c.error
+    }));
     exit(0);
 }
 print(wf.formatProbeReport(wf.probeCapability(iface)));

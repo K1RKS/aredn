@@ -1,76 +1,66 @@
 {%
 /*
- * Waterfall Tools dialog — spectral probe / capture for 5 GHz radios.
- * Primary targets: Rocket M5, PowerBeam 500 / 500 AC, hAP ac lite (5 GHz).
+ * Waterfall Tools dialog — admin RF spectral heatmap (30s bounded session).
  */
 %}
 {%
 import * as wf from "waterfall";
 const cap = wf.probeCapability();
 const supported = !!cap.supported;
-const initial = wf.formatProbeReport(cap);
 const unsupportedMsg = cap.unsupported_message || "Waterfall is not supported on this hardware.";
 %}
-<div class="dialog">
+<div class="dialog wide">
     {{_R("tool-header", { label: `Waterfall ${wf.packageVersion()}`, help: false })}}
-    <div class="simple-tool">
+    <div class="waterfall-tool" style="padding:8px 12px 12px">
         {% if (!supported) { %}
         <div class="error" style="margin:0 0 12px;padding:10px 12px;border:1px solid #a44;background:#2a1515;color:#f0c0c0;border-radius:4px">
             <div style="font-weight:600;margin-bottom:4px">Hardware not supported</div>
             <div>{{unsupportedMsg}}</div>
         </div>
         {% } else { %}
-        {{_H("Probe and capture RF spectral FFT samples on 5 GHz radios.
-        Best support: Rocket M5 and PowerBeam M5 (ath9k). PowerBeam 500 AC and hAP ac lite 5 GHz (ath10k / QCA9887) are experimental.
-        On dual-band boards (hAP ac lite) the tool auto-selects the 5 GHz radio.
-        Capture writes a raw dump to /tmp/waterfall-fft.bin — waterfall heatmap display comes later.")}}
+        <div style="margin:0 0 8px;font-size:0.9em;opacity:0.9">
+            Spectral capture <b>disrupts RF for up to 30 seconds</b>, then the radio is restored automatically.
+            Results are cached in RAM (<code>/tmp</code>). If you lose the link, reconnect and reopen this tool to view the waterfall.
+        </div>
         {% } %}
-        <div class="cols">
-            <div class="tool-console waterfall">
-                <pre>{{initial}}</pre>
-            </div>
+        <div class="wf-radio-row" style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin:0 0 8px">
+            <label style="font-size:0.9em">Radio</label>
+            <select class="wf-radio" style="min-width:14rem;max-width:100%;flex:1"></select>
+        </div>
+        <canvas class="wf-canvas" style="width:100%;background:#000;border-radius:4px;display:block"></canvas>
+        <div class="wf-status" style="margin:8px 0;font-size:0.85em;min-height:1.2em;opacity:0.9"></div>
+        <div class="cols" style="gap:8px;align-items:center">
             <div>
-                <button id="waterfall-status">Status</button>
                 {% if (supported) { %}
-                <button id="waterfall-capture">Capture</button>
+                <button class="wf-start">Start (30s)</button>
+                <button class="wf-stop">Stop</button>
                 {% } %}
-                <button id="waterfall-close" class="ui-action">Close</button>
+                <button class="wf-close ui-action">Close</button>
             </div>
+            <div style="flex:1"></div>
+            <a href="/a/waterfall" target="_blank" rel="noopener" style="font-size:0.85em">Open full page</a>
         </div>
     </div>
     <script>
     (function () {
-        const con = htmx.find(".tool-console.waterfall pre");
-        const supported = {{supported ? "true" : "false"}};
-        function out(text) {
-            if (con) {
-                con.innerText = text || "";
+        const root = document.querySelector(".waterfall-tool");
+        function mount() {
+            if (root && window.WaterfallUI) {
+                WaterfallUI.mount(root, { modal: true });
             }
         }
-        async function run(action) {
-            out(`waterfall: ${action}…`);
-            try {
-                const r = await fetch(`/cgi-bin/waterfall?action=${action}`, { cache: "no-store" });
-                const t = await r.text();
-                const m = t.match(/<pre>([\s\S]*?)<\/pre>/i);
-                out(m ? m[1] : t);
-            }
-            catch (e) {
-                out(`Error: ${e}`);
-            }
+        if (window.WaterfallUI) {
+            mount();
+            return;
         }
-        const statusBtn = htmx.find("#waterfall-status");
-        const captureBtn = htmx.find("#waterfall-capture");
-        const closeBtn = htmx.find("#waterfall-close");
-        if (statusBtn) {
-            statusBtn.addEventListener("click", () => run("status"));
-        }
-        if (captureBtn && supported) {
-            captureBtn.addEventListener("click", () => run("capture"));
-        }
-        if (closeBtn) {
-            closeBtn.addEventListener("click", () => htmx.find("#ctrl-modal").innerHTML = "");
-        }
+        const s = document.createElement("script");
+        s.src = "/waterfall/waterfall-ui.js";
+        s.onload = mount;
+        s.onerror = function () {
+            const st = root && root.querySelector(".wf-status");
+            if (st) st.textContent = "Failed to load waterfall-ui.js";
+        };
+        document.head.appendChild(s);
     })();
     </script>
 </div>
