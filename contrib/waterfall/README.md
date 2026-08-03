@@ -7,19 +7,20 @@ AREDN **RF spectrum waterfall** focused on **5 GHz** radios. Primary targets:
 - **PowerBeam 500 AC** (PBE-5AC-500) — ath10k FFT experimental
 - MikroTik **hAP ac lite** (RB952Ui-5ac2nD) — dual radio; auto-selects **5 GHz** (QCA9887 / ath10k, experimental). 2.4 GHz is ath9k on the SoC.
 
-## What works now (0.2.4)
+## What works now (0.2.5)
 
 - **Admin-only** Tools → Waterfall heatmap + dedicated page `/a/waterfall`
-- **30s bounded** spectral session (disrupts RF), then **always** restores the radio
-- Parsed FFT TLV sweeps cached in **RAM** (`/tmp/waterfall-cache.json`) — reload after reconnect to view
+- **Bounded** spectral session (5s–10m, default 30s; disrupts RF), then **always** restores the radio
+- Longer runs **space sweeps** (≤90) so RAM stays bounded
+- Parsed FFT TLV sweeps cached **per radio** in RAM (`/tmp/waterfall-cache-<iface>.json`) — switching radios loads that cache
 - Canvas waterfall history (frequency × sweep, blue→red intensity)
-- **Radio picker** on Tools + `/a/waterfall` for RF ifaces on the node (spectral-capable selectable)
+- **Radio + duration pickers** on Tools + `/a/waterfall`
 - **CLI**: `waterfall status|capture|session|stop|cache`
 - Capability detection; hardware-not-supported banner when FFT is unavailable
 
 ## RF safety
 
-Spectral scan takes the radio out of normal mesh/client use. Sessions are hard-capped at **30 seconds**, spectral mode is forced **disable** afterward (even if the browser disconnects), and results are stored only in `/tmp` (tmpfs). Do not leave an open-ended live scan running over RF.
+Spectral scan takes the radio out of normal mesh/client use. Sessions are hard-capped at **10 minutes** (selectable durations up to that), spectral mode is forced **disable** afterward (even if the browser disconnects), and results are stored only in `/tmp` (tmpfs). Do not leave an open-ended live scan running over RF.
 
 ## GUI
 
@@ -29,16 +30,16 @@ Spectral scan takes the radio out of normal mesh/client use. Sessions are hard-c
 
 ## Install
 
-1. Build (or download) `waterfall-0.2.4-r0.apk`
+1. Build (or download) `waterfall-0.2.5-r0.apk`
 2. On the node: **Status → Packages** → upload / install with allow-untrusted  
-   or: `apk add --allow-untrusted waterfall-0.2.4-r0.apk`
+   or: `apk add --allow-untrusted waterfall-0.2.5-r0.apk`
 
 ## Build
 
 ```sh
 chmod +x build.sh
 ./build.sh
-# → dist/waterfall-0.2.4-r0.apk
+# → dist/waterfall-0.2.5-r0.apk
 ```
 
 Uses a vendored copy of [kn6plv/MakeAPK](https://github.com/kn6plv/MakeAPK) (`tools/mkapk.py`). No OpenWrt buildroot required.

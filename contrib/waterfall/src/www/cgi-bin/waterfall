@@ -12,6 +12,8 @@ const mAction = match(q, /action=([a-zA-Z0-9_-]+)/);
 const action = mAction ? mAction[1] : "status";
 const mIface = match(q, /iface=([a-zA-Z0-9]+)/);
 const iface = mIface ? mIface[1] : null;
+const mDur = match(q, /duration=([0-9]+)/);
+const duration = mDur ? int(mDur[1]) : 30;
 const mFmt = match(q, /format=([a-zA-Z0-9]+)/);
 const wantJson = (mFmt && mFmt[1] === "json") ||
     action === "start" || action === "stop" || action === "cache" ||
@@ -54,13 +56,13 @@ if (wantJson) {
     }
 
     if (action === "start") {
-        jsonOut(wf.startSessionAsync(iface, 30));
+        jsonOut(wf.startSessionAsync(iface, duration));
     }
     else if (action === "stop") {
         jsonOut(wf.stopSession());
     }
     else if (action === "cache") {
-        jsonOut(wf.readCache());
+        jsonOut(wf.readCache(iface));
     }
     else if (action === "status" || action === "session_status" || action === "probe") {
         jsonOut(wf.sessionStatus(iface));

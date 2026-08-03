@@ -66,20 +66,23 @@ const unsupportedMsg = cap.unsupported_message || "Waterfall is not supported on
     </div>
     {% } else { %}
     <p class="wf-banner">
-        Spectral capture <strong>disrupts RF for up to 30 seconds</strong>, then the radio is restored automatically.
-        Results stay in RAM only (<code>/tmp</code>). If your connection drops during capture, reconnect and reload this page to view the cached waterfall.
+        Spectral capture <strong>disrupts RF</strong> for the selected duration (default 30s), then the radio is restored automatically.
+        Each radio keeps its own RAM cache (<code>/tmp</code>). Switching radios loads that radio’s last waterfall.
+        If your connection drops during capture, reconnect and reload this page.
     </p>
     {% } %}
     <div class="waterfall-tool">
         <div class="wf-radio-row" style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin:0 0 10px">
             <label for="wf-radio" style="font-size:0.9em">Radio</label>
-            <select id="wf-radio" class="wf-radio" style="min-width:16rem;max-width:100%;flex:1"></select>
+            <select id="wf-radio" class="wf-radio" style="min-width:14rem;max-width:100%;flex:1"></select>
+            <label for="wf-duration" style="font-size:0.9em">Duration</label>
+            <select id="wf-duration" class="wf-duration" style="min-width:6rem"></select>
         </div>
         <canvas class="wf-canvas" width="800" height="400"></canvas>
         <div class="wf-status"></div>
         <div class="wf-actions">
             {% if (supported) { %}
-            <button type="button" class="wf-start">Start (30s)</button>
+            <button type="button" class="wf-start">Start</button>
             <button type="button" class="wf-stop">Stop</button>
             {% } %}
         </div>

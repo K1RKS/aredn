@@ -14,7 +14,7 @@ chmod +x \
   tools/mkapk.py
 python3 tools/mkapk.py \
   -n waterfall \
-  -v 0.2.4 \
+  -v 0.2.5 \
   -r r0 \
   -a noarch \
   -d src \

@@ -10,11 +10,11 @@ function usage()
     print("Usage: waterfall [-i iface] [-d secs] [status|capture|session|stop|cache]\n");
     print("  status   Probe radio / spectral availability (default; no RF change)\n");
     print("  capture  One-shot spectral dump (disrupts RF briefly; always disables)\n");
-    print("  session  Bounded capture (default 30s max); caches sweeps in /tmp RAM\n");
+    print("  session  Bounded capture; caches sweeps per-radio in /tmp RAM\n");
     print("  stop     Request early session stop and force spectral disable\n");
-    print("  cache    Print cached waterfall JSON meta\n");
+    print("  cache    Print cached waterfall JSON meta for iface\n");
     print("  -i IFACE Prefer wifi interface\n");
-    print("  -d SECS  Session duration 1-30 (default 30)\n");
+    print("  -d SECS  Session duration 5-600 (default 30; longer runs space samples)\n");
 };
 
 let iface = null;
@@ -59,11 +59,12 @@ if (cmd === "stop") {
     exit(0);
 }
 if (cmd === "cache") {
-    const c = wf.readCache();
+    const c = wf.readCache(iface);
     print(sprintf("%J\n", {
         ok: c.ok,
         have_cache: c.have_cache,
         sweep_count: length(c.sweeps || []),
+        iface: c.iface,
         meta: c.meta,
         error: c.error
     }));

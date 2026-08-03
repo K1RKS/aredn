@@ -29,15 +29,15 @@
     return [255, 30, 30];
   }
 
-  function qs(action, iface, extra) {
+  function qs(action, iface, duration) {
     let u = API + "?action=" + encodeURIComponent(action);
     if (iface) u += "&iface=" + encodeURIComponent(iface);
-    if (extra) u += "&" + extra;
+    if (duration != null && duration !== "") u += "&duration=" + encodeURIComponent(duration);
     return u;
   }
 
-  async function api(action, iface) {
-    const r = await fetch(qs(action, iface), { cache: "no-store", credentials: "same-origin" });
+  async function api(action, iface, duration) {
+    const r = await fetch(qs(action, iface, duration), { cache: "no-store", credentials: "same-origin" });
     const text = await r.text();
     let j = null;
     try {
@@ -53,6 +53,13 @@
       throw new Error(j.error);
     }
     return j;
+  }
+
+  function durationLabel(sec) {
+    if (sec < 60) return sec + "s";
+    if (sec === 60) return "60s / 1m";
+    if (sec % 60 === 0) return (sec / 60) + "m";
+    return sec + "s";
   }
 
   function radioLabel(r) {
@@ -167,9 +174,11 @@
     const stopBtn = root.querySelector(".wf-stop");
     const closeBtn = root.querySelector(".wf-close");
     const radioSel = root.querySelector(".wf-radio");
+    const durSel = root.querySelector(".wf-duration");
     let pollTimer = null;
     let alive = true;
     let selectedIface = null;
+    let fillingRadios = false;
 
     function setStatus(t) {
       if (statusEl) statusEl.textContent = t || "";
@@ -180,10 +189,36 @@
       return selectedIface;
     }
 
+    function getDuration() {
+      if (durSel && durSel.value) return parseInt(durSel.value, 10) || 30;
+      return 30;
+    }
+
+    function fillDurations(status) {
+      if (!durSel) return;
+      const list = (status && status.durations) || [5, 10, 15, 30, 60, 300, 600];
+      const def = (status && status.default_duration) || 30;
+      const prev = durSel.value;
+      durSel.innerHTML = "";
+      for (let i = 0; i < list.length; i++) {
+        const sec = list[i];
+        const opt = document.createElement("option");
+        opt.value = String(sec);
+        opt.textContent = durationLabel(sec);
+        if (sec === def) opt.selected = true;
+        durSel.appendChild(opt);
+      }
+      if (prev) durSel.value = prev;
+      else durSel.value = String(def);
+      durSel.disabled = !!(status && status.running);
+    }
+
     function fillRadios(status) {
       if (!radioSel) return;
+      fillingRadios = true;
       const radios = (status && status.radios) || [];
-      const prefer = (status && (status.selected_iface || (status.capability && status.capability.iface))) || "";
+      const prefer = selectedIface ||
+        (status && (status.selected_iface || (status.capability && status.capability.iface))) || "";
       radioSel.innerHTML = "";
       let firstSelectable = null;
       for (let i = 0; i < radios.length; i++) {
@@ -205,6 +240,7 @@
       if (want) radioSel.value = want;
       selectedIface = radioSel.value || null;
       radioSel.disabled = !!status.running;
+      fillingRadios = false;
     }
 
     function resize() {
@@ -215,16 +251,18 @@
     }
 
     async function loadCache() {
-      const c = await api("cache", getIface());
+      const iface = getIface();
+      const c = await api("cache", iface);
       resize();
       drawHeatmap(canvas, c);
       if (c.have_cache && c.meta) {
-        setStatus("Cached: " + c.meta.sweep_count + " sweeps · " +
-          Math.round(c.meta.f_start) + "–" + Math.round(c.meta.f_stop) + " MHz · " +
-          (c.meta.chipset || "") + " " + (c.meta.iface || "") +
+        setStatus("Cached (" + (c.meta.iface || iface || "?") + "): " + c.meta.sweep_count +
+          " sweeps · " + Math.round(c.meta.f_start) + "–" + Math.round(c.meta.f_stop) + " MHz · " +
+          (c.meta.chipset || "") +
+          (c.meta.requested_duration_sec ? (" · " + c.meta.requested_duration_sec + "s run") : "") +
           " · ended " + (c.meta.ended_at || ""));
       } else {
-        setStatus("No cache yet. Choose a radio and Start (30s — RF disrupted).");
+        setStatus("No cache for " + (iface || "radio") + ". Choose duration and Start (RF disrupted).");
       }
       return c;
     }
@@ -237,6 +275,7 @@
       try {
         const s = await api("status", getIface());
         fillRadios(s);
+        fillDurations(s);
         if (s.running) {
           const left = Math.max(0, (s.session.ends_at || 0) - Math.floor(Date.now() / 1000));
           setStatus("Capturing on " + (s.session.iface || getIface() || "?") +
@@ -266,7 +305,9 @@
 
     if (radioSel) {
       radioSel.addEventListener("change", () => {
+        if (fillingRadios) return;
         selectedIface = radioSel.value || null;
+        loadCache().catch((e) => setStatus(String(e.message || e)));
       });
     }
 
@@ -274,12 +315,13 @@
       startBtn.addEventListener("click", async () => {
         try {
           const iface = getIface();
+          const dur = getDuration();
           if (!iface) {
             setStatus("Select a radio with spectral support first");
             return;
           }
-          setStatus("Starting 30s spectral session on " + iface + "…");
-          const r = await api("start", iface);
+          setStatus("Starting " + dur + "s spectral session on " + iface + "…");
+          const r = await api("start", iface, dur);
           if (!r.ok) {
             setStatus(r.error || "Start failed");
             return;
@@ -297,7 +339,7 @@
           await api("stop", getIface());
           stopPoll();
           await loadCache();
-          setStatus("Stopped early · RF restored · showing cache");
+          setStatus("Stopped early · RF restored · showing cache for " + (getIface() || "radio"));
         } catch (e) {
           setStatus(String(e.message || e));
         }
@@ -315,6 +357,7 @@
     resize();
     api("status").then(async (s) => {
       fillRadios(s);
+      fillDurations(s);
       await loadCache();
       if (s.running) startPoll();
     }).catch((e) => setStatus(String(e.message || e)));

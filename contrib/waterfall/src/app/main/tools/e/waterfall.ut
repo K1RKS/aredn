@@ -1,6 +1,6 @@
 {%
 /*
- * Waterfall Tools dialog — admin RF spectral heatmap (30s bounded session).
+ * Waterfall Tools dialog — admin RF spectral heatmap (bounded session).
  */
 %}
 {%
@@ -19,20 +19,22 @@ const unsupportedMsg = cap.unsupported_message || "Waterfall is not supported on
         </div>
         {% } else { %}
         <div style="margin:0 0 8px;font-size:0.9em;opacity:0.9">
-            Spectral capture <b>disrupts RF for up to 30 seconds</b>, then the radio is restored automatically.
-            Results are cached in RAM (<code>/tmp</code>). If you lose the link, reconnect and reopen this tool to view the waterfall.
+            Spectral capture <b>disrupts RF</b> for the selected duration (default 30s), then the radio is restored automatically.
+            Each radio keeps its own RAM cache (<code>/tmp</code>). Switching radios loads that radio’s last waterfall.
         </div>
         {% } %}
         <div class="wf-radio-row" style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin:0 0 8px">
             <label style="font-size:0.9em">Radio</label>
-            <select class="wf-radio" style="min-width:14rem;max-width:100%;flex:1"></select>
+            <select class="wf-radio" style="min-width:12rem;max-width:100%;flex:1"></select>
+            <label style="font-size:0.9em">Duration</label>
+            <select class="wf-duration" style="min-width:6rem"></select>
         </div>
         <canvas class="wf-canvas" style="width:100%;background:#000;border-radius:4px;display:block"></canvas>
         <div class="wf-status" style="margin:8px 0;font-size:0.85em;min-height:1.2em;opacity:0.9"></div>
         <div class="cols" style="gap:8px;align-items:center">
             <div>
                 {% if (supported) { %}
-                <button class="wf-start">Start (30s)</button>
+                <button class="wf-start">Start</button>
                 <button class="wf-stop">Stop</button>
                 {% } %}
                 <button class="wf-close ui-action">Close</button>

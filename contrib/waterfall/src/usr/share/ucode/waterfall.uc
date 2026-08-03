@@ -14,6 +14,7 @@ import * as hardware from "aredn.hardware";
 
 const FFT_OUT = "/tmp/waterfall-fft.bin";
 const CACHE_JSON = "/tmp/waterfall-cache.json";
+const CACHE_PREFIX = "/tmp/waterfall-cache-";
 const SESSION_JSON = "/tmp/waterfall-session.json";
 const SESSION_PID = "/tmp/waterfall-session.pid";
 const SESSION_STOP = "/tmp/waterfall-session.stop";
@@ -24,12 +25,13 @@ const ATH_FFT_SAMPLE_HT20_40 = 2;
 const ATH_FFT_SAMPLE_ATH10K = 3;
 
 const SESSION_DEFAULT_SEC = 30;
-const MAX_SWEEPS = 60;
+const SESSION_MAX_SEC = 600;
+const MAX_SWEEPS = 90;
 const TARGET_BINS = 64;
 
 export function packageVersion()
 {
-    return "0.2.4-r0";
+    return "0.2.5-r0";
 };
 
 function isMeshMode(mode)
@@ -613,22 +615,70 @@ function writeSessionState(state)
     fs.writefile(SESSION_JSON, sprintf("%J", state));
 }
 
-export function readCache()
+function emptyCache(iface)
 {
-    if (!fs.access(CACHE_JSON)) {
-        return {
-            ok: true,
-            version: packageVersion(),
-            have_cache: false,
-            sweeps: [],
-            meta: null
-        };
+    return {
+        ok: true,
+        version: packageVersion(),
+        have_cache: false,
+        sweeps: [],
+        meta: iface ? { iface: iface } : null,
+        iface: iface || null
+    };
+}
+
+function cachePathForIface(iface)
+{
+    if (!iface || !match(iface, /^[a-zA-Z0-9]+$/)) {
+        return CACHE_JSON;
+    }
+    return `${CACHE_PREFIX}${iface}.json`;
+}
+
+export function clampDuration(durationSec)
+{
+    let d = int(durationSec);
+    if (d != d || d <= 0) {
+        return SESSION_DEFAULT_SEC;
+    }
+    if (d > SESSION_MAX_SEC) {
+        return SESSION_MAX_SEC;
+    }
+    return d;
+};
+
+export function allowedDurations()
+{
+    /* 60s covers both "60s" and "1m"; longer runs space sweeps to cap RAM */
+    return [5, 10, 15, 30, 60, 300, 600];
+};
+
+export function readCache(iface)
+{
+    let path = cachePathForIface(iface);
+    if (!fs.access(path) && iface && fs.access(CACHE_JSON)) {
+        /* migrate legacy single-cache if it matches this iface */
+        try {
+            const legacy = json(fs.readfile(CACHE_JSON));
+            if (legacy?.meta?.iface === iface) {
+                path = CACHE_JSON;
+            }
+            else if (!iface) {
+                path = CACHE_JSON;
+            }
+        }
+        catch (_) {
+        }
+    }
+    if (!fs.access(path)) {
+        return emptyCache(iface);
     }
     try {
-        const c = json(fs.readfile(CACHE_JSON));
+        const c = json(fs.readfile(path));
         c.ok = true;
         c.have_cache = length(c.sweeps || []) > 0;
         c.version = packageVersion();
+        c.iface = c.meta?.iface || iface || null;
         return c;
     }
     catch (_) {
@@ -637,14 +687,17 @@ export function readCache()
             error: "Corrupt waterfall cache",
             have_cache: false,
             sweeps: [],
-            version: packageVersion()
+            version: packageVersion(),
+            iface: iface || null
         };
     }
 };
 
 export function writeCache(cache)
 {
-    fs.writefile(CACHE_JSON, sprintf("%J", cache));
+    const iface = cache?.meta?.iface || cache?.iface || null;
+    const path = cachePathForIface(iface);
+    fs.writefile(path, sprintf("%J", cache));
 };
 
 export function sessionIsRunning()
@@ -722,13 +775,12 @@ export function captureSpectral(preferredIface)
 };
 
 /**
- * Bounded RF session: spectral on for <= durationSec, always disable, write RAM cache.
+ * Bounded RF session: spectral on for <= durationSec, always disable, write per-radio RAM cache.
  */
 export function runSession(preferredIface, durationSec)
 {
-    if (durationSec == null || durationSec <= 0 || durationSec > 30) {
-        durationSec = SESSION_DEFAULT_SEC;
-    }
+    durationSec = clampDuration(durationSec);
+    const sleepSec = durationSec > MAX_SWEEPS ? int((durationSec + MAX_SWEEPS - 1) / MAX_SWEEPS) : 1;
     fs.unlink(SESSION_STOP);
 
     const cap = probeCapability(preferredIface);
@@ -740,6 +792,7 @@ export function runSession(preferredIface, durationSec)
         running: true,
         started_at: started,
         ends_at: ends,
+        duration_sec: durationSec,
         iface: cap.iface,
         chipset: cap.chipset,
         version: packageVersion()
@@ -770,7 +823,7 @@ export function runSession(preferredIface, durationSec)
                         error = "Cannot trigger spectral scan";
                         break;
                     }
-                    system("sleep 1");
+                    system(`sleep ${sleepSec}`);
                     system(`dd if=${relay} of=${FFT_OUT} bs=4096 count=4 2>/dev/null`);
                     const st = fs.stat(FFT_OUT);
                     const bytes = st ? int(st.size) : 0;
@@ -811,6 +864,7 @@ export function runSession(preferredIface, durationSec)
         error: length(sweeps) > 0 ? null : (error || "No sweeps captured"),
         have_cache: length(sweeps) > 0,
         version: packageVersion(),
+        iface: cap.iface,
         meta: {
             board: cap.board,
             iface: cap.iface,
@@ -822,7 +876,9 @@ export function runSession(preferredIface, durationSec)
             started_at: started,
             ended_at: ended,
             duration_sec: ended - started,
+            requested_duration_sec: durationSec,
             sweep_count: length(sweeps),
+            sample_interval_sec: sleepSec,
             experimental: cap.chipset === "ath10k",
             note: "RF spectral session complete; radio restored to normal use."
         },
@@ -834,6 +890,7 @@ export function runSession(preferredIface, durationSec)
         started_at: started,
         ends_at: ends,
         ended_at: ended,
+        duration_sec: durationSec,
         iface: cap.iface,
         chipset: cap.chipset,
         sweep_count: length(sweeps),
@@ -862,9 +919,7 @@ export function startSessionAsync(preferredIface, durationSec)
             capability: cap
         };
     }
-    if (durationSec == null || durationSec <= 0 || durationSec > 30) {
-        durationSec = SESSION_DEFAULT_SEC;
-    }
+    durationSec = clampDuration(durationSec);
     const ifaceArg = preferredIface ? ` -i ${preferredIface}` : "";
     fs.unlink(SESSION_STOP);
     const started = nowSec();
@@ -872,6 +927,7 @@ export function startSessionAsync(preferredIface, durationSec)
         running: true,
         started_at: started,
         ends_at: started + durationSec,
+        duration_sec: durationSec,
         iface: cap.iface,
         chipset: cap.chipset,
         version: packageVersion()
@@ -885,7 +941,7 @@ export function startSessionAsync(preferredIface, durationSec)
         duration_sec: durationSec,
         iface: cap.iface,
         chipset: cap.chipset,
-        warning: "Spectral capture disrupts RF for up to 30s. Reconnect afterward to view the cached waterfall."
+        warning: `Spectral capture disrupts RF for up to ${durationSec}s. Reconnect afterward to view the cached waterfall for ${cap.iface}.`
     };
 };
 
@@ -899,7 +955,7 @@ export function stopSession()
     st.running = false;
     st.stopped_at = nowSec();
     writeSessionState(st);
-    return { ok: true, stopped: true, session: st, cache: readCache() };
+    return { ok: true, stopped: true, session: st, cache: readCache(st.iface) };
 };
 
 export function sessionStatus(preferredIface)
@@ -908,7 +964,8 @@ export function sessionStatus(preferredIface)
     const cap = probeCapability(preferredIface);
     const running = sessionIsRunning();
     const sess = readSessionState();
-    const cache = readCache();
+    const sel = preferredIface || cap.iface || null;
+    const cache = readCache(sel);
     return {
         ok: true,
         version: packageVersion(),
@@ -916,8 +973,11 @@ export function sessionStatus(preferredIface)
         session: sess,
         have_cache: cache.have_cache,
         sweep_count: length(cache.sweeps || []),
+        durations: allowedDurations(),
+        default_duration: SESSION_DEFAULT_SEC,
+        max_duration: SESSION_MAX_SEC,
         radios: rlist,
-        selected_iface: preferredIface || cap.iface || null,
+        selected_iface: sel,
         capability: {
             supported: cap.supported,
             unsupported_message: cap.unsupported_message,
