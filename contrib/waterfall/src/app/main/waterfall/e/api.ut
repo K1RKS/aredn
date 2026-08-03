@@ -13,8 +13,8 @@ if (!auth.isAdmin) {
 }
 
 const q = request.env.QUERY_STRING || "";
-const mAction = match(q, /(?:^|&)action=([a-zA-Z0-9_-]+)/);
-const mIface = match(q, /(?:^|&)iface=([a-zA-Z0-9]+)/);
+const mAction = match(q, /action=([a-zA-Z0-9_-]+)/);
+const mIface = match(q, /iface=([a-zA-Z0-9]+)/);
 const action = (request.args && request.args.action) || (mAction ? mAction[1] : "status");
 const iface = (request.args && request.args.iface) || (mIface ? mIface[1] : null);
 

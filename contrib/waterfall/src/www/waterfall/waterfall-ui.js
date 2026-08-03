@@ -38,9 +38,19 @@
 
   async function api(action, iface) {
     const r = await fetch(qs(action, iface), { cache: "no-store", credentials: "same-origin" });
-    const j = await r.json();
+    const text = await r.text();
+    let j = null;
+    try {
+      j = JSON.parse(text);
+    } catch (e) {
+      const snippet = (text || "").replace(/\s+/g, " ").slice(0, 120);
+      throw new Error("Bad API response (" + r.status + "): " + (snippet || e.message));
+    }
     if (r.status === 401) {
-      throw new Error(j.error || "Admin authentication required");
+      throw new Error((j && j.error) || "Admin authentication required");
+    }
+    if (!r.ok && j && j.error) {
+      throw new Error(j.error);
     }
     return j;
   }

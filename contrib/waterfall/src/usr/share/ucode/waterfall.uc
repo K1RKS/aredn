@@ -29,7 +29,7 @@ const TARGET_BINS = 64;
 
 export function packageVersion()
 {
-    return "0.2.3-r0";
+    return "0.2.4-r0";
 };
 
 function isMeshMode(mode)
