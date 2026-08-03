@@ -83,7 +83,7 @@
     height: 3px;
     border-radius: 1px;
   }
-  canvas { width: 100%; height: 180px; display: block; background: #15181c; border-radius: 4px; cursor: crosshair; }
+  canvas { width: 100%; height: 210px; display: block; background: #15181c; border-radius: 4px; cursor: crosshair; }
   .chart-tip {
     position: absolute;
     z-index: 2;
@@ -154,7 +154,7 @@
     </div>
     <div class="chart-wrap">
       <div class="legend" id="legend"></div>
-      <canvas id="chart" width="1000" height="180"></canvas>
+      <canvas id="chart" width="1000" height="210"></canvas>
       <div class="chart-tip" id="chartTip" hidden></div>
     </div>
     <div class="tabs time" id="timeTabs" role="tablist" aria-label="Time range">
@@ -261,7 +261,7 @@
   let metricId = "lq";
   let series = [];
   let hoverIdx = -1;
-  let chartLayout = null; /* { padL, padR, padT, padB, plotW, n } */
+  let chartLayout = null; /* { padL, padR, padT, padB, plotW, plotH, t0, windowSec, n } */
 
   function $(id) { return document.getElementById(id); }
 
@@ -278,6 +278,43 @@
     if (v == null || v !== v) return "—";
     if (Math.abs(v - Math.round(v)) < 1e-6) return String(Math.round(v));
     return (Math.round(v * 10) / 10).toString();
+  }
+
+  function formatAxisOffset(sec) {
+    sec = Math.max(0, Math.round(sec));
+    if (windowSec >= 86400) {
+      const h = Math.floor(sec / 3600);
+      return h + "h";
+    }
+    if (windowSec >= 1800) {
+      const m = Math.floor(sec / 60);
+      return m + "m";
+    }
+    const m = Math.floor(sec / 60);
+    const s = sec % 60;
+    if (m === 0) return s + "s";
+    if (s === 0) return m + "m";
+    return m + "m" + (s < 10 ? "0" : "") + s + "s";
+  }
+
+  function xTickStep(spanSec) {
+    if (spanSec <= 300) return 60;
+    if (spanSec <= 1800) return 300;
+    if (spanSec <= 7200) return 900;
+    if (spanSec <= 86400) return 14400;
+    return Math.max(1, Math.round(spanSec / 6));
+  }
+
+  function seriesT0() {
+    if (!series.length) return 0;
+    const t = Number(series[0].t);
+    return t === t ? t : 0;
+  }
+
+  function xForTime(t, layout) {
+    const dt = Number(t) - layout.t0;
+    const frac = Math.max(0, Math.min(1, dt / layout.windowSec));
+    return layout.padL + frac * layout.plotW;
   }
 
   function colorAt(i) {
@@ -445,14 +482,72 @@
     if (!chartLayout || !series.length) return -1;
     const scaleX = $("chart").width / Math.max(1, cssW);
     const x = cssX * scaleX;
-    const { padL, plotW, n } = chartLayout;
+    const { padL, plotW, t0, windowSec: win } = chartLayout;
     if (x < padL || x > padL + plotW) return -1;
-    if (n <= 1) return 0;
-    const t = (x - padL) / plotW;
-    let idx = Math.round(t * (n - 1));
-    if (idx < 0) idx = 0;
-    if (idx > n - 1) idx = n - 1;
-    return idx;
+    const targetT = t0 + ((x - padL) / plotW) * win;
+    let best = 0;
+    let bestDist = Infinity;
+    for (let i = 0; i < series.length; i++) {
+      const ti = Number(series[i].t);
+      if (ti !== ti) continue;
+      const d = Math.abs(ti - targetT);
+      if (d < bestDist) {
+        bestDist = d;
+        best = i;
+      }
+    }
+    /* Only snap when cursor is near an actual sample in time */
+    const sampleSpan = Math.max(1, win / Math.max(20, series.length));
+    if (bestDist > sampleSpan * 2 && bestDist > 15) return -1;
+    return best;
+  }
+
+  function drawAxes(ctx, w, h, layout, bounds) {
+    const { padL, padR, padT, padB, plotW } = layout;
+    const axisY = h - padB;
+    ctx.strokeStyle = "#3a424d";
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(padL, padT);
+    ctx.lineTo(padL, axisY);
+    ctx.lineTo(w - padR, axisY);
+    ctx.stroke();
+
+    ctx.fillStyle = "#9aa3ad";
+    ctx.font = "11px ui-sans-serif, system-ui, sans-serif";
+    ctx.textAlign = "left";
+    ctx.fillText(String(bounds.hi), 4, padT + 8);
+    ctx.fillText(String(bounds.lo), 4, axisY);
+
+    const step = xTickStep(layout.windowSec);
+    ctx.textAlign = "center";
+    for (let off = 0; off <= layout.windowSec + 0.5; off += step) {
+      const frac = Math.min(1, off / layout.windowSec);
+      const x = padL + frac * plotW;
+      ctx.strokeStyle = "#3a424d";
+      ctx.beginPath();
+      ctx.moveTo(x, axisY);
+      ctx.lineTo(x, axisY + 5);
+      ctx.stroke();
+      ctx.fillStyle = "#9aa3ad";
+      ctx.fillText(formatAxisOffset(off), x, axisY + 16);
+    }
+    if (layout.windowSec % step !== 0) {
+      const x = padL + plotW;
+      ctx.strokeStyle = "#3a424d";
+      ctx.beginPath();
+      ctx.moveTo(x, axisY);
+      ctx.lineTo(x, axisY + 5);
+      ctx.stroke();
+      ctx.fillStyle = "#9aa3ad";
+      ctx.fillText(formatAxisOffset(layout.windowSec), x, axisY + 16);
+    }
+
+    ctx.fillStyle = "#9aa3ad";
+    ctx.font = "11px ui-sans-serif, system-ui, sans-serif";
+    ctx.textAlign = "center";
+    ctx.fillText("Time", padL + plotW / 2, h - 6);
+    ctx.textAlign = "left";
   }
 
   function drawChart() {
@@ -461,20 +556,22 @@
     const c = $("chart");
     const ctx = c.getContext("2d");
     const w = c.width, h = c.height;
-    const padL = 44, padR = 12, padT = 14, padB = 22;
+    const padL = 44, padR = 18, padT = 14, padB = 42;
     const plotW = w - padL - padR;
-    chartLayout = { padL: padL, padR: padR, padT: padT, padB: padB, plotW: plotW, n: series.length };
+    const plotH = h - padT - padB;
+    const t0 = seriesT0();
+    chartLayout = {
+      padL: padL, padR: padR, padT: padT, padB: padB,
+      plotW: plotW, plotH: plotH, t0: t0, windowSec: windowSec, n: series.length
+    };
     ctx.clearRect(0, 0, w, h);
-    ctx.strokeStyle = "#3a424d";
-    ctx.beginPath();
-    ctx.moveTo(padL, padT);
-    ctx.lineTo(padL, h - padB);
-    ctx.lineTo(w - padR, h - padB);
-    ctx.stroke();
 
+    const emptyBounds = { lo: 0, hi: 1 };
     if (!series.length) {
+      drawAxes(ctx, w, h, chartLayout, emptyBounds);
       ctx.fillStyle = "#9aa3ad";
-      ctx.fillText("No samples in window", padL + 10, h / 2);
+      ctx.font = "11px ui-sans-serif, system-ui, sans-serif";
+      ctx.fillText("No samples in window", padL + 10, padT + plotH / 2);
       hideTip();
       return;
     }
@@ -484,8 +581,10 @@
         return (s.rf && Object.keys(s.rf).length) || (s.mean_snr != null && s.mean_snr > 0);
       });
       if (!anyRf) {
+        drawAxes(ctx, w, h, chartLayout, emptyBounds);
         ctx.fillStyle = "#9aa3ad";
-        ctx.fillText("No RF neighbors in window", padL + 10, h / 2);
+        ctx.font = "11px ui-sans-serif, system-ui, sans-serif";
+        ctx.fillText("No RF neighbors in window", padL + 10, padT + plotH / 2);
         hideTip();
         return;
       }
@@ -496,13 +595,10 @@
     });
     const bounds = yBounds(metric, lines);
     const span = bounds.hi - bounds.lo;
-
-    ctx.fillStyle = "#9aa3ad";
-    ctx.font = "11px ui-sans-serif, system-ui, sans-serif";
-    ctx.fillText(String(bounds.hi), 4, padT + 8);
-    ctx.fillText(String(bounds.lo), 4, h - padB);
+    drawAxes(ctx, w, h, chartLayout, bounds);
 
     const n = series.length;
+    const axisY = h - padB;
     for (let si = 0; si < metric.series.length; si++) {
       const spec = metric.series[si];
       const vals = lines[si];
@@ -516,8 +612,18 @@
           started = false;
           continue;
         }
-        const x = padL + (i / Math.max(1, n - 1)) * plotW;
-        const y = (h - padB) - ((v - bounds.lo) / span) * (h - padT - padB);
+        const ti = Number(series[i].t);
+        if (ti !== ti) {
+          started = false;
+          continue;
+        }
+        const dt = ti - t0;
+        if (dt < 0 || dt > windowSec) {
+          started = false;
+          continue;
+        }
+        const x = xForTime(ti, chartLayout);
+        const y = axisY - ((v - bounds.lo) / span) * plotH;
         if (!started) { ctx.moveTo(x, y); started = true; }
         else ctx.lineTo(x, y);
       }
@@ -525,27 +631,30 @@
     }
 
     if (hoverIdx >= 0 && hoverIdx < n) {
-      const x = padL + (hoverIdx / Math.max(1, n - 1)) * plotW;
-      ctx.strokeStyle = "rgba(230, 232, 235, 0.55)";
-      ctx.lineWidth = 1;
-      ctx.setLineDash([4, 3]);
-      ctx.beginPath();
-      ctx.moveTo(x, padT);
-      ctx.lineTo(x, h - padB);
-      ctx.stroke();
-      ctx.setLineDash([]);
-
-      for (let si = 0; si < metric.series.length; si++) {
-        const v = lines[si][hoverIdx];
-        if (v == null || v !== v) continue;
-        const y = (h - padB) - ((v - bounds.lo) / span) * (h - padT - padB);
-        ctx.fillStyle = metric.series[si].color;
-        ctx.beginPath();
-        ctx.arc(x, y, 3.5, 0, Math.PI * 2);
-        ctx.fill();
-        ctx.strokeStyle = "#15181c";
+      const ti = Number(series[hoverIdx].t);
+      if (ti === ti) {
+        const x = xForTime(ti, chartLayout);
+        ctx.strokeStyle = "rgba(230, 232, 235, 0.55)";
         ctx.lineWidth = 1;
+        ctx.setLineDash([4, 3]);
+        ctx.beginPath();
+        ctx.moveTo(x, padT);
+        ctx.lineTo(x, axisY);
         ctx.stroke();
+        ctx.setLineDash([]);
+
+        for (let si = 0; si < metric.series.length; si++) {
+          const v = lines[si][hoverIdx];
+          if (v == null || v !== v) continue;
+          const y = axisY - ((v - bounds.lo) / span) * plotH;
+          ctx.fillStyle = metric.series[si].color;
+          ctx.beginPath();
+          ctx.arc(x, y, 3.5, 0, Math.PI * 2);
+          ctx.fill();
+          ctx.strokeStyle = "#15181c";
+          ctx.lineWidth = 1;
+          ctx.stroke();
+        }
       }
     }
   }

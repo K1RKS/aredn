@@ -4,7 +4,7 @@ Side-loaded AREDN APK that keeps Babel / LQM / arednlink metrics in RAM, exposes
 stateless JSON pull API for external historians, a public status page, and a
 live-config CLI.
 
-- Package: `babel-monitor-0.1.9-r0.apk`
+- Package: `babel-monitor-0.1.10-r0.apk`
 - Daemon: `babel-monitord`
 - CLI: `babel-monitor`
 - Status UI: `/babel-monitor/`
@@ -18,7 +18,7 @@ cd contrib/babel-monitor
 ./build.sh
 ```
 
-APK lands in `dist/babel-monitor-0.1.9-r0.apk`.
+APK lands in `dist/babel-monitor-0.1.10-r0.apk`.
 
 ## Install on a node
 
@@ -31,7 +31,7 @@ From the work-area root (after configuring `install_package_remotely.conf`):
 Or copy the APK and:
 
 ```sh
-apk add --allow-untrusted /tmp/babel-monitor-0.1.9-r0.apk
+apk add --allow-untrusted /tmp/babel-monitor-0.1.10-r0.apk
 ```
 
 ## On-node storage
@@ -105,7 +105,7 @@ State/logs: `~/.babel-monitor/` (override with `BABEL_MONITOR_STATE`).
 
 ## Status page
 
-Open `http://<node>/babel-monitor/` — live neighbors, KPIs, and a history graph with metric tabs (LQ, Cost, Neighbors, Routes, Links, Hosts, CPU, RAM, RF) and 5m / 30m / 24h ranges from RAM. Hover the graph for a crosshair and values at that sample. The RF tab plots SNR for each RF neighbor plus AVG (up to 12 neighbors per sample). Viewing the UI does not write flash. No Tools menu entry.
+Open `http://<node>/babel-monitor/` — live neighbors, KPIs, and a history graph with metric tabs (LQ, Cost, Neighbors, Routes, Links, Hosts, CPU, RAM, RF) and 5m / 30m / 24h ranges from RAM. The X axis is fixed to the selected window (partial buffers are not stretched). Hover for a crosshair and values at that sample. The RF tab plots SNR for each RF neighbor plus AVG (up to 12 neighbors per sample). Viewing the UI does not write flash. No Tools menu entry.
 
 ## Layout
 
