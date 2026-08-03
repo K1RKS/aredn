@@ -1,0 +1,17 @@
+#!/usr/bin/ucode
+/*
+ * Waterfall CGI — stub endpoint for the Tools → Waterfall package.
+ */
+
+import * as wf from "waterfall";
+
+print("Content-type: text/html\r\n");
+print("Cache-Control: no-store\r\n");
+print("Access-Control-Allow-Origin: *\r\n");
+print("\r\n");
+
+print("<html><head><title>Waterfall</title></head><body><pre>");
+print(`waterfall ${wf.packageVersion()}\n`);
+print("Stub: RF spectrum waterfall not implemented yet.\n");
+print("Focus: 5 GHz — Rocket M5, PowerBeam 500, PowerBeam 500 AC.\n");
+print("</pre></body></html>\n");

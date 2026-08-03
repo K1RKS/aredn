@@ -1,0 +1,38 @@
+{%
+/*
+ * Waterfall Tools dialog — stub for 5 GHz RF spectrum waterfall.
+ * Primary targets: Rocket M5, PowerBeam 500, PowerBeam 500 AC.
+ */
+%}
+{%
+import * as wf from "waterfall";
+%}
+<div class="dialog">
+    {{_R("tool-header", { label: `Waterfall ${wf.packageVersion()}`, help: false })}}
+    <div class="simple-tool">
+        {{_H("RF spectrum waterfall for 5 GHz AREDN radios. This package is a stub — capture and display are not implemented yet.
+        Primary focus: Ubiquiti Rocket M5 (XM/XW), PowerBeam 500, and PowerBeam 500 AC (PBE-5AC-500).
+        Stock Tools → WiFi Scan already lists nearby SSIDs; this tool will add a time/frequency waterfall view.")}}
+        <div class="cols">
+            <div class="tool-console">
+                <pre>waterfall {{wf.packageVersion()}}
+Stub UI — spectrum capture coming later.
+Focus devices:
+  • Rocket M5 (XM / XW)
+  • PowerBeam 500
+  • PowerBeam 500 AC</pre>
+            </div>
+            <div>
+                <button id="waterfall-close" class="ui-action">Close</button>
+            </div>
+        </div>
+    </div>
+    <script>
+    (function () {
+        const closeBtn = htmx.find("#waterfall-close");
+        if (closeBtn) {
+            closeBtn.addEventListener("click", () => htmx.find("#ctrl-modal").innerHTML = "");
+        }
+    })();
+    </script>
+</div>

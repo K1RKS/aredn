@@ -1,0 +1,234 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Waterfall package work-area setup — plan twin</title>
+<style>
+  :root {
+    --bg: #0f1115;
+    --fg: #e8eaed;
+    --muted: #9aa0a6;
+    --card: #161a22;
+    --border: #2a2f3a;
+    --accent: #8ab4f8;
+    --ok: #81c995;
+    --pending: #fdd663;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font: 15px/1.55 system-ui, sans-serif;
+    background: var(--bg);
+    color: var(--fg);
+    padding: 24px;
+    max-width: 960px;
+  }
+  h1 { font-size: 1.5rem; margin: 0 0 6px; }
+  h2 {
+    font-size: 1.15rem;
+    margin: 28px 0 10px;
+    border-bottom: 1px solid var(--border);
+    padding-bottom: 6px;
+  }
+  p { margin: 0 0 10px; color: var(--muted); }
+  .lead { color: var(--muted); max-width: 72ch; }
+  ul, ol { color: var(--muted); margin: 0 0 12px; padding-left: 1.25rem; }
+  li { margin: 4px 0; }
+  code {
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: 0.88em;
+    background: #1c212b;
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 1px 5px;
+    color: var(--fg);
+  }
+  pre {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 14px 16px;
+    overflow-x: auto;
+    color: var(--fg);
+    font: 13px/1.45 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    margin: 10px 0 14px;
+  }
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    margin: 10px 0 14px;
+    font-size: 0.92rem;
+  }
+  th, td {
+    border: 1px solid var(--border);
+    padding: 8px 10px;
+    text-align: left;
+    vertical-align: top;
+  }
+  th { background: var(--card); color: var(--fg); }
+  td { color: var(--muted); }
+  .meta {
+    font-size: 12px;
+    color: var(--muted);
+    margin-bottom: 18px;
+  }
+  .todos {
+    list-style: none;
+    padding: 0;
+    margin: 0 0 16px;
+  }
+  .todos li {
+    display: flex;
+    gap: 10px;
+    align-items: flex-start;
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 10px 12px;
+    margin: 0 0 8px;
+  }
+  .status {
+    flex: 0 0 auto;
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.03em;
+    text-transform: uppercase;
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    padding: 2px 8px;
+    color: var(--pending);
+  }
+  .note {
+    border-left: 3px solid var(--accent);
+    padding: 8px 12px;
+    background: var(--card);
+    border-radius: 0 8px 8px 0;
+    margin: 12px 0;
+  }
+</style>
+</head>
+<body>
+  <h1>Waterfall package work-area setup</h1>
+  <p class="lead">
+    Scaffold a new MakeAPK <code>waterfall</code> package work area in this empty repo,
+    pin git to branch <code>waterfall</code>, import adapted Cursor rules from stableroute,
+    and wire local-only install/push helpers (gitignored).
+  </p>
+  <p class="meta">
+    Digital HTML twin of the Cursor plan · keep in sync with
+    <code>~/.cursor/plans/waterfall_package_setup_72609d7b.plan.md</code> ·
+    path: <code>reports/waterfall-package-setup.html</code>
+  </p>
+
+  <h2>Todos</h2>
+  <ul class="todos">
+    <li><span class="status" style="color: var(--ok)">done</span><span>Create/switch to git branch <code>waterfall</code> (empty repo currently on master)</span></li>
+    <li><span class="status" style="color: var(--ok)">done</span><span>Add adapted stay-on-ref, canvas-twin-html, bump-waterfall-revision rules from stableroute</span></li>
+    <li><span class="status" style="color: var(--ok)">done</span><span>Scaffold <code>contrib/waterfall</code> MakeAPK stub (build.sh, mkapk.py, hooks, Tools stub, README, .gitignore)</span></li>
+    <li><span class="status" style="color: var(--ok)">done</span><span>Symlink <code>install_package_remotely</code>, write conf + waterfall <code>push_to_webserver</code>; gitignore all three</span></li>
+    <li><span class="status" style="color: var(--ok)">done</span><span>Keep <code>reports/waterfall-package-setup.html</code> in sync whenever this plan changes</span></li>
+  </ul>
+  <div class="note">
+    Implementation complete on branch <code>waterfall</code>. Built <code>waterfall-0.1.1-r0.apk</code>. Local helpers are gitignored. No commit yet (per plan).
+  </div>
+
+  <h2>Plan HTML twin</h2>
+  <ul>
+    <li>Twin path: <code>reports/waterfall-package-setup.html</code></li>
+    <li>Self-contained HTML mirror of the Cursor plan (openable in a browser without Cursor).</li>
+    <li><strong>Whenever the plan is revised, update this HTML in the same turn</strong> so it stays current.</li>
+  </ul>
+
+  <h2>Context</h2>
+  <ul>
+    <li><code>/home/kirk/ai_projects/AREDN/waterfall</code> is an empty git repo on <code>master</code> (no commits, no remotes).</li>
+    <li>There is <strong>no</strong> existing waterfall APK in aredn-main; only WiFi Scan UI (<code>files/app/main/tools/e/wifiscan.ut</code>) and a release-notes note about missing waterfall info on Ubiquiti AC radios.</li>
+    <li>Sibling package pattern: MakeAPK under <code>contrib/&lt;pkg&gt;/</code> (see stableroute’s contrib module).</li>
+    <li><strong>Default for <code>push_to_webserver</code>:</strong> it does <strong>not</strong> exist in aredn-main. Create a <strong>local waterfall-specific script</strong> (same pattern as stableroute/traceroute), not a broken symlink to another package’s hard-coded <code>pkg=</code>. Still local-only / gitignored.</li>
+  </ul>
+  <div class="note">
+    This turn scaffolds the work area and a stub package only — RF waterfall implementation for Rocket M5 / PowerBeam 500 / 500 AC comes later.
+  </div>
+
+  <h2>1. Lock git to branch <code>waterfall</code></h2>
+  <ul>
+    <li>Create/switch to branch <code>waterfall</code> (replace empty <code>master</code> as the working branch before the first commit).</li>
+    <li>Do <strong>not</strong> commit unless asked; leave scaffold uncommitted or ask before the initial commit.</li>
+    <li>After setup, all work stays on <code>waterfall</code> via the stay-on-ref rule.</li>
+  </ul>
+
+  <h2>2. Import Cursor rules (from stableroute; adapt names)</h2>
+  <p>Copy into <code>.cursor/rules/</code> and adapt:</p>
+  <table>
+    <thead>
+      <tr><th>Source</th><th>Target</th><th>Change</th></tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><code>stay-on-ref.mdc</code></td>
+        <td><code>.cursor/rules/stay-on-ref.mdc</code></td>
+        <td>Assigned branch → <code>waterfall</code>; drop “do not extract mini-repo” (this <strong>is</strong> the package work area); keep “do not touch sibling AREDN work areas”</td>
+      </tr>
+      <tr>
+        <td><code>canvas-twin-html.mdc</code></td>
+        <td>same name</td>
+        <td>As-is</td>
+      </tr>
+      <tr>
+        <td><code>bump-stableroute-revision.mdc</code></td>
+        <td><code>bump-waterfall-revision.mdc</code></td>
+        <td>Paths → <code>contrib/waterfall/</code>; package name <code>waterfall</code></td>
+      </tr>
+    </tbody>
+  </table>
+  <ul>
+    <li><strong>Skip:</strong> <code>stableroute-gui-timeouts-docs.mdc</code> (StableRoute-specific).</li>
+    <li><strong>Skills:</strong> already global under <code>~/.cursor/skills/</code> (<code>aredn-packages</code>, <code>configure-install-package-remotely</code>, <code>install-apk-remotely</code>) — no copy needed.</li>
+  </ul>
+
+  <h2>3. Scaffold MakeAPK package <code>contrib/waterfall/</code></h2>
+  <p>Lean package-only repo (not a full OpenWrt/firmware tree):</p>
+  <pre>contrib/waterfall/
+  build.sh              # -n waterfall -v 0.1.0 -r r0 -a noarch
+  tools/mkapk.py        # vendored from stableroute
+  .gitignore            # dist/
+  README.md             # purpose: 5 GHz RF waterfall for Rocket M5, PowerBeam 500, PowerBeam 500 AC
+  src/
+    .post-install / .post-upgrade / .pre-deinstall
+    usr/share/waterfall/tools-menu.sh
+    app/main/tools/e/waterfall.ut   # stub Tools page stating focus devices
+    www/cgi-bin/waterfall           # stub cgi if needed for menu pattern</pre>
+  <p>Mirror stableroute’s Tools-menu registration hooks (install menu entry, restart uhttpd). Stub UI only — no spectrum capture yet.</p>
+  <p>Root <code>.gitignore</code>:</p>
+  <pre>push_to_webserver
+/install_package_remotely
+/install_package_remotely.conf</pre>
+  <p>Optional empty <code>reports/</code> for canvas twins (this plan twin lives here too).</p>
+
+  <h2>4. Local-only deploy helpers (not in git)</h2>
+  <ul>
+    <li><strong>Symlink:</strong> <code>install_package_remotely</code> → <code>../aredn-main/install_package_remotely</code></li>
+    <li><strong>Local conf:</strong> <code>install_package_remotely.conf</code> with
+      <code>PACKAGE_PATH=contrib/waterfall/dist/</code>,
+      <code>NODE=k1rks-x86-development.local.mesh</code>,
+      optional <code>SSH_PASSWORD</code> only if used in sibling confs (never commit)</li>
+    <li><strong>Local script:</strong> <code>push_to_webserver</code> modeled on stableroute’s 3-liner with <code>pkg=waterfall</code> and the same nginx host / <code>link_latest_apks.sh</code> flow</li>
+  </ul>
+
+  <h2>5. Purpose statement (in package README)</h2>
+  <p>Document that this work area’s goal is to <strong>create or improve AREDN RF waterfall</strong> focused on <strong>5 GHz</strong>, primary targets:</p>
+  <ul>
+    <li>Ubiquiti <strong>Rocket M5</strong> (XM/XW)</li>
+    <li><strong>PowerBeam 500</strong> / <strong>PowerBeam 500 AC</strong> (PBE-5AC-500 class)</li>
+  </ul>
+  <p>Note firmware gap: WiFi Scan exists; dedicated waterfall / AC spectrum support does not as a package yet.</p>
+
+  <h2>Out of scope for this setup pass</h2>
+  <ul>
+    <li>Spectrum/FFT capture, ath9k/ath10k debugfs plumbing, live waterfall UI</li>
+    <li>Cloning full aredn-main firmware into this tree</li>
+    <li>Committing/pushing unless requested</li>
+  </ul>
+</body>
+</html>
