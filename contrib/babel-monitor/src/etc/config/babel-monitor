@@ -1,0 +1,6 @@
+config babel-monitor 'main'
+	option enabled 'on'
+	option sample_interval '10'
+	option compress 'on'
+	option sync_limit '500'
+	option compress_min_bytes '1024'

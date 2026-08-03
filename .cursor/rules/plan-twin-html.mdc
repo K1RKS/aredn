@@ -1,0 +1,16 @@
+---
+description: Keep an HTML twin of the babel-monitor plan in sync
+alwaysApply: true
+---
+
+# Plan HTML twin
+
+Whenever you create or update the babel-monitor package plan (`babel-monitor_package*.plan.md` under `.cursor/plans/` or the active plan for this work area):
+
+1. Also create or update the standalone HTML twin in the same turn.
+2. Twin path: [`reports/babel-monitor-package.html`](reports/babel-monitor-package.html) (kebab name matching the plan topic).
+3. The HTML must be self-contained (inline CSS/JS as needed) and openable in a browser without the plan/canvas runtime.
+4. Mirror current plan content: overview, todos, architecture, storage, sync API, example poller, UI, CLI, packaging, phases, out of scope.
+5. Do not wait to be asked — update the twin whenever the plan changes.
+
+This is separate from canvas twin HTML (`.canvas.tsx` → `reports/`); both rules can apply.

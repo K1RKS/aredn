@@ -1,0 +1,109 @@
+#!/usr/bin/ucode
+/**
+ * babel-monitor CGI — public JSON pull API (meta/hello/sync/events/live/series).
+ * Optional gzip L1 via ucode-mod-zlib. Does not touch Prometheus.
+ */
+import * as zlib from "zlib";
+import * as client from "babel_monitor.client";
+import * as configlib from "babel_monitor.config";
+
+const q = getenv("QUERY_STRING") || "";
+const cfg = configlib.loadConfig();
+
+function qparam(name)
+{
+    const m = match(q, regexp(name + "=([^&]*)"));
+    return m ? m[1] : null;
+}
+
+function parseCompress(raw, dflt)
+{
+    if (raw === null || raw === undefined || raw === "") {
+        return dflt;
+    }
+    const s = lc(raw);
+    if (s === "1" || s === "on" || s === "true" || s === "yes") {
+        return true;
+    }
+    if (s === "0" || s === "off" || s === "false" || s === "no") {
+        return false;
+    }
+    return dflt;
+}
+
+let api = qparam("api") || "meta";
+api = lc(api);
+if (api === "hello") {
+    api = "meta";
+}
+
+let cmd = null;
+if (api === "meta") {
+    cmd = "meta";
+}
+else if (api === "live") {
+    cmd = "live";
+}
+else if (api === "sync") {
+    const since = qparam("since_seq") || "0";
+    const limit = qparam("limit") || "";
+    cmd = sprintf("sync since_seq=%s", since);
+    if (limit !== "") {
+        cmd += sprintf(" limit=%s", limit);
+    }
+}
+else if (api === "events") {
+    const since = qparam("since_seq") || "0";
+    const limit = qparam("limit") || "";
+    cmd = sprintf("events since_seq=%s", since);
+    if (limit !== "") {
+        cmd += sprintf(" limit=%s", limit);
+    }
+}
+else if (api === "series") {
+    const sec = qparam("seconds") || "3600";
+    cmd = sprintf("series seconds=%s", sec);
+}
+else {
+    print("Status: 400 Bad Request\r\n");
+    print("Content-Type: application/json\r\n");
+    print("Cache-Control: no-store\r\n");
+    print("Access-Control-Allow-Origin: *\r\n\r\n");
+    print(sprintf('{"error":"unknown api","api":"%s"}\n', api));
+    exit(0);
+}
+
+const resp = client.query(cmd);
+if (!resp) {
+    print("Status: 503 Service Unavailable\r\n");
+    print("Content-Type: application/json\r\n");
+    print("Cache-Control: no-store\r\n");
+    print("Access-Control-Allow-Origin: *\r\n\r\n");
+    print('{"error":"babel-monitord unavailable"}\n');
+    exit(0);
+}
+
+let body = sprintf("%.J", resp);
+const want = parseCompress(qparam("compress"), cfg.compress);
+const accept = getenv("HTTP_ACCEPT_ENCODING") || "";
+const client_gzip = index(accept, "gzip") >= 0;
+let use_gzip = want && client_gzip && length(body) >= cfg.compress_min_bytes;
+
+print("Status: 200 OK\r\n");
+print("Content-Type: application/json\r\n");
+print("Cache-Control: no-store\r\n");
+print("Access-Control-Allow-Origin: *\r\n");
+
+if (use_gzip) {
+    try {
+        body = zlib.deflate(body, true, 1);
+        print("Content-Encoding: gzip\r\n");
+    }
+    catch (e) {
+        use_gzip = false;
+    }
+}
+
+print(sprintf("Content-Length: %d\r\n", length(body)));
+print("\r\n");
+print(body);

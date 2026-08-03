@@ -1,0 +1,433 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>babel-monitor package — plan</title>
+<style>
+  :root {
+    --bg: #0f1115;
+    --fg: #e8eaed;
+    --muted: #9aa0a6;
+    --card: #161a22;
+    --border: #2a2f3a;
+    --accent: #8ab4f8;
+    --ok: #81c995;
+    --warn: #fdd663;
+    --info-border: #3d5a80;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font: 15px/1.55 system-ui, sans-serif;
+    background: var(--bg);
+    color: var(--fg);
+    padding: 24px;
+    max-width: 960px;
+  }
+  h1 { font-size: 1.5rem; margin: 0 0 6px; }
+  h2 { font-size: 1.15rem; margin: 28px 0 10px; border-bottom: 1px solid var(--border); padding-bottom: 6px; }
+  h3 { font-size: 1rem; margin: 18px 0 8px; color: var(--accent); }
+  p { margin: 0 0 10px; color: var(--muted); }
+  .lead { color: var(--muted); max-width: 72ch; }
+  ul, ol { color: var(--muted); margin: 0 0 12px; padding-left: 1.25rem; }
+  li { margin: 4px 0; }
+  code {
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: 0.88em;
+    background: #1c212b;
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 1px 5px;
+    color: var(--fg);
+  }
+  pre {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 14px 16px;
+    overflow-x: auto;
+    color: var(--fg);
+    font: 13px/1.45 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    margin: 10px 0 14px;
+  }
+  .pills { display: flex; flex-wrap: wrap; gap: 8px; margin: 12px 0 20px; }
+  .pill {
+    display: inline-block;
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    padding: 2px 10px;
+    font-size: 12px;
+    color: var(--fg);
+  }
+  .pill.accent { color: var(--accent); border-color: var(--info-border); }
+  .pill.ok { color: var(--ok); border-color: #2d5a3d; }
+  .stats {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 12px;
+    margin: 16px 0 20px;
+  }
+  @media (max-width: 720px) {
+    .stats { grid-template-columns: repeat(2, 1fr); }
+  }
+  .stat {
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background: var(--card);
+    padding: 12px 14px;
+  }
+  .stat .v { font-size: 1.05rem; font-weight: 600; color: var(--fg); }
+  .stat .l { font-size: 12px; color: var(--muted); margin-top: 4px; }
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 14px;
+    margin: 8px 0 14px;
+  }
+  th, td {
+    text-align: left;
+    padding: 8px 10px;
+    border-bottom: 1px solid var(--border);
+    vertical-align: top;
+  }
+  th { color: var(--muted); font-weight: 600; font-size: 12px; }
+  td { color: var(--muted); }
+  td:first-child { color: var(--fg); }
+  .callout {
+    border: 1px solid var(--info-border);
+    border-radius: 8px;
+    padding: 12px 14px;
+    background: var(--card);
+    margin: 14px 0;
+    color: var(--muted);
+  }
+  .callout strong { display: block; margin-bottom: 4px; color: var(--fg); }
+  .todos { list-style: none; padding: 0; margin: 0 0 16px; }
+  .todos li {
+    display: flex; gap: 10px; align-items: flex-start;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background: var(--card);
+    padding: 10px 12px;
+    margin: 8px 0;
+    color: var(--muted);
+  }
+  .todos .status {
+    flex: 0 0 auto;
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    border: 1px solid #5a4a20;
+    color: var(--warn);
+    border-radius: 999px;
+    padding: 2px 8px;
+    margin-top: 2px;
+  }
+  .todos .status.done {
+    border-color: #2d5a3d;
+    color: var(--ok);
+  }
+  .flow {
+    display: grid;
+    grid-template-columns: 1fr auto 1fr;
+    gap: 12px;
+    margin: 14px 0 18px;
+    align-items: stretch;
+  }
+  @media (max-width: 720px) {
+    .flow { grid-template-columns: 1fr; }
+    .flow .arrow { text-align: center; transform: rotate(90deg); }
+  }
+  .box {
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    background: var(--card);
+    padding: 14px;
+  }
+  .box h4 { margin: 0 0 10px; font-size: 0.95rem; color: var(--fg); }
+  .box .item {
+    font-size: 13px;
+    color: var(--muted);
+    border-left: 2px solid var(--info-border);
+    padding: 4px 0 4px 10px;
+    margin: 6px 0;
+  }
+  .arrow {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--accent);
+    font-size: 1.4rem;
+    font-weight: 600;
+  }
+  .meta { font-size: 12px; color: var(--muted); margin-top: 28px; }
+  strong.inline { color: var(--fg); }
+  .twin-banner {
+    border: 1px solid #2d5a3d;
+    background: #142018;
+    border-radius: 8px;
+    padding: 10px 14px;
+    margin: 0 0 18px;
+    color: var(--ok);
+    font-size: 13px;
+  }
+</style>
+</head>
+<body>
+  <div class="twin-banner">
+    HTML twin of plan <code>babel-monitor_package_def23074</code> —
+    keep in sync when the plan changes. Path: <code>reports/babel-monitor-package.html</code>
+  </div>
+
+  <h1>babel-monitor package plan</h1>
+  <p class="lead">
+    Side-loaded AREDN APK: maximize in-RAM metrics under a ~1MB target (2MB hard ceiling),
+    expose a JSON pull/sync API (gzip optional, on by default) for multiple historians,
+    public URL status page, live-config CLI, and an example poller with local cursor state.
+    Metrics never touch flash. <code>node_id</code> = mesh IPv4; MAC + hostname via meta/hello.
+  </p>
+  <div class="pills">
+    <span class="pill accent">branch: bable-monitor</span>
+    <span class="pill accent">apk: babel-monitor</span>
+    <span class="pill">pull-only · multi-server</span>
+    <span class="pill ok">RAM only · no metric flash I/O</span>
+    <span class="pill">≤1MB target · 2MB hard</span>
+    <span class="pill accent">JSON + gzip L1</span>
+    <span class="pill">CLI live config</span>
+    <span class="pill">example poller</span>
+    <span class="pill ok">Prometheus untouched</span>
+  </div>
+
+  <div class="stats">
+    <div class="stat"><div class="v">10s</div><div class="l">default sample interval</div></div>
+    <div class="stat"><div class="v">≥24h</div><div class="l">aim if it fits in ~1MB</div></div>
+    <div class="stat"><div class="v">≤1MB</div><div class="l">RSS target (2MB hard)</div></div>
+    <div class="stat"><div class="v">N pollers</div><div class="l">stateless node API</div></div>
+  </div>
+
+  <h2>Todos</h2>
+  <ul class="todos">
+    <li><span class="status done">done</span> Convert bable-monitor into aredn-main worktree; import Cursor rules; scaffold contrib/babel-monitor</li>
+    <li><span class="status done">done</span> babel-monitord with packed in-RAM rings maximizing retention under ~1MB (hard cap 2MB); no metric flash writes</li>
+    <li><span class="status done">done</span> Sample /tmp/lqm.info + babel socket/arednlink; detect resets and DNS updates as events</li>
+    <li><span class="status done">done</span> JSON pull API + gzip L1; meta/hello identity (mesh IPv4 + mac + hostname); sync/events/live with gaps</li>
+    <li><span class="status done">done</span> Example poller: <code>hello</code> / <code>pull</code> / <code>status</code> + local cursor state + log file</li>
+    <li><span class="status done">done</span> Public URL-only status page (<code>/www/babel-monitor/</code>); no Tools menu</li>
+    <li><span class="status done">done</span> CLI <code>babel-monitor</code>: bare = show settings; <code>-h</code>; live set without daemon restart</li>
+    <li><span class="status">in progress</span> Deploy helpers, README; validate RSS/CPU on x86 (done ~1.6MB VmRSS) and a low-RAM radio (pending)</li>
+  </ul>
+
+  <h2>Naming defaults</h2>
+  <ul>
+    <li>Work area / branch: <code>bable-monitor</code></li>
+    <li>APK: <code>babel-monitor</code> · daemon: <code>babel-monitord</code> · CLI: <code>babel-monitor</code></li>
+    <li>History: <strong class="inline">RAM-only packed rings</strong>; reboot clears local history</li>
+    <li>Long-term: one or more external servers <strong class="inline">pull</strong> via sync API</li>
+    <li>Flash: <strong class="inline">configs / CLI / GUI config changes only</strong> — never metrics or sync state</li>
+    <li><strong class="inline">Prometheus assumed present</strong> — do not disturb <code>/cgi-bin/metrics</code> or exporter modules</li>
+  </ul>
+
+  <h2>Architecture split</h2>
+  <div class="flow">
+    <div class="box">
+      <h4>AREDN node (APK)</h4>
+      <div class="item">lqm.info / babel-dump / arednlink / syslog</div>
+      <div class="item">babel-monitord + control socket</div>
+      <div class="item">In-RAM packed rings</div>
+      <div class="item">Public URL status page</div>
+      <div class="item">Stateless pull API (JSON + gzip)</div>
+      <div class="item">CLI babel-monitor (live config)</div>
+    </div>
+    <div class="arrow">→</div>
+    <div class="box">
+      <h4>Central servers (mesh-reachable)</h4>
+      <div class="item">Poller A · Poller B · … (independent)</div>
+      <div class="item">hello then GET since=cursor</div>
+      <div class="item">Long-term DBs (gaps OK)</div>
+      <div class="item">Grafana / dashboards</div>
+      <div class="item">Example poller script (prototype)</div>
+    </div>
+  </div>
+  <div class="callout">
+    <strong>Pull only · multi-server · no node registration</strong>
+    Central servers have mesh access; when a route is down, that poller misses until reconnect.
+    Multiple servers may poll the same node; each tracks its own <code>(node_id, boot_id, seq)</code> cursor.
+  </div>
+
+  <h2>Phase 0 — Work-area bootstrap</h2>
+  <ol>
+    <li>Remove empty local <code>.git</code>; branch <code>bable-monitor</code> from <code>main</code>; worktree into this path.</li>
+    <li>Import rules: <code>stay-on-ref</code>, <code>bump-babel-monitor-revision</code>, <code>canvas-twin-html</code>, <code>plan-twin-html</code>.</li>
+    <li>Scaffold <code>contrib/babel-monitor/</code> from stableroute.</li>
+    <li>Configure gitignored <code>install_package_remotely</code>.</li>
+  </ol>
+
+  <h2>AREDN Babel context</h2>
+  <table>
+    <thead><tr><th>Source</th><th>Use</th></tr></thead>
+    <tbody>
+      <tr><td><code>/tmp/lqm.info</code></td><td>LQ/cost/RTT, RF retries/fails, tunnel errors</td></tr>
+      <tr><td><code>babel.sock</code> / <code>babel-dump</code></td><td>Neighbors, routes, xroutes, churn</td></tr>
+      <tr><td><code>/etc/state/babel-state</code></td><td>Seqno; deleted on <code>babel-hard</code></td></tr>
+      <tr><td>arednlink hosts + dns_monitor</td><td>DNS/name entry updates</td></tr>
+      <tr><td>syslog hard-restart line</td><td>Auto reset from firmware <code>babel_monitor.uc</code></td></tr>
+    </tbody>
+  </table>
+  <div class="callout">
+    <strong>Prometheus coexistence</strong>
+    Assume the stock exporter is loaded (<code>/cgi-bin/metrics</code>). babel-monitor must not replace, wrap, disable, or reconfigure it — separate sync/history API and UI only.
+  </div>
+
+  <h2>On-node storage (maximize under RAM budget)</h2>
+  <h3>Constraints</h3>
+  <ul>
+    <li>Target RSS ~≤1MB; hard ceiling 2MB</li>
+    <li><strong class="inline">No flash for metrics</strong> — rings in RAM only</li>
+    <li>Flash/UCI: package config only (CLI/GUI-driven) — never metrics</li>
+    <li>Fixed preallocated structures; no unbounded growth</li>
+  </ul>
+  <h3>Packing strategy</h3>
+  <ul>
+    <li>Compact binary sample records in RAM (fixed-width integers)</li>
+    <li>Node-level aggregates on configurable <code>sample_interval</code> (CLI <code>-interval</code>; default 10s; range 5–300)</li>
+    <li>Size ring to use the budget: aim for ≥24h at default 10s if it fits in ~1MB</li>
+    <li>Live <code>-interval</code> changes the timer; ring capacity fixed (retention hours scale with interval)</li>
+    <li>Event ring ~512; live neighbor snapshot for UI / <code>api=live</code></li>
+  </ul>
+  <h3>Sample fields (v1)</h3>
+  <ul>
+    <li><code>t</code>, <code>seq</code>; neighbor/route counts; mean/min LQ; mean cost; bad_cost_count; add/remove deltas</li>
+    <li>Link: tx_packets/retries/fail deltas; optional SNR/bitrate</li>
+    <li>DNS/arednlink deltas; babel hard/soft reset deltas; <code>lqm_ok</code> / <code>babel_ok</code></li>
+  </ul>
+  <h3>Identity</h3>
+  <ul>
+    <li><strong class="inline"><code>node_id</code> = mesh IPv4</strong> (primary poller key)</li>
+    <li><code>meta</code> / <code>hello</code> also returns <strong class="inline">MAC</strong> and <strong class="inline">hostname</strong> — first connect or on demand, not every sync</li>
+    <li>Sync samples carry <code>node_id</code> + <code>boot_id</code> + <code>seq</code>; central caches MAC/hostname from last hello</li>
+    <li>Wire format: <strong class="inline">JSON</strong> + optional gzip L1</li>
+  </ul>
+
+  <h2>Sync API (pull-only, multi-server)</h2>
+  <table>
+    <thead><tr><th>Endpoint</th><th>Purpose</th></tr></thead>
+    <tbody>
+      <tr><td><code>?api=meta</code> (alias <code>hello</code>)</td><td>node_id (mesh IPv4), mac, hostname, boot_id, schema, retention, compress_default</td></tr>
+      <tr><td><code>?api=sync&amp;since_seq=N&amp;limit=M</code></td><td>Samples seq &gt; N for current boot_id, paged JSON</td></tr>
+      <tr><td><code>?api=sync&amp;since_t=T&amp;limit=M</code></td><td>By timestamp (since_seq preferred)</td></tr>
+      <tr><td><code>?api=events&amp;since_seq=N</code></td><td>Event ring</td></tr>
+      <tr><td><code>?api=live</code></td><td>Current neighbors + latest sample</td></tr>
+    </tbody>
+  </table>
+  <h3>Transfer compression</h3>
+  <div class="callout">
+    <strong>Optional · default on · low CPU</strong>
+    Compress wire responses only (not in-RAM rings). Use <strong class="inline">gzip / zlib level 1</strong>
+    via built-in <code>ucode-mod-zlib</code>. Accept <code>compress=1|0</code> or <code>on|off</code>
+    (<strong class="inline">case-insensitive</strong>) via UCI, query, or CLI <code>-compress</code>.
+    Skip compression for tiny responses (&lt;~1KB).
+  </div>
+  <div class="callout">
+    <strong>Gap-tolerant contract</strong>
+    Always HTTP 200 when daemon is up. Include <code>truncated</code>, <code>gap_before</code>,
+    <code>next_seq</code>/<code>next_t</code>, <code>complete</code>, <code>boot_id</code>.
+    Empty samples with truncated=true is success. No per-server state on the node.
+  </div>
+
+  <h2>Example poller script</h2>
+  <p>Workstation/central prototype at <code>contrib/babel-monitor/tools/babel-monitor-poller</code> (not required on the node APK).</p>
+  <table>
+    <thead><tr><th>Command</th><th>Behavior</th></tr></thead>
+    <tbody>
+      <tr><td><code>hello &lt;node&gt;</code></td><td>First-connect: GET meta; print node_id, MAC, hostname, boot_id; update state</td></tr>
+      <tr><td><code>pull &lt;node&gt;</code></td><td>Incremental sync via saved cursor; append to local log; advance state on success</td></tr>
+      <tr><td><code>status &lt;node&gt;</code></td><td>Show local cursor / hello fields / log path</td></tr>
+      <tr><td><code>-h</code></td><td>Help</td></tr>
+    </tbody>
+  </table>
+  <p>Per-node state keeps <code>since_seq</code> so repeat pulls only fetch new data. On <code>boot_id</code> change: reset cursor, note gap, refresh hello.</p>
+
+  <h2>Local status page</h2>
+  <ul>
+    <li>Public URL only: <code>/www/babel-monitor/</code> (no Tools menu; optional manual service link)</li>
+    <li>Realtime neighbors, routes, last reset, packet/retry rates</li>
+    <li>Graphs: 5m / 30m / 24h from RAM</li>
+    <li>Viewing the UI does not write flash</li>
+  </ul>
+
+  <h2>CLI: live settings</h2>
+  <p><code>babel-monitor</code> reads/changes daemon settings <strong class="inline">without restarting</strong> <code>babel-monitord</code> (control socket + UCI persist).</p>
+  <table>
+    <thead><tr><th>Invocation</th><th>Effect</th></tr></thead>
+    <tbody>
+      <tr><td><code>babel-monitor</code></td><td>Read-only: print live settings + brief status</td></tr>
+      <tr><td><code>babel-monitor -h</code></td><td>Help</td></tr>
+      <tr><td><code>babel-monitor -interval 30 -compress off</code></td><td>Apply immediately; persist to UCI</td></tr>
+    </tbody>
+  </table>
+  <table>
+    <thead><tr><th>CLI</th><th>UCI</th><th>Default</th><th>Notes</th></tr></thead>
+    <tbody>
+      <tr><td><code>-interval &lt;sec&gt;</code></td><td><code>sample_interval</code></td><td>10</td><td>5–300 seconds</td></tr>
+      <tr><td><code>-compress &lt;val&gt;</code></td><td><code>compress</code></td><td>on</td><td>1|0|on|off (case-insensitive)</td></tr>
+      <tr><td><code>-enabled &lt;val&gt;</code></td><td><code>enabled</code></td><td>on</td><td>Pause/resume sampling; API still serves RAM</td></tr>
+      <tr><td><code>-sync-limit &lt;n&gt;</code></td><td><code>sync_limit</code></td><td>500</td><td>Default sync page size</td></tr>
+      <tr><td><code>-compress-min &lt;bytes&gt;</code></td><td><code>compress_min_bytes</code></td><td>1024</td><td>Skip gzip below this size</td></tr>
+    </tbody>
+  </table>
+
+  <h2>Packaging layout</h2>
+  <pre>contrib/babel-monitor/
+  build.sh / tools/mkapk.py / README.md
+  tools/babel-monitor-poller          # example poller (hello/pull/status)
+  src/
+    etc/init.d/babel-monitor
+    etc/config/babel-monitor
+    usr/sbin/babel-monitord
+    usr/bin/babel-monitor
+    usr/share/ucode/babel_monitor/
+    www/babel-monitor/index.html
+    www/cgi-bin/babel-monitor
+    .post-install / .post-upgrade / .pre-deinstall</pre>
+
+  <h2>Implementation phases</h2>
+  <ol>
+    <li>Bootstrap worktree + rules + APK scaffold; RSS probe vs 1MB/2MB.</li>
+    <li>Packed rings + sampling; prove no metric flash I/O.</li>
+    <li>JSON sync/meta/hello API + gzip L1; identity = mesh IPv4 + mac + hostname.</li>
+    <li>Example poller (<code>hello</code> / <code>pull</code> / <code>status</code> + state + log).</li>
+    <li>Control socket + <code>babel-monitor</code> CLI.</li>
+    <li>Public URL status page (no Tools menu).</li>
+    <li>Deploy helpers; validate on x86 <strong class="inline">and</strong> a low-RAM radio.</li>
+  </ol>
+
+  <h2>Out of scope (v1)</h2>
+  <ul>
+    <li>Push/upload from node to central</li>
+    <li>Per-server registration or ACKs on the node</li>
+    <li>Writing metrics/rings to flash</li>
+    <li>Shipping Grafana / binary sync format</li>
+    <li>Modifying or wrapping stock Prometheus (<code>/cgi-bin/metrics</code>)</li>
+    <li>Tools menu integration</li>
+    <li>Replacing firmware babel_monitor / LQM</li>
+    <li>Per-neighbor 24h time series</li>
+    <li>Live resize of the ring buffer</li>
+    <li>Full firmware image builds</li>
+  </ul>
+
+  <h2>HTML twin maintenance</h2>
+  <div class="callout">
+    <strong>Always keep this file updated</strong>
+    Whenever the plan <code>babel-monitor_package_def23074</code> changes, update
+    <code>reports/babel-monitor-package.html</code> in the same turn so it remains a faithful
+    standalone mirror (inline CSS, openable without the plan runtime).
+  </div>
+
+  <p class="meta">
+    Twin of plan <code>babel-monitor_package_def23074</code> ·
+    synced for browser review ·
+    path: <code>reports/babel-monitor-package.html</code>
+  </p>
+</body>
+</html>

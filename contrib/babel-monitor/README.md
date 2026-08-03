@@ -1,0 +1,109 @@
+# babel-monitor
+
+Side-loaded AREDN APK that keeps Babel / LQM / arednlink metrics in RAM, exposes a
+stateless JSON pull API for external historians, a public status page, and a
+live-config CLI.
+
+- Package: `babel-monitor-0.1.5-r0.apk`
+- Daemon: `babel-monitord`
+- CLI: `babel-monitor`
+- Status UI: `/babel-monitor/`
+- Sync API: `/cgi-bin/babel-monitor?api=…`
+- Does **not** touch stock Prometheus (`/cgi-bin/metrics`)
+
+## Build
+
+```sh
+cd contrib/babel-monitor
+./build.sh
+```
+
+APK lands in `dist/babel-monitor-0.1.5-r0.apk`.
+
+## Install on a node
+
+From the work-area root (after configuring `install_package_remotely.conf`):
+
+```sh
+./install_package_remotely -apk babel-monitor
+```
+
+Or copy the APK and:
+
+```sh
+apk add --allow-untrusted /tmp/babel-monitor-0.1.5-r0.apk
+```
+
+## On-node storage
+
+- Fixed in-RAM sample ring (`8640` slots ≈ 24h @ 10s) + event ring (`512`)
+- Target RSS ~≤1MB (hard ceiling 2MB); reboot clears history
+- Flash/UCI holds **config only** — never metrics
+
+## CLI
+
+```sh
+babel-monitor                  # show live settings + status
+babel-monitor -h
+babel-monitor -interval 30 -compress off
+babel-monitor -enabled off     # pause sampling; API still serves RAM
+```
+
+| Flag | UCI | Default |
+|------|-----|---------|
+| `-interval` | `sample_interval` | 10 (5–300) |
+| `-compress` | `compress` | on |
+| `-enabled` | `enabled` | on |
+| `-sync-limit` | `sync_limit` | 500 |
+| `-compress-min` | `compress_min_bytes` | 1024 |
+
+Changes apply via the control socket and persist to `/etc/config/babel-monitor` without restarting the daemon.
+
+## Sync API (pull-only)
+
+Base: `/cgi-bin/babel-monitor`
+
+| Query | Purpose |
+|-------|---------|
+| `?api=meta` (alias `hello`) | `node_id` (mesh IPv4), mac, hostname, boot_id, schema, retention |
+| `?api=sync&since_seq=N&limit=M` | Samples with `seq > N` for current `boot_id` |
+| `?api=events&since_seq=N` | Event ring |
+| `?api=live` | Current neighbors + latest sample |
+| `?api=series&seconds=S` | Samples in a time window (status graphs) |
+
+Optional `compress=1|0|on|off` (default from UCI; gzip level 1 when body ≥ `compress_min_bytes` and client sends `Accept-Encoding: gzip`).
+
+Gap-tolerant: HTTP 200 when the daemon is up; responses include `truncated`, `gap_before`, `next_seq`, `complete`, `boot_id`. No per-poller state on the node.
+
+## Example poller
+
+Workstation script (not part of the on-node APK runtime requirement):
+
+```sh
+contrib/babel-monitor/tools/babel-monitor-poller hello k1rks-node.local.mesh
+contrib/babel-monitor/tools/babel-monitor-poller pull  k1rks-node.local.mesh
+contrib/babel-monitor/tools/babel-monitor-poller status k1rks-node.local.mesh
+```
+
+State/logs: `~/.babel-monitor/` (override with `BABEL_MONITOR_STATE`).
+
+## Status page
+
+Open `http://<node>/babel-monitor/` — live neighbors, KPIs, and 5m / 30m / 24h mean-LQ graph from RAM. Viewing the UI does not write flash. No Tools menu entry.
+
+## Layout
+
+```
+contrib/babel-monitor/
+  build.sh / tools/mkapk.py / README.md
+  tools/babel-monitor-poller
+  src/
+    etc/init.d/babel-monitor
+    etc/config/babel-monitor
+    usr/sbin/babel-monitord
+    usr/bin/babel-monitor
+    usr/share/ucode/babel_monitor/
+    www/babel-monitor/index.html
+    www/cgi-bin/babel-monitor
+    .post-install / .post-upgrade / .pre-deinstall
+```

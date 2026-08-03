@@ -1,0 +1,119 @@
+#!/usr/bin/ucode
+/**
+ * babel-monitor CLI — show or set live daemon settings (no restart).
+ */
+import * as client from "babel_monitor.client";
+import * as common from "babel_monitor.common";
+
+function usage()
+{
+    print("Usage: babel-monitor [options]\n");
+    print("  With no options: print live settings and brief status.\n");
+    print("\n");
+    print("  -h                 Show this help\n");
+    print("  -interval <sec>    Sample interval (5–300, default 10)\n");
+    print("  -compress <val>    Wire gzip: 1|0|on|off (default on)\n");
+    print("  -enabled <val>     Pause/resume sampling: 1|0|on|off\n");
+    print("  -sync-limit <n>    Default sync page size (50–2000)\n");
+    print("  -compress-min <n>  Skip gzip below this many bytes\n");
+    print("\n");
+    print("Settings apply immediately via the control socket and persist to UCI.\n");
+    print(sprintf("Package %s\n", common.packageVersion()));
+}
+
+function printStatus(resp)
+{
+    if (!resp) {
+        print("babel-monitord is not running (no response on control socket).\n");
+        return 1;
+    }
+    const s = resp.settings || {};
+    const st = resp.status || {};
+    print("babel-monitor settings:\n");
+    print(sprintf("  enabled            %s\n", s.enabled));
+    print(sprintf("  sample_interval    %s s\n", s.sample_interval));
+    print(sprintf("  compress           %s\n", s.compress));
+    print(sprintf("  sync_limit         %s\n", s.sync_limit));
+    print(sprintf("  compress_min_bytes %s\n", s.compress_min_bytes));
+    print("\n");
+    print("status:\n");
+    print(sprintf("  package            %s\n", st.package_version || common.packageVersion()));
+    print(sprintf("  node_id            %s\n", st.node_id || ""));
+    print(sprintf("  hostname           %s\n", st.hostname || ""));
+    print(sprintf("  mac                %s\n", st.mac || ""));
+    print(sprintf("  boot_id            %s\n", st.boot_id || ""));
+    print(sprintf("  samples            %s / %s\n", st.sample_count, st.sample_cap));
+    print(sprintf("  newest_seq         %s\n", st.newest_seq || 0));
+    print(sprintf("  retention_s        %s\n", st.retention_s || 0));
+    print(sprintf("  rss_estimate       %s bytes\n", st.rss_estimate_bytes || 0));
+    return 0;
+}
+
+let show_help = false;
+const sets = {};
+for (let i = 0; i < length(ARGV); i++) {
+    const a = ARGV[i];
+    if (a === "-h" || a === "--help") {
+        show_help = true;
+        continue;
+    }
+    const flags = {
+        "-interval": "sample_interval",
+        "--interval": "sample_interval",
+        "-compress": "compress",
+        "--compress": "compress",
+        "-enabled": "enabled",
+        "--enabled": "enabled",
+        "-sync-limit": "sync_limit",
+        "--sync-limit": "sync_limit",
+        "-compress-min": "compress_min_bytes",
+        "--compress-min": "compress_min_bytes"
+    };
+    if (flags[a]) {
+        if (i + 1 >= length(ARGV)) {
+            print(sprintf("Missing value for %s\n", a));
+            usage();
+            exit(1);
+        }
+        i++;
+        sets[flags[a]] = ARGV[i];
+        continue;
+    }
+    if (match(a, /^-/)) {
+        print(sprintf("Unknown option: %s\n", a));
+        usage();
+        exit(1);
+    }
+    print(sprintf("Unexpected argument: %s\n", a));
+    usage();
+    exit(1);
+}
+
+if (show_help) {
+    usage();
+    exit(0);
+}
+
+if (length(sets)) {
+    let cmd = "set";
+    for (let k in sets) {
+        cmd += sprintf(" %s=%s", k, sets[k]);
+    }
+    const r = client.query(cmd);
+    if (!r) {
+        print("babel-monitord is not running (cannot apply settings).\n");
+        exit(1);
+    }
+    if (r.error || r.ok === false) {
+        print(sprintf("set failed: %s\n", r.error || "unknown"));
+        exit(1);
+    }
+    print("updated:\n");
+    const s = r.settings || {};
+    for (let k in s) {
+        print(sprintf("  %s=%s\n", k, s[k]));
+    }
+    exit(0);
+}
+
+exit(printStatus(client.query("get")));

@@ -1,0 +1,16 @@
+---
+description: Always create a standalone HTML twin when writing or updating a Cursor canvas
+alwaysApply: true
+---
+
+# Canvas digital twin (HTML)
+
+Whenever you create or update a Cursor canvas (`.canvas.tsx`):
+
+1. Also create or update a twin standalone HTML file that mirrors the report content.
+2. Twin path: `reports/<same-kebab-name>.html` unless the project specifies another location (same basename as the canvas, `.html` instead of `.canvas.tsx`).
+3. The HTML must be self-contained (inline CSS/JS as needed) and openable in a browser without the canvas runtime.
+4. Do this in the same turn as the canvas write/update — do not wait to be asked.
+5. Do not put the twin HTML inside the managed `canvases/` directory (canvas files must stay alone there).
+
+Skip this entirely if another always-apply rule in this project disables canvas twin HTML.

@@ -1,0 +1,252 @@
+#!/usr/bin/ucode
+/**
+ * babel-monitord — in-RAM metrics collector + control/data socket.
+ * No metric flash I/O. Does not touch Prometheus.
+ */
+import * as fs from "fs";
+import * as uloop from "uloop";
+import * as socket from "socket";
+import * as common from "babel_monitor.common";
+import * as storelib from "babel_monitor.store";
+import * as samplelib from "babel_monitor.sample";
+import * as configlib from "babel_monitor.config";
+
+fs.mkdir(common.RUN_DIR);
+const store = storelib.createStore();
+store.boot_id = common.bootIdNew();
+let cfg = configlib.loadConfig();
+samplelib.refreshIdentity(store);
+
+let sample_timer = null;
+
+function metaObj()
+{
+    let oldest = null;
+    let newest = null;
+    if (store.sample_count > 0) {
+        oldest = store.samples[(store.sample_head - store.sample_count + store.sample_cap) % store.sample_cap];
+        newest = store.samples[(store.sample_head - 1 + store.sample_cap) % store.sample_cap];
+    }
+    return {
+        schema_version: common.SCHEMA_VERSION,
+        package_version: common.packageVersion(),
+        node_id: store.identity.node_id,
+        mac: store.identity.mac,
+        hostname: store.identity.hostname,
+        boot_id: store.boot_id,
+        sample_interval: cfg.sample_interval,
+        retention_s: cfg.sample_interval * store.sample_cap,
+        sample_count: store.sample_count,
+        sample_cap: store.sample_cap,
+        oldest_t: oldest ? oldest.t : null,
+        oldest_seq: oldest ? oldest.seq : 0,
+        newest_t: newest ? newest.t : null,
+        newest_seq: newest ? newest.seq : 0,
+        compress_default: cfg.compress ? "on" : "off",
+        enabled: cfg.enabled ? "on" : "off",
+        sync_limit: cfg.sync_limit,
+        compress_min_bytes: cfg.compress_min_bytes,
+        rss_estimate_bytes: storelib.estimateBytes(store)
+    };
+}
+
+function handleRequest(line)
+{
+    line = trim(line);
+    if (!length(line)) {
+        return { error: "empty" };
+    }
+
+    const parts = split(line, " ");
+    const cmd = lc(parts[0]);
+    const args = {};
+    for (let i = 1; i < length(parts); i++) {
+        const kv = split(parts[i], "=", 2);
+        if (length(kv) === 2) {
+            args[kv[0]] = kv[1];
+        }
+    }
+
+    if (cmd === "meta" || cmd === "hello") {
+        samplelib.refreshIdentity(store);
+        return metaObj();
+    }
+    if (cmd === "live") {
+        const newest = store.sample_count
+            ? store.samples[(store.sample_head - 1 + store.sample_cap) % store.sample_cap]
+            : null;
+        return {
+            boot_id: store.boot_id,
+            node_id: store.identity.node_id,
+            neighbors: store.live_neighbors,
+            latest: newest,
+            meta: metaObj()
+        };
+    }
+    if (cmd === "sync") {
+        const since = int(args.since_seq || 0);
+        const limit = common.clampInt(args.limit || cfg.sync_limit, 1, 2000, cfg.sync_limit);
+        const r = storelib.syncSamples(store, since, limit);
+        let next_seq = since;
+        if (length(r.samples)) {
+            next_seq = r.samples[length(r.samples) - 1].seq;
+        }
+        const hit_end = !length(r.samples) || next_seq >= r.newest_seq;
+        return {
+            boot_id: store.boot_id,
+            node_id: store.identity.node_id,
+            truncated: r.truncated,
+            gap_before: r.gap_before,
+            next_seq: next_seq,
+            next_t: length(r.samples) ? r.samples[length(r.samples) - 1].t : null,
+            complete: hit_end || length(r.samples) < limit,
+            samples: r.samples
+        };
+    }
+    if (cmd === "events") {
+        const since = int(args.since_seq || 0);
+        const limit = common.clampInt(args.limit || cfg.sync_limit, 1, 2000, cfg.sync_limit);
+        const r = storelib.syncEvents(store, since, limit);
+        return {
+            boot_id: store.boot_id,
+            truncated: r.truncated,
+            events: r.events,
+            next_seq: length(r.events) ? r.events[length(r.events) - 1].seq : since,
+            complete: true
+        };
+    }
+    if (cmd === "series") {
+        const sec = common.clampInt(args.seconds || 3600, 60, 86400, 3600);
+        return {
+            boot_id: store.boot_id,
+            seconds: sec,
+            samples: storelib.seriesWindow(store, sec)
+        };
+    }
+    if (cmd === "get") {
+        return {
+            settings: {
+                enabled: cfg.enabled ? "on" : "off",
+                sample_interval: cfg.sample_interval,
+                compress: cfg.compress ? "on" : "off",
+                sync_limit: cfg.sync_limit,
+                compress_min_bytes: cfg.compress_min_bytes
+            },
+            status: metaObj()
+        };
+    }
+    if (cmd === "set") {
+        let changed = false;
+        const prev_interval = cfg.sample_interval;
+        for (let k in args) {
+            if (configlib.applySetting(cfg, k, args[k])) {
+                changed = true;
+            }
+        }
+        if (!changed) {
+            return { ok: false, error: "no valid settings" };
+        }
+        configlib.saveConfig(cfg);
+        if (sample_timer && cfg.sample_interval !== prev_interval) {
+            sample_timer.set(cfg.sample_interval * 1000);
+        }
+        return {
+            ok: true,
+            settings: {
+                enabled: cfg.enabled ? "on" : "off",
+                sample_interval: cfg.sample_interval,
+                compress: cfg.compress ? "on" : "off",
+                sync_limit: cfg.sync_limit,
+                compress_min_bytes: cfg.compress_min_bytes
+            }
+        };
+    }
+    return { error: sprintf("unknown cmd: %s", cmd) };
+}
+
+function serveClient(client)
+{
+    let buf = "";
+    uloop.handle(client, (events) => {
+        if (!(events & uloop.ULOOP_READ)) {
+            return;
+        }
+        const data = client.recv(8192);
+        if (!data || length(data) === 0) {
+            client.close();
+            return;
+        }
+        buf += data;
+        while (true) {
+            const n = index(buf, "\n");
+            if (n < 0) {
+                break;
+            }
+            const line = substr(buf, 0, n);
+            buf = substr(buf, n + 1);
+            if (trim(line) === "quit") {
+                client.close();
+                return;
+            }
+            const resp = handleRequest(line);
+            client.send(sprintf("%J\n", resp));
+        }
+    }, uloop.ULOOP_READ);
+}
+
+function doSample()
+{
+    samplelib.collectSample(store, cfg);
+    if (sample_timer) {
+        sample_timer.set(cfg.sample_interval * 1000);
+    }
+    else {
+        sample_timer = uloop.timer(cfg.sample_interval * 1000, doSample);
+    }
+}
+
+function main()
+{
+    fs.unlink(common.SOCK_PATH);
+    const listener = socket.create(socket.AF_UNIX, socket.SOCK_STREAM | socket.SOCK_NONBLOCK, 0);
+    if (!listener) {
+        print("babel-monitord: socket.create failed: ", socket.error(), "\n");
+        return 1;
+    }
+    if (!listener.bind({ family: socket.AF_UNIX, path: common.SOCK_PATH })) {
+        print("babel-monitord: bind failed: ", socket.error(), "\n");
+        return 1;
+    }
+    if (!listener.listen(16)) {
+        print("babel-monitord: listen failed: ", socket.error(), "\n");
+        return 1;
+    }
+    try {
+        fs.chmod(common.SOCK_PATH, 0600);
+    }
+    catch (e) {
+    }
+
+    uloop.init();
+
+    uloop.handle(listener, (events) => {
+        if (!(events & uloop.ULOOP_READ)) {
+            return;
+        }
+        const client = listener.accept();
+        if (client) {
+            serveClient(client);
+        }
+    }, uloop.ULOOP_READ);
+
+    print(sprintf("babel-monitord %s boot_id=%s interval=%d\n",
+        common.packageVersion(), store.boot_id, cfg.sample_interval));
+
+    /* First sample after uloop is running so the control socket stays responsive */
+    sample_timer = uloop.timer(0, doSample);
+
+    uloop.run();
+    return 0;
+}
+
+exit(main());

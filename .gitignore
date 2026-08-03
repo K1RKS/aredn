@@ -12,3 +12,7 @@ openwrt/
 ._.DS_Store
 saved/
 .vscode
+
+# Local-only remote APK install helper
+/install_package_remotely
+/install_package_remotely.conf

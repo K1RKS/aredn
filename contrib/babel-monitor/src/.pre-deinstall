@@ -1,0 +1,6 @@
+#!/bin/sh
+# Stop and disable babel-monitord before package removal.
+[ -x /etc/init.d/babel-monitor ] && /etc/init.d/babel-monitor stop 2>/dev/null || true
+[ -x /etc/init.d/babel-monitor ] && /etc/init.d/babel-monitor disable 2>/dev/null || true
+rm -f /var/run/babel-monitor.sock /var/run/babel-monitor.pid 2>/dev/null || true
+exit 0
