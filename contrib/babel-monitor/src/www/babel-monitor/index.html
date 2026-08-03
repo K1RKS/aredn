@@ -83,7 +83,48 @@
     height: 3px;
     border-radius: 1px;
   }
-  canvas { width: 100%; height: 180px; display: block; background: #15181c; border-radius: 4px; }
+  canvas { width: 100%; height: 180px; display: block; background: #15181c; border-radius: 4px; cursor: crosshair; }
+  .chart-tip {
+    position: absolute;
+    z-index: 2;
+    pointer-events: none;
+    display: none;
+    min-width: 140px;
+    max-width: 280px;
+    padding: 8px 10px;
+    background: rgba(20, 23, 28, 0.94);
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    box-shadow: 0 6px 18px rgba(0, 0, 0, 0.35);
+    font-size: 12px;
+    color: var(--fg);
+    line-height: 1.35;
+  }
+  .chart-tip .t { color: var(--muted); margin-bottom: 6px; font-size: 11px; }
+  .chart-tip .tip-row {
+    display: flex;
+    flex-wrap: nowrap;
+    justify-content: space-between;
+    gap: 12px;
+    margin: 2px 0;
+  }
+  .chart-tip .tip-row .n {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    color: var(--muted);
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .chart-tip .tip-row .n i {
+    flex: 0 0 auto;
+    width: 10px;
+    height: 3px;
+    border-radius: 1px;
+  }
+  .chart-tip .tip-row .v { font-variant-numeric: tabular-nums; font-weight: 600; }
   table { width: 100%; border-collapse: collapse; font-size: 13px; }
   th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--line); }
   th { color: var(--muted); font-weight: 600; font-size: 11px; }
@@ -114,6 +155,7 @@
     <div class="chart-wrap">
       <div class="legend" id="legend"></div>
       <canvas id="chart" width="1000" height="180"></canvas>
+      <div class="chart-tip" id="chartTip" hidden></div>
     </div>
     <div class="tabs time" id="timeTabs" role="tablist" aria-label="Time range">
       <button type="button" data-sec="300" class="active">5m</button>
@@ -218,8 +260,25 @@
   let windowSec = 300;
   let metricId = "lq";
   let series = [];
+  let hoverIdx = -1;
+  let chartLayout = null; /* { padL, padR, padT, padB, plotW, n } */
 
   function $(id) { return document.getElementById(id); }
+
+  function formatTime(t) {
+    if (t == null) return "—";
+    const d = new Date(Number(t) * 1000);
+    if (isNaN(d.getTime())) return String(t);
+    const p = function (n) { return (n < 10 ? "0" : "") + n; };
+    return d.getFullYear() + "-" + p(d.getMonth() + 1) + "-" + p(d.getDate()) +
+      " " + p(d.getHours()) + ":" + p(d.getMinutes()) + ":" + p(d.getSeconds());
+  }
+
+  function formatVal(v) {
+    if (v == null || v !== v) return "—";
+    if (Math.abs(v - Math.round(v)) < 1e-6) return String(Math.round(v));
+    return (Math.round(v * 10) / 10).toString();
+  }
 
   function colorAt(i) {
     return PALETTE[i % PALETTE.length];
@@ -345,6 +404,57 @@
     return { lo: lo, hi: hi };
   }
 
+  function hideTip() {
+    const tip = $("chartTip");
+    tip.style.display = "none";
+    tip.hidden = true;
+  }
+
+  function showTip(metric, idx, clientX, clientY) {
+    const tip = $("chartTip");
+    const wrap = tip.parentElement;
+    const row = series[idx];
+    if (!row) { hideTip(); return; }
+
+    let html = '<div class="t">' + formatTime(row.t) +
+      (row.seq != null ? " · seq " + row.seq : "") + "</div>";
+    for (let si = 0; si < metric.series.length; si++) {
+      const spec = metric.series[si];
+      const v = sampleValue(row, spec);
+      html += '<div class="tip-row"><span class="n"><i style="background:' +
+        spec.color + '"></i>' + spec.label + '</span><span class="v">' +
+        formatVal(v) + "</span></div>";
+    }
+    tip.innerHTML = html;
+    tip.hidden = false;
+    tip.style.display = "block";
+
+    const wr = wrap.getBoundingClientRect();
+    const tw = tip.offsetWidth || 160;
+    const th = tip.offsetHeight || 80;
+    let left = clientX - wr.left + 14;
+    let top = clientY - wr.top - th - 10;
+    if (left + tw > wr.width - 4) left = clientX - wr.left - tw - 14;
+    if (left < 4) left = 4;
+    if (top < 4) top = clientY - wr.top + 16;
+    tip.style.left = left + "px";
+    tip.style.top = top + "px";
+  }
+
+  function indexFromCanvasX(cssX, cssW) {
+    if (!chartLayout || !series.length) return -1;
+    const scaleX = $("chart").width / Math.max(1, cssW);
+    const x = cssX * scaleX;
+    const { padL, plotW, n } = chartLayout;
+    if (x < padL || x > padL + plotW) return -1;
+    if (n <= 1) return 0;
+    const t = (x - padL) / plotW;
+    let idx = Math.round(t * (n - 1));
+    if (idx < 0) idx = 0;
+    if (idx > n - 1) idx = n - 1;
+    return idx;
+  }
+
   function drawChart() {
     const metric = resolveMetric();
     renderLegend(metric);
@@ -352,6 +462,8 @@
     const ctx = c.getContext("2d");
     const w = c.width, h = c.height;
     const padL = 44, padR = 12, padT = 14, padB = 22;
+    const plotW = w - padL - padR;
+    chartLayout = { padL: padL, padR: padR, padT: padT, padB: padB, plotW: plotW, n: series.length };
     ctx.clearRect(0, 0, w, h);
     ctx.strokeStyle = "#3a424d";
     ctx.beginPath();
@@ -363,6 +475,7 @@
     if (!series.length) {
       ctx.fillStyle = "#9aa3ad";
       ctx.fillText("No samples in window", padL + 10, h / 2);
+      hideTip();
       return;
     }
 
@@ -373,6 +486,7 @@
       if (!anyRf) {
         ctx.fillStyle = "#9aa3ad";
         ctx.fillText("No RF neighbors in window", padL + 10, h / 2);
+        hideTip();
         return;
       }
     }
@@ -402,13 +516,62 @@
           started = false;
           continue;
         }
-        const x = padL + (i / Math.max(1, n - 1)) * (w - padL - padR);
+        const x = padL + (i / Math.max(1, n - 1)) * plotW;
         const y = (h - padB) - ((v - bounds.lo) / span) * (h - padT - padB);
         if (!started) { ctx.moveTo(x, y); started = true; }
         else ctx.lineTo(x, y);
       }
       ctx.stroke();
     }
+
+    if (hoverIdx >= 0 && hoverIdx < n) {
+      const x = padL + (hoverIdx / Math.max(1, n - 1)) * plotW;
+      ctx.strokeStyle = "rgba(230, 232, 235, 0.55)";
+      ctx.lineWidth = 1;
+      ctx.setLineDash([4, 3]);
+      ctx.beginPath();
+      ctx.moveTo(x, padT);
+      ctx.lineTo(x, h - padB);
+      ctx.stroke();
+      ctx.setLineDash([]);
+
+      for (let si = 0; si < metric.series.length; si++) {
+        const v = lines[si][hoverIdx];
+        if (v == null || v !== v) continue;
+        const y = (h - padB) - ((v - bounds.lo) / span) * (h - padT - padB);
+        ctx.fillStyle = metric.series[si].color;
+        ctx.beginPath();
+        ctx.arc(x, y, 3.5, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.strokeStyle = "#15181c";
+        ctx.lineWidth = 1;
+        ctx.stroke();
+      }
+    }
+  }
+
+  function onChartMove(ev) {
+    const c = $("chart");
+    const rect = c.getBoundingClientRect();
+    const idx = indexFromCanvasX(ev.clientX - rect.left, rect.width);
+    if (idx < 0) {
+      if (hoverIdx !== -1) {
+        hoverIdx = -1;
+        drawChart();
+      }
+      hideTip();
+      return;
+    }
+    const moved = idx !== hoverIdx;
+    hoverIdx = idx;
+    if (moved) drawChart();
+    showTip(resolveMetric(), idx, ev.clientX, ev.clientY);
+  }
+
+  function onChartLeave() {
+    hoverIdx = -1;
+    hideTip();
+    drawChart();
   }
 
   async function refreshLive() {
@@ -420,6 +583,10 @@
   async function refreshSeries() {
     const data = await getJson(API + "?api=series&seconds=" + windowSec + "&compress=0");
     series = data.samples || [];
+    if (hoverIdx >= series.length) {
+      hoverIdx = series.length ? series.length - 1 : -1;
+      if (hoverIdx < 0) hideTip();
+    }
     drawChart();
   }
 
@@ -446,13 +613,23 @@
 
   bindTabGroup("metricTabs", function (b) {
     metricId = b.getAttribute("data-metric") || "lq";
+    hoverIdx = -1;
+    hideTip();
     drawChart();
   });
 
   bindTabGroup("timeTabs", function (b) {
     windowSec = parseInt(b.getAttribute("data-sec"), 10);
+    hoverIdx = -1;
+    hideTip();
     refreshSeries().catch(function (e) { setErr(e.message); });
   });
+
+  (function bindChartHover() {
+    const c = $("chart");
+    c.addEventListener("mousemove", onChartMove);
+    c.addEventListener("mouseleave", onChartLeave);
+  })();
 
   tick();
   setInterval(tick, 10000);
