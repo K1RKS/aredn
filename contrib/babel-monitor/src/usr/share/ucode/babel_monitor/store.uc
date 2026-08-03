@@ -36,7 +36,13 @@ export function createStore()
             babel_state_seen: null,
             babel_pid: null,
             dns_mtime: null,
-            neighbor_keys: {}
+            neighbor_keys: {},
+            uptime_s: null,
+            cpu_total: null,
+            cpu_idle: null,
+            cpu_peak_total: null,
+            cpu_peak_idle: null,
+            cpu_peak_pct: 0
         },
         live_neighbors: [],
         identity: {
@@ -163,6 +169,6 @@ export function seriesWindow(store, seconds)
 
 export function estimateBytes(store)
 {
-    /* Rough: ~80 bytes/sample + ~48 bytes/event + overhead */
-    return store.sample_count * 80 + store.event_count * 48 + 65536;
+    /* Rough: ~100 bytes/sample + ~48 bytes/event + overhead */
+    return store.sample_count * 100 + store.event_count * 48 + 65536;
 };

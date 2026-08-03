@@ -3,14 +3,15 @@ description: Keep this work area pinned to its assigned git ref
 alwaysApply: true
 ---
 
-# Work-area isolation for bable-monitor
+# Work-area isolation for babel-monitor
 
 This Cursor window is a dedicated AREDN work area.
 
-- Assigned git branch: `bable-monitor`
+- Assigned git branch: `babel-monitor`
+- Worktree path: `~/ai_projects/AREDN/babel-monitor`
 - Do **not** checkout, create, rename, or switch branches/tags.
 - Do **not** modify or open sibling work areas under `~/ai_projects/AREDN/`.
 - Do **not** extract packages into a standalone mini-repo.
-- All commits for this area must stay on `bable-monitor`.
+- All commits for this area must stay on `babel-monitor`.
 - If work belongs on another branch/tag, stop and tell the user to use that work area's Cursor window instead.
 - If you need to touch git branches or mutate local git beyond normal file edits on this branch, **halt and ask the user**.

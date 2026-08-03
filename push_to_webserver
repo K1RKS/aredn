@@ -1,0 +1,8 @@
+#!/bin/bash
+# Push built babel-monitor APK(s) to the internal package web root.
+# Run from the babel-monitor work area: /home/kirk/ai_projects/AREDN/babel-monitor
+set -euo pipefail
+cd "$(dirname "$0")"
+pkg=babel-monitor
+scp contrib/${pkg}/dist/*.apk root@172.27.0.90:/var/www/html/test.k1rks.me/aredn_packages/${pkg}/
+ssh internal-nginx 'cd /var/www/html/test.k1rks.me/aredn_packages && ./link_latest_apks.sh'

@@ -5,10 +5,10 @@ import * as math from "math";
 
 export function packageVersion()
 {
-    return "0.1.5-r0";
+    return "0.1.6-r0";
 };
 
-export const SCHEMA_VERSION = 1;
+export const SCHEMA_VERSION = 2;
 export const SOCK_PATH = "/var/run/babel-monitor.sock";
 export const RUN_DIR = "/var/run/babel-monitor";
 export const SAMPLE_CAP = 8640;   /* 24h @ 10s */

@@ -18,6 +18,7 @@ let cfg = configlib.loadConfig();
 samplelib.refreshIdentity(store);
 
 let sample_timer = null;
+let peak_timer = null;
 
 function metaObj()
 {
@@ -205,6 +206,14 @@ function doSample()
     }
 }
 
+function doCpuPeak()
+{
+    samplelib.updateCpuPeak(store);
+    if (peak_timer) {
+        peak_timer.set(1000);
+    }
+}
+
 function main()
 {
     fs.unlink(common.SOCK_PATH);
@@ -244,6 +253,7 @@ function main()
 
     /* First sample after uloop is running so the control socket stays responsive */
     sample_timer = uloop.timer(0, doSample);
+    peak_timer = uloop.timer(1000, doCpuPeak);
 
     uloop.run();
     return 0;

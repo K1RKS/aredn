@@ -114,6 +114,132 @@ function babelPid()
     return int(trim(f));
 }
 
+function readUptimeS()
+{
+    const raw = fs.readfile("/proc/uptime");
+    if (!raw) {
+        return 0;
+    }
+    const parts = split(trim(raw), " ");
+    return int(parts[0]);
+}
+
+function readMemInfo()
+{
+    const raw = fs.readfile("/proc/meminfo");
+    let total = 0;
+    let available = 0;
+    let free = 0;
+    let buffers = 0;
+    let cached = 0;
+    if (!raw) {
+        return { total_kb: 0, available_kb: 0, used_pct: 0 };
+    }
+    const lines = split(raw, "\n");
+    for (let i = 0; i < length(lines); i++) {
+        const m = match(lines[i], /^([^:]+):\s+(\d+)/);
+        if (!m) {
+            continue;
+        }
+        const k = m[1];
+        const v = int(m[2]);
+        if (k === "MemTotal") {
+            total = v;
+        }
+        else if (k === "MemAvailable") {
+            available = v;
+        }
+        else if (k === "MemFree") {
+            free = v;
+        }
+        else if (k === "Buffers") {
+            buffers = v;
+        }
+        else if (k === "Cached") {
+            cached = v;
+        }
+    }
+    if (!available) {
+        available = free + buffers + cached;
+    }
+    let used_pct = 0;
+    if (total > 0) {
+        used_pct = int(0.5 + 100 * (total - available) / total);
+        if (used_pct < 0) {
+            used_pct = 0;
+        }
+        if (used_pct > 100) {
+            used_pct = 100;
+        }
+    }
+    return { total_kb: total, available_kb: available, used_pct: used_pct };
+}
+
+/** Aggregate CPU jiffies from /proc/stat first line */
+function readCpuStat()
+{
+    const raw = fs.readfile("/proc/stat");
+    if (!raw) {
+        return null;
+    }
+    const line = split(raw, "\n")[0];
+    const m = match(line, /^cpu\s+(.+)$/);
+    if (!m) {
+        return null;
+    }
+    const parts = split(trim(m[1]), /\s+/);
+    let total = 0;
+    for (let i = 0; i < length(parts); i++) {
+        total += int(parts[i]);
+    }
+    /* idle = idle + iowait when present */
+    const idle = int(parts[3] || 0) + int(parts[4] || 0);
+    return { total: total, idle: idle };
+}
+
+function cpuPctFromDelta(prev, cur)
+{
+    if (!prev || !cur) {
+        return 0;
+    }
+    const dt = cur.total - prev.total;
+    if (dt <= 0) {
+        return 0;
+    }
+    const didle = cur.idle - prev.idle;
+    let pct = int(0.5 + 100 * (dt - didle) / dt);
+    if (pct < 0) {
+        pct = 0;
+    }
+    if (pct > 100) {
+        pct = 100;
+    }
+    return pct;
+}
+
+/**
+ * 1s peak sampler — call from daemon timer between samples.
+ * Updates store.last.cpu_peak_pct with max busy% over short windows.
+ */
+export function updateCpuPeak(store)
+{
+    const cur = readCpuStat();
+    if (!cur) {
+        return;
+    }
+    if (store.last.cpu_peak_total !== null) {
+        const pct = cpuPctFromDelta(
+            { total: store.last.cpu_peak_total, idle: store.last.cpu_peak_idle },
+            cur
+        );
+        if (pct > store.last.cpu_peak_pct) {
+            store.last.cpu_peak_pct = pct;
+        }
+    }
+    store.last.cpu_peak_total = cur.total;
+    store.last.cpu_peak_idle = cur.idle;
+};
+
 export function refreshIdentity(store)
 {
     store.identity = resolveIdentity();
@@ -312,6 +438,38 @@ export function collectSample(store, cfg)
     const mean_lq = neighbor_count ? int(lq_sum / neighbor_count) : 0;
     const mean_cost = cost_n ? int(cost_sum / cost_n) : 0;
 
+    /* Host health: uptime (reboot detect), RAM, CPU interval + peak */
+    const uptime_s = readUptimeS();
+    let reboot_delta = 0;
+    if (store.last.uptime_s !== null && uptime_s < store.last.uptime_s) {
+        reboot_delta = 1;
+        storelib.pushEvent(store, "reboot",
+            sprintf("uptime %d -> %d", store.last.uptime_s, uptime_s));
+    }
+    store.last.uptime_s = uptime_s;
+
+    const mem = readMemInfo();
+    const cpu_cur = readCpuStat();
+    let cpu_pct = 0;
+    if (cpu_cur) {
+        if (store.last.cpu_total !== null) {
+            cpu_pct = cpuPctFromDelta(
+                { total: store.last.cpu_total, idle: store.last.cpu_idle },
+                cpu_cur
+            );
+        }
+        store.last.cpu_total = cpu_cur.total;
+        store.last.cpu_idle = cpu_cur.idle;
+    }
+    let cpu_peak_pct = store.last.cpu_peak_pct || 0;
+    if (cpu_pct > cpu_peak_pct) {
+        cpu_peak_pct = cpu_pct;
+    }
+    /* reset peak window for next interval */
+    store.last.cpu_peak_pct = 0;
+    store.last.cpu_peak_total = cpu_cur ? cpu_cur.total : null;
+    store.last.cpu_peak_idle = cpu_cur ? cpu_cur.idle : null;
+
     const sample = {
         t: t,
         seq: 0,
@@ -336,6 +494,13 @@ export function collectSample(store, cfg)
         dns_reload_delta: dns_reload_delta,
         babel_hard_delta: babel_hard_delta,
         babel_soft_delta: babel_soft_delta,
+        uptime_s: uptime_s,
+        reboot_delta: reboot_delta,
+        mem_total_kb: mem.total_kb,
+        mem_available_kb: mem.available_kb,
+        mem_used_pct: mem.used_pct,
+        cpu_pct: cpu_pct,
+        cpu_peak_pct: cpu_peak_pct,
         lqm_ok: lqm_ok ? 1 : 0,
         babel_ok: babel_ok ? 1 : 0
     };

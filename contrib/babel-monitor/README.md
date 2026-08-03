@@ -4,7 +4,7 @@ Side-loaded AREDN APK that keeps Babel / LQM / arednlink metrics in RAM, exposes
 stateless JSON pull API for external historians, a public status page, and a
 live-config CLI.
 
-- Package: `babel-monitor-0.1.5-r0.apk`
+- Package: `babel-monitor-0.1.6-r0.apk`
 - Daemon: `babel-monitord`
 - CLI: `babel-monitor`
 - Status UI: `/babel-monitor/`
@@ -18,7 +18,7 @@ cd contrib/babel-monitor
 ./build.sh
 ```
 
-APK lands in `dist/babel-monitor-0.1.5-r0.apk`.
+APK lands in `dist/babel-monitor-0.1.6-r0.apk`.
 
 ## Install on a node
 
@@ -31,7 +31,7 @@ From the work-area root (after configuring `install_package_remotely.conf`):
 Or copy the APK and:
 
 ```sh
-apk add --allow-untrusted /tmp/babel-monitor-0.1.5-r0.apk
+apk add --allow-untrusted /tmp/babel-monitor-0.1.6-r0.apk
 ```
 
 ## On-node storage
@@ -74,6 +74,20 @@ Base: `/cgi-bin/babel-monitor`
 Optional `compress=1|0|on|off` (default from UCI; gzip level 1 when body ≥ `compress_min_bytes` and client sends `Accept-Encoding: gzip`).
 
 Gap-tolerant: HTTP 200 when the daemon is up; responses include `truncated`, `gap_before`, `next_seq`, `complete`, `boot_id`. No per-poller state on the node.
+
+### Sample host fields (schema 2+)
+
+Each sync sample also includes:
+
+| Field | Meaning |
+|-------|---------|
+| `uptime_s` | Seconds since boot (`/proc/uptime`) — drops on reboot |
+| `reboot_delta` | `1` if uptime decreased since the previous sample |
+| `mem_total_kb` / `mem_available_kb` / `mem_used_pct` | RAM from `/proc/meminfo` |
+| `cpu_pct` | Busy % over the full sample interval (`/proc/stat`) |
+| `cpu_peak_pct` | Peak busy % from 1s windows within the interval |
+
+Central pollers should treat a falling `uptime_s` (or `reboot_delta=1` / new `boot_id`) as a reboot gap.
 
 ## Example poller
 

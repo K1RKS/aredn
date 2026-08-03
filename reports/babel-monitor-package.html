@@ -188,7 +188,7 @@
     Metrics never touch flash. <code>node_id</code> = mesh IPv4; MAC + hostname via meta/hello.
   </p>
   <div class="pills">
-    <span class="pill accent">branch: bable-monitor</span>
+    <span class="pill accent">branch: babel-monitor</span>
     <span class="pill accent">apk: babel-monitor</span>
     <span class="pill">pull-only · multi-server</span>
     <span class="pill ok">RAM only · no metric flash I/O</span>
@@ -208,7 +208,7 @@
 
   <h2>Todos</h2>
   <ul class="todos">
-    <li><span class="status done">done</span> Convert bable-monitor into aredn-main worktree; import Cursor rules; scaffold contrib/babel-monitor</li>
+    <li><span class="status done">done</span> Convert work area into aredn-main worktree on branch babel-monitor; import Cursor rules; scaffold contrib/babel-monitor</li>
     <li><span class="status done">done</span> babel-monitord with packed in-RAM rings maximizing retention under ~1MB (hard cap 2MB); no metric flash writes</li>
     <li><span class="status done">done</span> Sample /tmp/lqm.info + babel socket/arednlink; detect resets and DNS updates as events</li>
     <li><span class="status done">done</span> JSON pull API + gzip L1; meta/hello identity (mesh IPv4 + mac + hostname); sync/events/live with gaps</li>
@@ -220,7 +220,7 @@
 
   <h2>Naming defaults</h2>
   <ul>
-    <li>Work area / branch: <code>bable-monitor</code></li>
+    <li>Work area / branch: <code>babel-monitor</code></li>
     <li>APK: <code>babel-monitor</code> · daemon: <code>babel-monitord</code> · CLI: <code>babel-monitor</code></li>
     <li>History: <strong class="inline">RAM-only packed rings</strong>; reboot clears local history</li>
     <li>Long-term: one or more external servers <strong class="inline">pull</strong> via sync API</li>
@@ -257,7 +257,7 @@
 
   <h2>Phase 0 — Work-area bootstrap</h2>
   <ol>
-    <li>Remove empty local <code>.git</code>; branch <code>bable-monitor</code> from <code>main</code>; worktree into this path.</li>
+    <li>Branch <code>babel-monitor</code> from <code>main</code>; worktree at <code>~/ai_projects/AREDN/babel-monitor</code>.</li>
     <li>Import rules: <code>stay-on-ref</code>, <code>bump-babel-monitor-revision</code>, <code>canvas-twin-html</code>, <code>plan-twin-html</code>.</li>
     <li>Scaffold <code>contrib/babel-monitor/</code> from stableroute.</li>
     <li>Configure gitignored <code>install_package_remotely</code>.</li>
@@ -295,11 +295,12 @@
     <li>Live <code>-interval</code> changes the timer; ring capacity fixed (retention hours scale with interval)</li>
     <li>Event ring ~512; live neighbor snapshot for UI / <code>api=live</code></li>
   </ul>
-  <h3>Sample fields (v1)</h3>
+  <h3>Sample fields (schema 2)</h3>
   <ul>
     <li><code>t</code>, <code>seq</code>; neighbor/route counts; mean/min LQ; mean cost; bad_cost_count; add/remove deltas</li>
     <li>Link: tx_packets/retries/fail deltas; optional SNR/bitrate</li>
     <li>DNS/arednlink deltas; babel hard/soft reset deltas; <code>lqm_ok</code> / <code>babel_ok</code></li>
+    <li>Host: <code>uptime_s</code>, <code>reboot_delta</code>; <code>mem_total_kb</code> / <code>mem_available_kb</code> / <code>mem_used_pct</code>; <code>cpu_pct</code> (interval) + <code>cpu_peak_pct</code> (1s peak)</li>
   </ul>
   <h3>Identity</h3>
   <ul>
