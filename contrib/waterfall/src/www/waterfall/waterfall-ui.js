@@ -64,8 +64,13 @@
 
   function radioLabel(r) {
     const bits = [r.iface, r.band || "", r.chipset || "", "mode=" + (r.mode || "?")];
-    if (r.fft_available) bits.push("spectral");
-    else bits.push("no spectral");
+    if (r.capture_mode === "fft" || r.fft_available) {
+      bits.push(r.chipset === "ath10k" ? "FFT+survey" : "spectral FFT");
+    } else if (r.capture_mode === "survey" || r.survey_available) {
+      bits.push("survey");
+    } else {
+      bits.push("no capture");
+    }
     return bits.filter(Boolean).join(" · ");
   }
 
@@ -226,8 +231,8 @@
         const opt = document.createElement("option");
         opt.value = r.iface;
         opt.textContent = radioLabel(r);
-        opt.disabled = !r.selectable && !r.fft_available;
-        if (r.fft_available && !firstSelectable) firstSelectable = r.iface;
+        opt.disabled = !r.selectable;
+        if (r.selectable && !firstSelectable) firstSelectable = r.iface;
         radioSel.appendChild(opt);
       }
       if (!radios.length) {
@@ -320,7 +325,7 @@
             setStatus("Select a radio with spectral support first");
             return;
           }
-          setStatus("Starting " + dur + "s spectral session on " + iface + "…");
+          setStatus("Starting " + dur + "s session on " + iface + "…");
           const r = await api("start", iface, dur);
           if (!r.ok) {
             setStatus(r.error || "Start failed");
@@ -349,9 +354,20 @@
       closeBtn.addEventListener("click", () => {
         alive = false;
         stopPoll();
-        const modal = document.querySelector("#ctrl-modal");
-        if (modal) modal.innerHTML = "";
+        /* Must call dialog.close() — clearing innerHTML alone leaves [open]
+         * and the grey ::backdrop (see #ctrl-modal[open]:empty in admin.css). */
+        const modal = document.getElementById("ctrl-modal");
+        if (modal && typeof modal.close === "function") {
+          modal.close();
+        } else if (modal) {
+          modal.innerHTML = "";
+        }
       });
+    }
+
+    function destroy() {
+      alive = false;
+      stopPoll();
     }
 
     resize();
@@ -362,7 +378,8 @@
       if (s.running) startPoll();
     }).catch((e) => setStatus(String(e.message || e)));
 
-    return { destroy: () => { alive = false; stopPoll(); } };
+    root._wfDestroy = destroy;
+    return { destroy: destroy };
   }
 
   global.WaterfallUI = { mount: mount, drawHeatmap: drawHeatmap };

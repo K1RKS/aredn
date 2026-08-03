@@ -19,8 +19,9 @@ const unsupportedMsg = cap.unsupported_message || "Waterfall is not supported on
         </div>
         {% } else { %}
         <div style="margin:0 0 8px;font-size:0.9em;opacity:0.9">
-            Spectral capture <b>disrupts RF</b> for the selected duration (default 30s), then the radio is restored automatically.
-            Each radio keeps its own RAM cache (<code>/tmp</code>). Switching radios loads that radio’s last waterfall.
+            ath9k uses spectral FFT (disrupts RF). ath10k uses an <b>isolated FFT worker</b>
+            (single-flight lock, hard timeout, local Wi-Fi recovery) with survey fallback if FFT is empty or recovers.
+            Each radio keeps its own RAM cache (<code>/tmp</code>).
         </div>
         {% } %}
         <div class="wf-radio-row" style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin:0 0 8px">
@@ -31,18 +32,18 @@ const unsupportedMsg = cap.unsupported_message || "Waterfall is not supported on
         </div>
         <canvas class="wf-canvas" style="width:100%;background:#000;border-radius:4px;display:block"></canvas>
         <div class="wf-status" style="margin:8px 0;font-size:0.85em;min-height:1.2em;opacity:0.9"></div>
-        <div class="cols" style="gap:8px;align-items:center">
+        <div class="cols" style="gap:8px;align-items:center;margin:0 0 4px">
             <div>
                 {% if (supported) { %}
                 <button class="wf-start">Start</button>
                 <button class="wf-stop">Stop</button>
                 {% } %}
-                <button class="wf-close ui-action">Close</button>
             </div>
             <div style="flex:1"></div>
             <a href="/a/waterfall" target="_blank" rel="noopener" style="font-size:0.85em">Open full page</a>
         </div>
     </div>
+    {{_R("tool-footer")}}
     <script>
     (function () {
         const root = document.querySelector(".waterfall-tool");
@@ -50,6 +51,13 @@ const unsupportedMsg = cap.unsupported_message || "Waterfall is not supported on
             if (root && window.WaterfallUI) {
                 WaterfallUI.mount(root, { modal: true });
             }
+        }
+        /* Stop pollers when Done closes the dialog (tool-footer uses dialog.close()). */
+        const modal = document.getElementById("ctrl-modal");
+        if (modal) {
+            modal.addEventListener("close", function () {
+                if (root && root._wfDestroy) root._wfDestroy();
+            }, { once: false });
         }
         if (window.WaterfallUI) {
             mount();

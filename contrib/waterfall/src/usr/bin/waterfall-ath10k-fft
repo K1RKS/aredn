@@ -1,0 +1,193 @@
+#!/bin/sh
+# Isolated ath10k spectral FFT one-shot with hard timeout + recovery.
+# Only one spectral op at a time (flock). Never leaves spectral enabled.
+#
+# Usage: waterfall-ath10k-fft -i iface -p phy [-o outfile] [-t hard_timeout_sec]
+# Exit: 0=bytes, 1=empty, 2=lock busy, 3=cooldown, 4=timeout/recovered, 5=error
+set -u
+
+IFACE=""
+PHY=""
+OUT="/tmp/waterfall-fft.bin"
+HARD=10
+ALLOW_SCAN=0
+
+while [ $# -gt 0 ]; do
+  case "$1" in
+    -i) IFACE="$2"; shift 2 ;;
+    -p) PHY="$2"; shift 2 ;;
+    -o) OUT="$2"; shift 2 ;;
+    -t) HARD="$2"; shift 2 ;;
+    --scan) ALLOW_SCAN=1; shift ;;
+    *) shift ;;
+  esac
+done
+
+[ -n "$IFACE" ] && [ -n "$PHY" ] || {
+  echo "usage: waterfall-ath10k-fft -i iface -p phy [-o file] [-t secs] [--scan]" >&2
+  exit 5
+}
+
+DBG="/sys/kernel/debug/ieee80211/$PHY/ath10k"
+CTL="$DBG/spectral_scan_ctl"
+CNT="$DBG/spectral_count"
+BINS="$DBG/spectral_bins"
+REL="$DBG/spectral_scan0"
+LOCK="/tmp/waterfall-spectral.lock"
+COOL="/tmp/waterfall-spectral.cooldown"
+FAILS="/tmp/waterfall-spectral.fails"
+WD_PID=""
+SELF=$$
+
+ts() { date +%s 2>/dev/null || echo 0; }
+
+disable_ctl() {
+  echo disable > "$CTL" 2>/dev/null || true
+}
+
+cleanup() {
+  disable_ctl
+  if [ -n "$WD_PID" ] && kill -0 "$WD_PID" 2>/dev/null; then
+    kill "$WD_PID" 2>/dev/null || true
+    wait "$WD_PID" 2>/dev/null || true
+  fi
+}
+trap cleanup EXIT INT TERM HUP
+
+# Cooldown after prior failure/recovery
+if [ -f "$COOL" ]; then
+  until=$(cat "$COOL" 2>/dev/null || echo 0)
+  now=$(ts)
+  if [ "$until" -gt "$now" ] 2>/dev/null; then
+    echo "cooldown $((until - now))s remaining" >&2
+    exit 3
+  fi
+fi
+
+[ -e "$CTL" ] && [ -e "$REL" ] || {
+  echo "missing spectral debugfs under $DBG" >&2
+  exit 5
+}
+
+# Serialize all spectral ops (busybox flock if present; else mkdir lock)
+have_flock=0
+command -v flock >/dev/null 2>&1 && have_flock=1
+if [ "$have_flock" -eq 1 ]; then
+  exec 9>"$LOCK"
+  if ! flock -n 9; then
+    echo "spectral lock busy" >&2
+    exit 2
+  fi
+else
+  if ! mkdir "$LOCK.d" 2>/dev/null; then
+    echo "spectral lock busy" >&2
+    exit 2
+  fi
+  trap 'cleanup; rmdir "$LOCK.d" 2>/dev/null || true' EXIT INT TERM HUP
+fi
+
+# Hard-timeout watchdog: local recovery even if RF/mesh is wedged
+(
+  sleep "$HARD"
+  echo "waterfall-ath10k-fft watchdog fire after ${HARD}s" >&2
+  disable_ctl
+  # Stop the capture worker so it cannot queue more spectral writes
+  kill "$SELF" 2>/dev/null || true
+  /usr/bin/waterfall-spectral-recover "$IFACE" "$PHY" >/dev/null 2>&1 || true
+  exit 0
+) &
+WD_PID=$!
+
+# Bounded drain/read — prefer timeout(1); fall back to background kill
+bounded_dd() {
+  # bounded_dd if=path of=path count=
+  _if="$1"
+  _of="$2"
+  _cnt="$3"
+  if command -v timeout >/dev/null 2>&1; then
+    timeout 2 dd if="$_if" of="$_of" bs=4096 count="$_cnt" 2>/dev/null || true
+    return
+  fi
+  dd if="$_if" of="$_of" bs=4096 count="$_cnt" 2>/dev/null &
+  _ddp=$!
+  sleep 2
+  kill "$_ddp" 2>/dev/null || true
+  wait "$_ddp" 2>/dev/null || true
+}
+
+settle() {
+  if command -v usleep >/dev/null 2>&1; then
+    usleep 250000
+  else
+    sleep 1
+  fi
+}
+
+: > "$OUT"
+# Drain stale relay (bounded — never block forever)
+bounded_dd "$REL" /dev/null 4
+
+echo 2 > "$CNT" 2>/dev/null || true
+echo 64 > "$BINS" 2>/dev/null || true
+
+# Pulse 1: manual mode (preferred — not endless background)
+echo manual > "$CTL" || {
+  echo "cannot write manual to ctl" >&2
+  exit 5
+}
+echo trigger > "$CTL" || {
+  echo "cannot trigger" >&2
+  exit 5
+}
+settle
+disable_ctl
+bounded_dd "$REL" "$OUT" 8
+BYTES=$(wc -c < "$OUT" 2>/dev/null || echo 0)
+
+# Pulse 2: short background without iw scan
+if [ "${BYTES:-0}" -eq 0 ]; then
+  bounded_dd "$REL" /dev/null 4
+  echo background > "$CTL" || true
+  echo trigger > "$CTL" || true
+  settle
+  disable_ctl
+  bounded_dd "$REL" "$OUT" 8
+  BYTES=$(wc -c < "$OUT" 2>/dev/null || echo 0)
+fi
+
+# Pulse 3: optional bounded scan (explicit --scan only)
+if [ "${BYTES:-0}" -eq 0 ] && [ "$ALLOW_SCAN" -eq 1 ]; then
+  bounded_dd "$REL" /dev/null 4
+  echo background > "$CTL" || true
+  echo trigger > "$CTL" || true
+  if command -v timeout >/dev/null 2>&1; then
+    timeout 2 iw dev "$IFACE" scan >/dev/null 2>&1 || true
+  else
+    iw dev "$IFACE" scan >/dev/null 2>&1 &
+    _sp=$!
+    sleep 2
+    kill "$_sp" 2>/dev/null || true
+    wait "$_sp" 2>/dev/null || true
+  fi
+  disable_ctl
+  bounded_dd "$REL" "$OUT" 8
+  BYTES=$(wc -c < "$OUT" 2>/dev/null || echo 0)
+fi
+
+# Cancel watchdog on normal finish
+if [ -n "$WD_PID" ]; then
+  kill "$WD_PID" 2>/dev/null || true
+  wait "$WD_PID" 2>/dev/null || true
+  WD_PID=""
+fi
+disable_ctl
+
+# Success clears failure streak / cooldown
+if [ "${BYTES:-0}" -gt 0 ]; then
+  rm -f "$FAILS" "$COOL" 2>/dev/null || true
+  echo "ok bytes=$BYTES" >&2
+  exit 0
+fi
+
+echo "empty relay" >&2
+exit 1

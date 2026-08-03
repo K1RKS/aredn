@@ -1,0 +1,92 @@
+#!/bin/sh
+# Recover Wi-Fi after a wedged ath10k spectral scan (no power cycle).
+# Usage: waterfall-spectral-recover [iface] [phy]
+# Escalation: disable spectral → iface bounce → wifi reload
+set -u
+IFACE="${1:-wlan0}"
+PHY="${2:-}"
+DBG="/sys/kernel/debug/ieee80211"
+LOG="/tmp/waterfall-spectral-recover.log"
+FAILS="/tmp/waterfall-spectral.fails"
+COOL="/tmp/waterfall-spectral.cooldown"
+
+ts() { date +%s 2>/dev/null || echo 0; }
+
+log() {
+  echo "$(ts) $*" >> "$LOG" 2>/dev/null || true
+}
+
+disable_spectral() {
+  for p in "$DBG"/phy*; do
+    [ -d "$p" ] || continue
+    for d in ath9k ath10k; do
+      ctl="$p/$d/spectral_scan_ctl"
+      [ -e "$ctl" ] || continue
+      echo disable > "$ctl" 2>/dev/null || true
+    done
+  done
+}
+
+bounce_iface() {
+  [ -n "$IFACE" ] || return 1
+  if command -v ip >/dev/null 2>&1; then
+    ip link set dev "$IFACE" down 2>/dev/null || true
+    sleep 1
+    ip link set dev "$IFACE" up 2>/dev/null || return 1
+    return 0
+  fi
+  ifconfig "$IFACE" down 2>/dev/null || true
+  sleep 1
+  ifconfig "$IFACE" up 2>/dev/null || return 1
+  return 0
+}
+
+wifi_reload() {
+  if [ -x /sbin/wifi ]; then
+    /sbin/wifi down 2>/dev/null || true
+    sleep 2
+    /sbin/wifi up 2>/dev/null || return 1
+    return 0
+  fi
+  return 1
+}
+
+# Backoff: 15s * 2^(fails-1), capped at 120s
+n=0
+[ -f "$FAILS" ] && n=$(cat "$FAILS" 2>/dev/null || echo 0)
+n=$((n + 1))
+echo "$n" > "$FAILS" 2>/dev/null || true
+cool=15
+i=1
+while [ "$i" -lt "$n" ] && [ "$cool" -lt 120 ]; do
+  cool=$((cool * 2))
+  i=$((i + 1))
+done
+[ "$cool" -gt 120 ] && cool=120
+echo $(($(ts) + cool)) > "$COOL" 2>/dev/null || true
+
+log "recover begin iface=$IFACE phy=$PHY fails=$n cool=${cool}s"
+disable_spectral
+
+# Stage 1: iface bounce (local; works even if mesh RF is wedged)
+if bounce_iface; then
+  log "recover stage1 iface bounce ok"
+  sleep 2
+  disable_spectral
+  if iwinfo "$IFACE" info >/dev/null 2>&1; then
+    log "recover done after iface bounce"
+    exit 0
+  fi
+fi
+
+# Stage 2: OpenWrt/AREDN wifi reload
+if wifi_reload; then
+  log "recover stage2 wifi reload ok"
+  sleep 3
+  disable_spectral
+  log "recover done after wifi reload"
+  exit 0
+fi
+
+log "recover exhausted — manual intervention may be required"
+exit 1

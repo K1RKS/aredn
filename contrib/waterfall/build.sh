@@ -6,6 +6,8 @@ mkdir -p dist
 chmod +x \
   src/usr/bin/waterfall \
   src/usr/bin/waterfall-session \
+  src/usr/bin/waterfall-ath10k-fft \
+  src/usr/bin/waterfall-spectral-recover \
   src/www/cgi-bin/waterfall \
   src/usr/share/waterfall/tools-menu.sh \
   src/.post-install \
@@ -14,7 +16,7 @@ chmod +x \
   tools/mkapk.py
 python3 tools/mkapk.py \
   -n waterfall \
-  -v 0.2.6 \
+  -v 0.2.9 \
   -r r0 \
   -a noarch \
   -d src \

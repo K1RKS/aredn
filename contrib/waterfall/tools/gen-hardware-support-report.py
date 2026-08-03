@@ -166,19 +166,19 @@ def classify(d: dict) -> tuple[str, bool, str] | None:
     if any(x in target or x in sub for x in ["ramips", "mt76", "mt7621", "mt76x8"]):
         return ("possible", False, "mt76 — spectral possible with package work")
     if "ipq40xx" in target:
-        return ("possible", False, "ipq40xx/ath10k — spectral capture blocked until a safe path exists")
+        return ("now", False, "ipq40xx/ath10k — isolated FFT worker + survey fallback")
 
     if "hap ac lite" in model or "952ui-5ac2nd" in image:
         return (
-            "possible",
+            "now",
             True,
-            "Focus board — 5 GHz ath10k capture blocked (lockups); 2.4 GHz ath9k still usable",
+            "Focus — ath10k isolated FFT (timeout+recovery) + survey fallback; 2.4 GHz ath9k FFT when enabled",
         )
     if "powerbeam 5ac 500" in model or "powerbeam-5ac-500" in image:
         return (
-            "possible",
+            "now",
             True,
-            "Focus board — ath10k spectral capture blocked until a safe path exists",
+            "Focus — ath10k isolated FFT (timeout+recovery) + survey fallback",
         )
     if "rocket m5" in model:
         return ("now", True, "Focus — ath9k spectral FFT (primary)")
@@ -186,7 +186,7 @@ def classify(d: dict) -> tuple[str, bool, str] | None:
         return ("now", True, "Focus — ath9k spectral FFT (primary)")
 
     if is_ac(model, image):
-        return ("possible", False, "ath10k AC — spectral capture blocked (lockup risk) until a safe path exists")
+        return ("now", False, "ath10k AC — isolated FFT worker + survey fallback")
 
     if "ath79" in target:
         if any(x in image or x in model for x in ["gl-ar750", "gl-e750", "creta", "slate", "mudi"]):

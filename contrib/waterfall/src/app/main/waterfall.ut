@@ -66,9 +66,8 @@ const unsupportedMsg = cap.unsupported_message || "Waterfall is not supported on
     </div>
     {% } else { %}
     <p class="wf-banner">
-        Spectral capture <strong>disrupts RF</strong> for the selected duration (default 30s), then the radio is restored automatically.
-        Each radio keeps its own RAM cache (<code>/tmp</code>). Switching radios loads that radio’s last waterfall.
-        If your connection drops during capture, reconnect and reload this page.
+        ath9k uses spectral FFT (<strong>disrupts RF</strong>). ath10k uses an isolated FFT worker
+        (hard timeout + local Wi-Fi recovery; survey fallback). Each radio keeps its own RAM cache (<code>/tmp</code>).
     </p>
     {% } %}
     <div class="waterfall-tool">
