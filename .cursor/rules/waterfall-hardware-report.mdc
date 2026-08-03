@@ -1,0 +1,37 @@
+---
+description: Keep waterfall hardware support report current
+alwaysApply: true
+---
+
+# Waterfall hardware support report
+
+Maintain the official-device waterfall support matrix whenever support assumptions change.
+
+## Artifacts
+
+- [`reports/waterfall-hardware-support.json`](reports/waterfall-hardware-support.json) — machine-readable matrix
+- [`reports/waterfall-hardware-support.html`](reports/waterfall-hardware-support.html) — standalone HTML twin
+- Canvas: `waterfall-hardware-support.canvas.tsx` (managed canvases dir)
+
+## When to regenerate
+
+In the **same turn**, run:
+
+```sh
+python3 contrib/waterfall/tools/gen-hardware-support-report.py
+```
+
+whenever any of these change:
+
+1. [`SUPPORTED_DEVICES.md`](SUPPORTED_DEVICES.md) (add/remove/rename devices or status)
+2. Waterfall capability logic in [`contrib/waterfall/src/usr/share/ucode/waterfall.uc`](contrib/waterfall/src/usr/share/ucode/waterfall.uc) (`isFocusBoard`, chipset/FFT paths, supportStatus)
+3. Package version in [`contrib/waterfall/build.sh`](contrib/waterfall/build.sh) (so the report stamps the current `-v`)
+4. Classification rules inside [`contrib/waterfall/tools/gen-hardware-support-report.py`](contrib/waterfall/tools/gen-hardware-support-report.py)
+
+## Categories (do not rename casually)
+
+- **Supported now** — current package can probe/capture on this hardware class
+- **Possible with updates** — feasible with more package/firmware work
+- **Cannot support** — no viable spectral waterfall path (e.g. HaLow, x86/VM)
+
+Focus devices called out in the report: Rocket M5, PowerBeam M5/500, PowerBeam 5AC 500, hAP ac lite.
