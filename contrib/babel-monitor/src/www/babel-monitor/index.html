@@ -169,7 +169,7 @@
     <div style="overflow-x:auto">
       <table>
         <thead>
-          <tr><th>IPv6</th><th>Iface</th><th>LQ</th><th>Cost</th><th>Rx</th><th>Tx</th></tr>
+          <tr><th>Host</th><th>IPv6</th><th>Iface</th><th>LQ</th><th>Cost</th><th>Rx</th><th>Tx</th></tr>
         </thead>
         <tbody id="neigh"></tbody>
       </table>
@@ -263,6 +263,7 @@
   let series = [];
   let hoverIdx = -1;
   let chartLayout = null; /* { padL, padR, padT, padB, plotW, plotH, t0, windowSec, n } */
+  let memTotalKb = null;
 
   function $(id) { return document.getElementById(id); }
 
@@ -279,6 +280,14 @@
     if (v == null || v !== v) return "—";
     if (Math.abs(v - Math.round(v)) < 1e-6) return String(Math.round(v));
     return (Math.round(v * 10) / 10).toString();
+  }
+
+  function formatMemKb(kb) {
+    if (kb == null || kb !== kb) return "—";
+    const n = Number(kb);
+    if (n >= 1024 * 1024) return (Math.round(n / 1024 / 1024 * 10) / 10) + " GB";
+    if (n >= 1024) return (Math.round(n / 1024 * 10) / 10) + " MB";
+    return Math.round(n) + " KB";
   }
 
   function formatAxisOffset(sec) {
@@ -384,6 +393,9 @@
   function renderKpis(live) {
     const m = live.meta || {};
     const s = live.latest || {};
+    if (m.mem_total_kb != null) {
+      memTotalKb = Number(m.mem_total_kb);
+    }
     $("identity").textContent =
       (m.hostname || "?") + " · " + (m.node_id || "?") +
       " · boot " + (m.boot_id || "?") +
@@ -413,12 +425,14 @@
   function renderNeigh(list) {
     const tb = $("neigh");
     if (!list || !list.length) {
-      tb.innerHTML = '<tr><td colspan="6" style="color:var(--muted)">No neighbors</td></tr>';
+      tb.innerHTML = '<tr><td colspan="7" style="color:var(--muted)">No neighbors</td></tr>';
       return;
     }
     tb.innerHTML = list.map(function (n) {
-      return "<tr><td>" + n.ipv6 + "</td><td>" + n.iface + "</td><td>" + n.lq +
-        "%</td><td>" + n.cost + "</td><td>" + n.rxcost + "</td><td>" + n.txcost + "</td></tr>";
+      const host = n.hostname || "—";
+      return "<tr><td>" + host + "</td><td>" + n.ipv6 + "</td><td>" + n.iface +
+        "</td><td>" + n.lq + "%</td><td>" + n.cost + "</td><td>" + n.rxcost +
+        "</td><td>" + n.txcost + "</td></tr>";
     }).join("");
   }
 
@@ -463,12 +477,35 @@
 
     let html = '<div class="t">' + formatTime(row.t) +
       (row.seq != null ? " · seq " + row.seq : "") + "</div>";
-    for (let si = 0; si < metric.series.length; si++) {
-      const spec = metric.series[si];
-      const v = sampleValue(row, spec);
+
+    if (metricId === "ram") {
+      const pct = row.mem_used_pct;
+      const avail = row.mem_available_kb;
+      let usedKb = null;
+      if (memTotalKb != null && avail != null) {
+        usedKb = Math.max(0, Number(memTotalKb) - Number(avail));
+      } else if (memTotalKb != null && pct != null) {
+        usedKb = Math.round(Number(memTotalKb) * Number(pct) / 100);
+      }
       html += '<div class="tip-row"><span class="n"><i style="background:' +
-        spec.color + '"></i>' + spec.label + '</span><span class="v">' +
-        formatVal(v) + "</span></div>";
+        PALETTE[0] + '"></i>used</span><span class="v">' +
+        formatVal(pct) + "% · " + formatMemKb(usedKb) + "</span></div>";
+      html += '<div class="tip-row"><span class="n"><i style="background:' +
+        PALETTE[2] + '"></i>available</span><span class="v">' +
+        formatMemKb(avail) + "</span></div>";
+      if (memTotalKb != null) {
+        html += '<div class="tip-row"><span class="n"><i style="background:' +
+          PALETTE[1] + '"></i>total</span><span class="v">' +
+          formatMemKb(memTotalKb) + "</span></div>";
+      }
+    } else {
+      for (let si = 0; si < metric.series.length; si++) {
+        const spec = metric.series[si];
+        const v = sampleValue(row, spec);
+        html += '<div class="tip-row"><span class="n"><i style="background:' +
+          spec.color + '"></i>' + spec.label + '</span><span class="v">' +
+          formatVal(v) + "</span></div>";
+      }
     }
     tip.innerHTML = html;
     tip.hidden = false;

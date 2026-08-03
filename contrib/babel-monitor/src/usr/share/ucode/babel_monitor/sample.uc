@@ -275,6 +275,19 @@ export function collectSample(store, cfg)
     let neighbor_add = 0;
     let neighbor_remove = 0;
 
+    /* LQM first so we can attach hostnames to babel neighbors by ipv6ll */
+    const host_by_ll = {};
+    const lqm = readJsonFile("/tmp/lqm.info");
+    if (lqm && lqm.trackers) {
+        lqm_ok = true;
+        for (let mac in lqm.trackers) {
+            const tr = lqm.trackers[mac];
+            if (tr.ipv6ll && tr.hostname) {
+                host_by_ll[tr.ipv6ll] = tr.hostname;
+            }
+        }
+    }
+
     if (neigh_lines) {
         babel_ok = true;
         const re = /address ([^ ]+) if ([^ ]+) reach ([^ ]+) .+ rxcost ([^ ]+) txcost ([^ ]+).* cost (.+)/;
@@ -307,7 +320,9 @@ export function collectSample(store, cfg)
             if (!store.last.neighbor_keys[key]) {
                 neighbor_add++;
             }
+            const hn = host_by_ll[m[1]];
             push(live, {
+                hostname: hn ? hn : "",
                 ipv6: m[1],
                 iface: m[2],
                 lq: lq,
@@ -355,9 +370,7 @@ export function collectSample(store, cfg)
 
     /* Collect RF SNR candidates (hostname||mac, snr) then keep top by SNR */
     const rf_cands = [];
-    const lqm = readJsonFile("/tmp/lqm.info");
     if (lqm && lqm.trackers) {
-        lqm_ok = true;
         for (let mac in lqm.trackers) {
             const tr = lqm.trackers[mac];
             if (tr.tx_packets) {
