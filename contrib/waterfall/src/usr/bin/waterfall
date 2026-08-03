@@ -1,0 +1,43 @@
+#!/usr/bin/ucode
+/*
+ * waterfall CLI — probe spectral capability and optionally capture FFT dump.
+ */
+
+import * as wf from "waterfall";
+
+function usage()
+{
+    print("Usage: waterfall [-i iface] [status|capture]\n");
+    print("  status   Probe radio chipset / spectral FFT availability (default)\n");
+    print("  capture  Trigger current-channel spectral dump to /tmp/waterfall-fft.bin\n");
+    print("  -i IFACE Prefer this wifi interface (e.g. wlan0)\n");
+    print("  -h       Show this help\n");
+};
+
+let iface = null;
+let cmd = "status";
+for (let i = 0; i < length(ARGV); i++) {
+    const a = ARGV[i];
+    if (a === "-h" || a === "--help") {
+        usage();
+        exit(0);
+    }
+    if (a === "-i" || a === "--iface") {
+        i++;
+        iface = ARGV[i];
+        continue;
+    }
+    if (a === "status" || a === "probe" || a === "capture") {
+        cmd = a === "probe" ? "status" : a;
+        continue;
+    }
+    print(`Unknown argument: ${a}\n`);
+    usage();
+    exit(1);
+}
+
+if (cmd === "capture") {
+    print(wf.formatCaptureReport(wf.captureSpectral(iface)));
+    exit(0);
+}
+print(wf.formatProbeReport(wf.probeCapability(iface)));

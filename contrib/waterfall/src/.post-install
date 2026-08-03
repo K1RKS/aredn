@@ -3,6 +3,7 @@
 . /usr/share/waterfall/tools-menu.sh 2>/dev/null || exit 0
 install_tools_menu
 chmod 755 /www/cgi-bin/waterfall 2>/dev/null || true
+chmod 755 /usr/bin/waterfall 2>/dev/null || true
 chmod 644 /app/main/tools/e/waterfall.ut 2>/dev/null || true
 # tools.ut is preloaded by the admin UI; reload so the menu entry appears.
 [ -x /etc/init.d/uhttpd ] && /etc/init.d/uhttpd restart 2>/dev/null || true

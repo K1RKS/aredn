@@ -1,35 +1,73 @@
 {%
 /*
- * Waterfall Tools dialog — stub for 5 GHz RF spectrum waterfall.
- * Primary targets: Rocket M5, PowerBeam 500, PowerBeam 500 AC.
+ * Waterfall Tools dialog — spectral probe / capture for 5 GHz radios.
+ * Primary targets: Rocket M5, PowerBeam 500 / 500 AC, hAP ac lite (5 GHz).
  */
 %}
 {%
 import * as wf from "waterfall";
+const cap = wf.probeCapability();
+const supported = !!cap.supported;
+const initial = wf.formatProbeReport(cap);
+const unsupportedMsg = cap.unsupported_message || "Waterfall is not supported on this hardware.";
 %}
 <div class="dialog">
     {{_R("tool-header", { label: `Waterfall ${wf.packageVersion()}`, help: false })}}
     <div class="simple-tool">
-        {{_H("RF spectrum waterfall for 5 GHz AREDN radios. This package is a stub — capture and display are not implemented yet.
-        Primary focus: Ubiquiti Rocket M5 (XM/XW), PowerBeam 500, and PowerBeam 500 AC (PBE-5AC-500).
-        Stock Tools → WiFi Scan already lists nearby SSIDs; this tool will add a time/frequency waterfall view.")}}
+        {% if (!supported) { %}
+        <div class="error" style="margin:0 0 12px;padding:10px 12px;border:1px solid #a44;background:#2a1515;color:#f0c0c0;border-radius:4px">
+            <div style="font-weight:600;margin-bottom:4px">Hardware not supported</div>
+            <div>{{unsupportedMsg}}</div>
+        </div>
+        {% } else { %}
+        {{_H("Probe and capture RF spectral FFT samples on 5 GHz radios.
+        Best support: Rocket M5 and PowerBeam M5 (ath9k). PowerBeam 500 AC and hAP ac lite 5 GHz (ath10k / QCA9887) are experimental.
+        On dual-band boards (hAP ac lite) the tool auto-selects the 5 GHz radio.
+        Capture writes a raw dump to /tmp/waterfall-fft.bin — waterfall heatmap display comes later.")}}
+        {% } %}
         <div class="cols">
-            <div class="tool-console">
-                <pre>waterfall {{wf.packageVersion()}}
-Stub UI — spectrum capture coming later.
-Focus devices:
-  • Rocket M5 (XM / XW)
-  • PowerBeam 500
-  • PowerBeam 500 AC</pre>
+            <div class="tool-console waterfall">
+                <pre>{{initial}}</pre>
             </div>
             <div>
+                <button id="waterfall-status">Status</button>
+                {% if (supported) { %}
+                <button id="waterfall-capture">Capture</button>
+                {% } %}
                 <button id="waterfall-close" class="ui-action">Close</button>
             </div>
         </div>
     </div>
     <script>
     (function () {
+        const con = htmx.find(".tool-console.waterfall pre");
+        const supported = {{supported ? "true" : "false"}};
+        function out(text) {
+            if (con) {
+                con.innerText = text || "";
+            }
+        }
+        async function run(action) {
+            out(`waterfall: ${action}…`);
+            try {
+                const r = await fetch(`/cgi-bin/waterfall?action=${action}`, { cache: "no-store" });
+                const t = await r.text();
+                const m = t.match(/<pre>([\s\S]*?)<\/pre>/i);
+                out(m ? m[1] : t);
+            }
+            catch (e) {
+                out(`Error: ${e}`);
+            }
+        }
+        const statusBtn = htmx.find("#waterfall-status");
+        const captureBtn = htmx.find("#waterfall-capture");
         const closeBtn = htmx.find("#waterfall-close");
+        if (statusBtn) {
+            statusBtn.addEventListener("click", () => run("status"));
+        }
+        if (captureBtn && supported) {
+            captureBtn.addEventListener("click", () => run("capture"));
+        }
         if (closeBtn) {
             closeBtn.addEventListener("click", () => htmx.find("#ctrl-modal").innerHTML = "");
         }
