@@ -40,7 +40,7 @@ const SPECTRAL_COOLDOWN = "/tmp/waterfall-spectral.cooldown";
 
 export function packageVersion()
 {
-    return "0.2.17-r0";
+    return "0.2.18-r0";
 };
 
 function isMeshMode(mode)
@@ -1397,10 +1397,16 @@ export function runSession(preferredIface, durationSec)
 export function startSessionAsync(preferredIface, durationSec)
 {
     if (sessionIsRunning()) {
+        const sess = readSessionState();
+        const now = nowSec();
+        const left = sess.ends_at != null ? ((int(sess.ends_at) - now) > 0 ? (int(sess.ends_at) - now) : 0) : null;
         return {
             ok: false,
-            error: "A waterfall session is already running",
-            session: readSessionState()
+            error: `A waterfall scan is already in progress on ${sess.iface || "unknown"}` +
+                (left != null ? ` (~${left}s left)` : ""),
+            running: true,
+            remaining_sec: left,
+            session: sess
         };
     }
     const cap = probeCapability(preferredIface);
@@ -1461,12 +1467,22 @@ export function sessionStatus(preferredIface)
     const cap = probeCapability(preferredIface);
     const running = sessionIsRunning();
     const sess = readSessionState();
+    const now = nowSec();
+    let remaining = null;
+    if (running && sess.ends_at != null) {
+        remaining = int(sess.ends_at) - now;
+        if (remaining < 0) {
+            remaining = 0;
+        }
+    }
     const sel = preferredIface || cap.iface || null;
     const cache = readCache(sel);
     return {
         ok: true,
         version: packageVersion(),
         running: running,
+        remaining_sec: remaining,
+        server_now: now,
         session: sess,
         have_cache: cache.have_cache,
         sweep_count: length(cache.sweeps || []),

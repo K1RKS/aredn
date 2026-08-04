@@ -226,6 +226,35 @@
       return 30;
     }
 
+    function applyRunningUi(status) {
+      const running = !!(status && status.running);
+      if (startBtn) {
+        startBtn.disabled = running;
+        startBtn.title = running
+          ? ("Scan already in progress on " + ((status.session && status.session.iface) || "?") +
+            (status.remaining_sec != null ? (" (~" + status.remaining_sec + "s left)") : ""))
+          : "";
+      }
+      if (stopBtn) stopBtn.disabled = !running;
+      if (durSel) durSel.disabled = running;
+      if (radioSel) radioSel.disabled = running;
+    }
+
+    function runningMessage(status) {
+      const sess = (status && status.session) || {};
+      const iface = sess.iface || "?";
+      let left = status.remaining_sec;
+      if (left == null && sess.ends_at != null && status.server_now != null) {
+        left = Math.max(0, sess.ends_at - status.server_now);
+      }
+      if (left == null && sess.ends_at != null) {
+        left = Math.max(0, sess.ends_at - Math.floor(Date.now() / 1000));
+      }
+      const leftTxt = left != null ? ("~" + left + "s left") : "time unknown";
+      return "A waterfall scan is already in progress on " + iface +
+        " · est. " + leftTxt + " · RF disrupted until it finishes (or Stop)";
+    }
+
     function fillDurations(status) {
       if (!durSel) return;
       const list = (status && status.durations) || [5, 10, 15, 30, 60, 300, 600];
@@ -242,7 +271,7 @@
       }
       if (prev) durSel.value = prev;
       else durSel.value = String(def);
-      durSel.disabled = !!(status && status.running);
+      applyRunningUi(status);
     }
 
     function fillRadios(status) {
@@ -271,8 +300,8 @@
       const want = prefer || firstSelectable || "";
       if (want) radioSel.value = want;
       selectedIface = radioSel.value || null;
-      radioSel.disabled = !!status.running;
       fillingRadios = false;
+      applyRunningUi(status);
     }
 
     function resize() {
@@ -308,13 +337,13 @@
         const s = await api("status", getIface());
         fillRadios(s);
         fillDurations(s);
+        applyRunningUi(s);
         if (s.running) {
-          const left = Math.max(0, (s.session.ends_at || 0) - Math.floor(Date.now() / 1000));
-          setStatus("Capturing on " + (s.session.iface || getIface() || "?") +
-            "… RF disrupted · ~" + left + "s left · reconnect after to view cache");
+          setStatus(runningMessage(s));
           try { await loadCache(); } catch (_) {}
         } else {
           stopPoll();
+          applyRunningUi(s);
           await loadCache();
           setStatus((statusEl.textContent || "") + " · session idle (RF restored)");
         }
@@ -332,7 +361,7 @@
 
     function startPoll() {
       stopPoll();
-      pollTimer = setInterval(refreshStatus, 2000);
+      pollTimer = setInterval(refreshStatus, 1000);
     }
 
     if (radioSel) {
@@ -346,21 +375,48 @@
     if (startBtn) {
       startBtn.addEventListener("click", async () => {
         try {
+          if (startBtn.disabled) return;
           const iface = getIface();
           const dur = getDuration();
           if (!iface) {
             setStatus("Select a radio with spectral support first");
             return;
           }
-          setStatus("Starting " + dur + "s session on " + iface + "…");
-          const r = await api("start", iface, dur);
-          if (!r.ok) {
-            setStatus(r.error || "Start failed");
+          /* Re-check before start in case another UI started a scan. */
+          const cur = await api("status", iface);
+          if (cur.running) {
+            applyRunningUi(cur);
+            setStatus(runningMessage(cur));
+            startPoll();
             return;
           }
-          setStatus(r.warning || ("Capturing on " + iface + "…"));
+          setStatus("Starting " + dur + "s session on " + iface + "…");
+          startBtn.disabled = true;
+          const r = await api("start", iface, dur);
+          if (!r.ok) {
+            const st = await api("status", iface).catch(() => null);
+            if (st && st.running) {
+              applyRunningUi(st);
+              setStatus(runningMessage(st));
+              startPoll();
+            } else {
+              applyRunningUi({ running: false });
+              setStatus(r.error || "Start failed");
+            }
+            return;
+          }
+          applyRunningUi({
+            running: true,
+            remaining_sec: dur,
+            session: { iface: r.iface || iface, ends_at: r.ends_at }
+          });
+          setStatus(runningMessage({
+            remaining_sec: dur,
+            session: { iface: r.iface || iface, ends_at: r.ends_at }
+          }));
           startPoll();
         } catch (e) {
+          applyRunningUi({ running: false });
           setStatus(String(e.message || e));
         }
       });
@@ -370,6 +426,7 @@
         try {
           await api("stop", getIface());
           stopPoll();
+          applyRunningUi({ running: false });
           await loadCache();
           setStatus("Stopped early · RF restored · showing cache for " + (getIface() || "radio"));
         } catch (e) {
@@ -401,8 +458,14 @@
     api("status").then(async (s) => {
       fillRadios(s);
       fillDurations(s);
-      await loadCache();
-      if (s.running) startPoll();
+      applyRunningUi(s);
+      if (s.running) {
+        setStatus(runningMessage(s));
+        startPoll();
+        try { await loadCache(); } catch (_) {}
+      } else {
+        await loadCache();
+      }
     }).catch((e) => setStatus(String(e.message || e)));
 
     root._wfDestroy = destroy;
