@@ -76,11 +76,12 @@
 
   function drawHeatmap(canvas, cache) {
     const sweeps = (cache && cache.sweeps) || [];
+    const times = (cache && cache.times) || [];
     const meta = (cache && cache.meta) || {};
     const ctx = canvas.getContext("2d");
     const W = canvas.width;
     const H = canvas.height;
-    const padL = 48, padR = 56, padT = 28, padB = 40;
+    const padL = 52, padR = 56, padT = 28, padB = 40;
     const plotW = W - padL - padR;
     const plotH = H - padT - padB;
 
@@ -94,12 +95,20 @@
 
     if (!sweeps.length) {
       ctx.fillStyle = "#888";
-      ctx.fillText("No cached capture — click Start (30s RF session)", W / 2, H / 2);
+      ctx.fillText("No cached capture — click Start (RF session)", W / 2, H / 2);
       return;
     }
 
     const rows = sweeps.length;
     const cols = sweeps[0].length || 1;
+    const tStart = meta.t_start != null ? meta.t_start : 0;
+    let tStop = meta.t_stop != null ? meta.t_stop :
+      (meta.requested_duration_sec || meta.duration_sec || rows);
+    if (times.length) {
+      tStop = Math.max(tStop, times[times.length - 1] || 0);
+    }
+    if (tStop <= tStart) tStop = tStart + 1;
+
     let maxV = 1;
     for (let r = 0; r < rows; r++) {
       for (let c = 0; c < sweeps[r].length; c++) {
@@ -107,14 +116,32 @@
       }
     }
 
+    function rowAtTime(t) {
+      if (!times.length) {
+        const u = (t - tStart) / (tStop - tStart);
+        return Math.min(rows - 1, Math.max(0, Math.floor(u * rows)));
+      }
+      /* nearest sample at or before t; clamp */
+      let lo = 0, hi = times.length - 1;
+      if (t <= times[0]) return 0;
+      if (t >= times[hi]) return hi;
+      while (lo < hi) {
+        const mid = (lo + hi + 1) >> 1;
+        if (times[mid] <= t) lo = mid;
+        else hi = mid - 1;
+      }
+      return lo;
+    }
+
     const img = ctx.createImageData(plotW, plotH);
     for (let y = 0; y < plotH; y++) {
-      const row = Math.min(rows - 1, Math.floor((y / plotH) * rows));
+      const t = tStart + ((y + 0.5) / plotH) * (tStop - tStart);
+      const row = rowAtTime(t);
       const src = sweeps[row];
       for (let x = 0; x < plotW; x++) {
         const col = Math.min(cols - 1, Math.floor((x / plotW) * cols));
-        const t = (src[col] || 0) / maxV;
-        const rgb = colorMap(t);
+        const tv = (src[col] || 0) / maxV;
+        const rgb = colorMap(tv);
         const i = (y * plotW + x) * 4;
         img.data[i] = rgb[0];
         img.data[i + 1] = rgb[1];
@@ -162,12 +189,12 @@
     ctx.save();
     ctx.translate(14, padT + plotH / 2);
     ctx.rotate(-Math.PI / 2);
-    ctx.fillText("Sweep", 0, 0);
+    ctx.fillText("Time (s)", 0, 0);
     ctx.restore();
 
     ctx.textAlign = "right";
-    ctx.fillText("0", padL - 6, padT + plotH);
-    ctx.fillText(String(-rows), padL - 6, padT + 10);
+    ctx.fillText(tStart.toFixed(1), padL - 6, padT + 10);
+    ctx.fillText(tStop.toFixed(1), padL - 6, padT + plotH);
   }
 
   function mount(root, options) {

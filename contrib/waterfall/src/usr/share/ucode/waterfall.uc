@@ -33,14 +33,14 @@ const ATH_FFT_SAMPLE_ATH10K = 3;
 
 const SESSION_DEFAULT_SEC = 30;
 const SESSION_MAX_SEC = 600;
-const MAX_SWEEPS = 90;
+const MAX_SWEEPS = 400;
 const TARGET_BINS = 64;
-const ATH10K_FFT_HARD_TIMEOUT = 10;
+const ATH10K_FFT_HARD_TIMEOUT = 4;
 const SPECTRAL_COOLDOWN = "/tmp/waterfall-spectral.cooldown";
 
 export function packageVersion()
 {
-    return "0.2.9-r0";
+    return "0.2.17-r0";
 };
 
 function isMeshMode(mode)
@@ -155,9 +155,9 @@ function spectralCooldownActive()
 }
 
 /**
- * Run isolated ath10k FFT pulse. Returns { ok, bytes, exit, recovered, error }.
+ * Run isolated ath10k FFT capture. durationSec>0 streams for that wall time.
  */
-export function runAth10kFftPulse(iface, phy, allowScan)
+export function runAth10kFftPulse(iface, phy, allowScan, durationSec)
 {
     if (!iface || !phy) {
         return { ok: false, bytes: 0, exit: 5, recovered: false, error: "missing iface/phy" };
@@ -166,8 +166,13 @@ export function runAth10kFftPulse(iface, phy, allowScan)
         return { ok: false, bytes: 0, exit: 3, recovered: false, error: "spectral cooldown active after prior failure" };
     }
     const scan = allowScan ? " --scan" : "";
-    const rc = system(`/usr/bin/waterfall-ath10k-fft -i ${iface} -p ${phy} -o ${FFT_OUT} -t ${ATH10K_FFT_HARD_TIMEOUT}${scan} >/tmp/waterfall-ath10k-fft.log 2>&1`);
-    /* ucode system() returns wait status; normalize common exits */
+    let durArg = "";
+    let hard = ATH10K_FFT_HARD_TIMEOUT;
+    if (durationSec != null && durationSec > 0) {
+        durArg = ` -d ${int(durationSec)}`;
+        hard = int(durationSec) + 8;
+    }
+    const rc = system(`/usr/bin/waterfall-ath10k-fft -i ${iface} -p ${phy} -o ${FFT_OUT} -t ${hard}${durArg}${scan} >/tmp/waterfall-ath10k-fft.log 2>&1`);
     let exitCode = rc;
     if (exitCode > 255) {
         exitCode = exitCode >> 8;
@@ -205,6 +210,13 @@ function nowSec()
     return int(clock()[0]);
 }
 
+function nowFrac()
+{
+    const c = clock();
+    /* Force float: ucode integer-divides otherwise and drops sub-second time. */
+    return c[0] + c[1] / 1000000000.0;
+}
+
 function be16(buf, off)
 {
     return (ord(buf, off) << 8) | ord(buf, off + 1);
@@ -217,6 +229,20 @@ function be16s(buf, off)
         v -= 65536;
     }
     return v;
+}
+
+function be32(buf, off)
+{
+    return (ord(buf, off) * 16777216) + (ord(buf, off + 1) * 65536) +
+        (ord(buf, off + 2) * 256) + ord(buf, off + 3);
+}
+
+/* Approximate be64 as Number (fine for TSF deltas within a short session). */
+function be64(buf, off)
+{
+    const hi = be32(buf, off);
+    const lo = be32(buf, off + 4);
+    return hi * 4294967296 + lo;
 }
 
 function downsampleBins(bins, target)
@@ -264,29 +290,34 @@ export function parseFftTlvs(buf, maxSamples)
         const typ = ord(buf, pos);
         const plen = be16(buf, pos + 1);
         const total = 3 + plen;
-        if (plen < 1 || pos + total > n) {
-            break;
+        /* Misaligned relay dumps are common — byte-resync instead of aborting. */
+        if (typ !== ATH_FFT_SAMPLE_HT20 && typ !== ATH_FFT_SAMPLE_HT20_40 &&
+            typ !== ATH_FFT_SAMPLE_ATH10K) {
+            pos++;
+            continue;
+        }
+        if (plen < 16 || plen > 512 || pos + total > n) {
+            pos++;
+            continue;
         }
         const base = pos + 3;
 
         if (typ === ATH_FFT_SAMPLE_ATH10K) {
             const hdr = 26;
             if (plen < hdr + 16) {
-                pos += total;
+                pos++;
                 continue;
             }
             const bw = ord(buf, base);
             const freq1 = be16(buf, base + 1);
             const noise = be16s(buf, base + 5);
-            if (noise === 0) {
-                pos += total;
-                continue;
-            }
             const binCount = plen - hdr;
-            if (binCount !== 64 && binCount !== 128 && binCount !== 256) {
-                pos += total;
+            if (noise < -140 || noise > -20 || freq1 < 4900 || freq1 > 6100 ||
+                (binCount !== 64 && binCount !== 128 && binCount !== 256)) {
+                pos++;
                 continue;
             }
+            const tsf = be64(buf, base + 13);
             const bins = [];
             for (let i = 0; i < binCount; i++) {
                 push(bins, ord(buf, base + hdr + i));
@@ -301,16 +332,22 @@ export function parseFftTlvs(buf, maxSamples)
                 f_start: freq1 - width / 2,
                 f_stop: freq1 + width / 2,
                 noise: noise,
+                tsf: tsf,
                 bins: downsampleBins(bins, TARGET_BINS)
             });
+            pos += total;
         }
         else if (typ === ATH_FFT_SAMPLE_HT20) {
             /* tlv + max_exp(1) + freq(2) + rssi(1) + noise(1) + max_mag(2) + max_index(1) + bitmap(1) + tsf(8) + data(56) = 3+73 */
-            if (total < 3 + 17 + 56) {
-                pos += total;
+            if (total < 3 + 17 + 56 || plen !== 73) {
+                pos++;
                 continue;
             }
             const freq = be16(buf, base + 1);
+            if (freq < 2300 || freq > 6100) {
+                pos++;
+                continue;
+            }
             const noise = ord(buf, base + 4);
             let noiseS = noise;
             if (noiseS >= 128) {
@@ -329,13 +366,18 @@ export function parseFftTlvs(buf, maxSamples)
                 noise: noiseS,
                 bins: downsampleBins(bins, TARGET_BINS)
             });
+            pos += total;
         }
         else if (typ === ATH_FFT_SAMPLE_HT20_40) {
             if (total < 3 + 17 + 128) {
-                pos += total;
+                pos++;
                 continue;
             }
             const freq = be16(buf, base + 1);
+            if (freq < 2300 || freq > 6100) {
+                pos++;
+                continue;
+            }
             const noise = ord(buf, base + 4);
             let noiseS = noise;
             if (noiseS >= 128) {
@@ -354,8 +396,11 @@ export function parseFftTlvs(buf, maxSamples)
                 noise: noiseS,
                 bins: downsampleBins(bins, TARGET_BINS)
             });
+            pos += total;
         }
-        pos += total;
+        else {
+            pos++;
+        }
     }
     return samples;
 };
@@ -384,7 +429,7 @@ function readFftBuffer(path)
 }
 
 /**
- * Collapse many TLV samples into one sweep row (per-bin max).
+ * Collapse many TLV samples into one sweep row (per-bin max) — one-shot summary only.
  */
 export function samplesToSweep(samples)
 {
@@ -413,6 +458,31 @@ export function samplesToSweep(samples)
         noise: int(noiseSum / length(samples)),
         bins: bins
     };
+};
+
+/**
+ * One heatmap row per FFT TLV sample (time progresses down the waterfall).
+ */
+export function samplesToRows(samples)
+{
+    const rows = [];
+    if (!samples) {
+        return rows;
+    }
+    for (let i = 0; i < length(samples); i++) {
+        const s = samples[i];
+        if (!s?.bins || !length(s.bins)) {
+            continue;
+        }
+        push(rows, {
+            f_start: s.f_start,
+            f_stop: s.f_stop,
+            noise: s.noise,
+            tsf: s.tsf,
+            bins: s.bins
+        });
+    }
+    return rows;
 };
 
 export function disableAllSpectral()
@@ -817,6 +887,7 @@ function emptyCache(iface)
         version: packageVersion(),
         have_cache: false,
         sweeps: [],
+        times: [],
         meta: iface ? { iface: iface } : null,
         iface: iface || null
     };
@@ -1034,18 +1105,22 @@ export function captureSpectral(preferredIface)
 };
 
 /**
- * Bounded RF session: ath9k FFT, or ath10k isolated FFT pulses with survey fallback.
+ * Bounded RF session: dense time rows (Y = time from 0 → duration).
+ * Each FFT TLV becomes its own row; sample as fast as the worker allows.
  */
 export function runSession(preferredIface, durationSec)
 {
     durationSec = clampDuration(durationSec);
-    const sleepSec = durationSec > MAX_SWEEPS ? int((durationSec + MAX_SWEEPS - 1) / MAX_SWEEPS) : 1;
+    /* Prefer dense sampling; only space out on very long runs to cap CPU. */
+    const sleepSec = durationSec >= 300 ? 1 : 0;
     fs.unlink(SESSION_STOP);
 
     const cap = probeCapability(preferredIface);
     const started = nowSec();
+    const startedFrac = nowFrac();
     const ends = started + durationSec;
     const sweeps = [];
+    const times = [];
     let mode = cap.capture_mode;
     let usedSurveyFallback = false;
     let recovered = false;
@@ -1065,56 +1140,117 @@ export function runSession(preferredIface, durationSec)
     let fStart = null;
     let fStop = null;
 
+    function pushRow(bins, f0, f1, tVal)
+    {
+        if (!bins || !length(bins)) {
+            return;
+        }
+        if (fStart == null) {
+            fStart = f0;
+            fStop = f1;
+        }
+        let t = tVal;
+        if (t == null) {
+            t = nowFrac() - startedFrac;
+        }
+        if (t < 0) {
+            t = 0;
+        }
+        push(sweeps, bins);
+        push(times, t);
+    }
+
+    /* Wall-clock drives Y (0→duration). TSF micro-orders within a pulse.
+     * Must use float division — ucode truncates integer µs/1e6 to 0. */
+    function ingestFftBuffer(durationHint)
+    {
+        const buf = readFftBuffer(FFT_OUT);
+        if (!buf) {
+            return 0;
+        }
+        /* Cap per pulse so later seconds still get rows. */
+        const rows = samplesToRows(parseFftTlvs(buf, 16));
+        if (!length(rows)) {
+            return 0;
+        }
+        const tWall = nowFrac() - startedFrac;
+        let localTsf0 = null;
+        for (let i = 0; i < length(rows); i++) {
+            if (length(sweeps) >= MAX_SWEEPS) {
+                break;
+            }
+            let t = tWall + i * 0.0005;
+            if (rows[i].tsf != null) {
+                if (localTsf0 == null) {
+                    localTsf0 = rows[i].tsf;
+                }
+                const d = (rows[i].tsf - localTsf0) / 1000000.0;
+                if (d > 0) {
+                    t = tWall + d;
+                }
+            }
+            pushRow(rows[i].bins, rows[i].f_start, rows[i].f_stop, t);
+        }
+        return length(rows);
+    }
+
     if (!cap.ok || !cap.capture_safe || !mode) {
         error = cap.unsupported_message || cap.error || "No capture path";
     }
     else if (cap.chipset === "ath10k") {
         let useFft = !!cap.fft_available && !spectralCooldownActive();
+        let emptyStreak = 0;
         try {
-            while (nowSec() < ends) {
+            /* Rapid short pulses across the window (full-duration background hangs IBSS). */
+            const endsFrac = startedFrac + durationSec;
+            while (nowFrac() < endsFrac) {
                 if (fs.access(SESSION_STOP)) {
                     break;
                 }
-                let sweep = null;
-                if (useFft) {
-                    const pulse = runAth10kFftPulse(cap.iface, cap.phy, false);
-                    if (pulse.recovered) {
-                        recovered = true;
-                        useFft = false;
-                        usedSurveyFallback = true;
-                        mode = "survey";
-                    }
-                    else if (pulse.ok) {
-                        const buf = readFftBuffer(FFT_OUT);
-                        if (buf) {
-                            sweep = samplesToSweep(parseFftTlvs(buf, 16));
-                        }
-                    }
-                    else if (pulse.exit === 1 || pulse.exit === 3) {
-                        /* empty or cooldown — fall back for remainder */
-                        useFft = false;
-                        usedSurveyFallback = true;
-                        mode = "survey";
-                    }
+                if (length(sweeps) >= MAX_SWEEPS) {
+                    break;
                 }
-                if (!sweep && (!useFft || usedSurveyFallback) && cap.survey_available) {
+                if (!useFft) {
+                    break;
+                }
+                const pulse = runAth10kFftPulse(cap.iface, cap.phy, false, null);
+                if (pulse.recovered) {
+                    recovered = true;
+                    useFft = false;
                     usedSurveyFallback = true;
                     mode = "survey";
-                    sweep = surveyToSweep(cap.iface);
+                    break;
                 }
-                if (sweep) {
-                    if (fStart == null) {
-                        fStart = sweep.f_start;
-                        fStop = sweep.f_stop;
-                    }
-                    push(sweeps, sweep.bins);
-                    if (length(sweeps) >= MAX_SWEEPS) {
+                if (pulse.ok) {
+                    const n = ingestFftBuffer(durationSec);
+                    emptyStreak = n > 0 ? 0 : emptyStreak + 1;
+                }
+                else {
+                    emptyStreak++;
+                    if (emptyStreak >= 4) {
+                        useFft = false;
+                        usedSurveyFallback = true;
+                        mode = "survey";
                         break;
                     }
                 }
-                system(`sleep ${sleepSec}`);
-                if (fs.access(SESSION_STOP)) {
-                    break;
+            }
+            if (!length(sweeps) && cap.survey_available) {
+                usedSurveyFallback = true;
+                mode = "survey";
+                const surveyEnds = nowSec() + durationSec;
+                while (nowSec() < surveyEnds) {
+                    if (fs.access(SESSION_STOP)) {
+                        break;
+                    }
+                    const sweep = surveyToSweep(cap.iface);
+                    if (sweep) {
+                        pushRow(sweep.bins, sweep.f_start, sweep.f_stop, null);
+                        if (length(sweeps) >= MAX_SWEEPS) {
+                            break;
+                        }
+                    }
+                    system("sleep 1");
                 }
             }
             if (!length(sweeps)) {
@@ -1135,16 +1271,12 @@ export function runSession(preferredIface, durationSec)
                 }
                 const sweep = surveyToSweep(cap.iface);
                 if (sweep) {
-                    if (fStart == null) {
-                        fStart = sweep.f_start;
-                        fStop = sweep.f_stop;
-                    }
-                    push(sweeps, sweep.bins);
+                    pushRow(sweep.bins, sweep.f_start, sweep.f_stop);
                     if (length(sweeps) >= MAX_SWEEPS) {
                         break;
                     }
                 }
-                system(`sleep ${sleepSec}`);
+                system(`sleep ${sleepSec > 0 ? sleepSec : 1}`);
                 if (fs.access(SESSION_STOP)) {
                     break;
                 }
@@ -1174,25 +1306,16 @@ export function runSession(preferredIface, durationSec)
                         error = "Cannot trigger spectral scan";
                         break;
                     }
-                    system(`sleep ${sleepSec}`);
-                    system(`dd if=${relay} of=${FFT_OUT} bs=4096 count=4 2>/dev/null`);
-                    const st = fs.stat(FFT_OUT);
-                    const bytes = st ? int(st.size) : 0;
-                    if (bytes > 0) {
-                        const buf = readFftBuffer(FFT_OUT);
-                        if (buf) {
-                            const sweep = samplesToSweep(parseFftTlvs(buf, 16));
-                            if (sweep) {
-                                if (fStart == null) {
-                                    fStart = sweep.f_start;
-                                    fStop = sweep.f_stop;
-                                }
-                                push(sweeps, sweep.bins);
-                                if (length(sweeps) >= MAX_SWEEPS) {
-                                    break;
-                                }
-                            }
-                        }
+                    if (sleepSec > 0) {
+                        system(`sleep ${sleepSec}`);
+                    }
+                    else {
+                        system("sleep 0");
+                    }
+                    system(`dd if=${relay} of=${FFT_OUT} bs=4096 count=8 2>/dev/null`);
+                    ingestFftBuffer();
+                    if (length(sweeps) >= MAX_SWEEPS) {
+                        break;
                     }
                     if (fs.access(SESSION_STOP)) {
                         break;
@@ -1210,6 +1333,7 @@ export function runSession(preferredIface, durationSec)
     fs.unlink(SESSION_PID);
 
     const ended = nowSec();
+    const tStop = length(times) ? times[length(times) - 1] : (ended - started);
     let note = "RF spectral session complete; radio restored to normal use.";
     if (mode === "survey" && usedSurveyFallback) {
         note = recovered
@@ -1234,8 +1358,11 @@ export function runSession(preferredIface, durationSec)
             capture_mode: mode,
             survey_fallback: usedSurveyFallback,
             recovered: recovered,
+            y_axis: "time",
             f_start: fStart,
             f_stop: fStop,
+            t_start: 0,
+            t_stop: tStop,
             started_at: started,
             ended_at: ended,
             duration_sec: ended - started,
@@ -1245,7 +1372,8 @@ export function runSession(preferredIface, durationSec)
             experimental: cap.chipset === "ath10k",
             note: note
         },
-        sweeps: sweeps
+        sweeps: sweeps,
+        times: times
     };
     writeCache(cache);
     writeSessionState({
