@@ -83,7 +83,7 @@
     const ctx = canvas.getContext("2d");
     const W = canvas.width;
     const H = canvas.height;
-    const padL = 52, padR = 56, padT = 28, padB = 40;
+    const padL = 52, padR = 56, padT = 40, padB = 40;
     const plotW = W - padL - padR;
     const plotH = H - padT - padB;
 
@@ -93,7 +93,7 @@
     ctx.fillStyle = "#fff";
     ctx.font = "13px sans-serif";
     ctx.textAlign = "center";
-    ctx.fillText("Waterfall History", W / 2, 18);
+    ctx.fillText("Waterfall History", W / 2, 14);
 
     if (!sweeps.length) {
       ctx.fillStyle = "#888";
@@ -158,15 +158,51 @@
     }
     ctx.putImageData(img, padL, padT);
 
-    ctx.strokeStyle = "rgba(180,180,180,0.35)";
-    ctx.lineWidth = 1;
-    for (let g = 0; g <= 6; g++) {
-      const x = padL + (plotW * g) / 6;
-      ctx.beginPath();
-      ctx.moveTo(x, padT);
-      ctx.lineTo(x, padT + plotH);
-      ctx.stroke();
+    const f0 = meta.f_start != null ? meta.f_start : 0;
+    const f1 = meta.f_stop != null ? meta.f_stop : 0;
+    const span = f1 > f0 ? f1 - f0 : 1;
+    let axisCh = meta.axis_channels || [];
+    if (!axisCh.length && cache && cache._scanChannels) axisCh = cache._scanChannels;
+    let ticks = [];
+    for (let i = 0; i < axisCh.length; i++) {
+      const c = axisCh[i];
+      if (c == null || c.frequency == null || c.number == null) continue;
+      if (c.frequency < f0 || c.frequency > f1) continue;
+      ticks.push(c);
     }
+    const maxTicks = Math.max(4, Math.floor(plotW / 40));
+    if (ticks.length > maxTicks) {
+      const step = Math.ceil(ticks.length / maxTicks);
+      const thinned = [];
+      for (let i = 0; i < ticks.length; i += step) thinned.push(ticks[i]);
+      ticks = thinned;
+    }
+
+    ctx.lineWidth = 1;
+    if (ticks.length) {
+      ctx.strokeStyle = "rgba(160,190,220,0.35)";
+      ctx.fillStyle = "#9ab";
+      ctx.font = "10px sans-serif";
+      ctx.textAlign = "center";
+      for (let i = 0; i < ticks.length; i++) {
+        const x = padL + ((ticks[i].frequency - f0) / span) * plotW;
+        ctx.beginPath();
+        ctx.moveTo(x, padT);
+        ctx.lineTo(x, padT + plotH);
+        ctx.stroke();
+        ctx.fillText(String(ticks[i].number), x, padT - 6);
+      }
+    } else {
+      ctx.strokeStyle = "rgba(180,180,180,0.35)";
+      for (let g = 0; g <= 6; g++) {
+        const x = padL + (plotW * g) / 6;
+        ctx.beginPath();
+        ctx.moveTo(x, padT);
+        ctx.lineTo(x, padT + plotH);
+        ctx.stroke();
+      }
+    }
+    ctx.strokeStyle = "rgba(180,180,180,0.35)";
     for (let g = 0; g <= 6; g++) {
       const y = padT + (plotH * g) / 6;
       ctx.beginPath();
@@ -182,8 +218,6 @@
       ctx.fillRect(W - padR + 12, padT + y, 14, 1);
     }
 
-    const f0 = meta.f_start != null ? meta.f_start : 0;
-    const f1 = meta.f_stop != null ? meta.f_stop : 0;
     ctx.fillStyle = "#ccc";
     ctx.font = "11px sans-serif";
     ctx.textAlign = "left";
@@ -384,6 +418,27 @@
       return by[String(bw)] || scan.channels || [];
     }
 
+    function channelInList(list, ch) {
+      if (ch == null || ch === "" || ch === "all") return false;
+      const s = String(ch);
+      for (let i = 0; i < list.length; i++) {
+        if (String(list[i].number) === s) return true;
+      }
+      return false;
+    }
+
+    function pickChannel(list, preferred, curCh) {
+      if (channelInList(list, preferred)) return String(preferred);
+      if (channelInList(list, curCh)) return String(curCh);
+      if (list.length) return String(list[0].number);
+      return curCh != null && curCh !== "" ? String(curCh) : "";
+    }
+
+    function rememberNonAll(ch, bw) {
+      if (ch && ch !== "all") savePref("lastChannel", ch);
+      if (bw && bw !== "all") savePref("lastBandwidth", bw);
+    }
+
     function fillScanControls(status, opts) {
       opts = opts || {};
       if (!channelSel && !bwSel) return;
@@ -427,20 +482,25 @@
           const c = list[i];
           const opt = document.createElement("option");
           opt.value = String(c.number);
-          opt.textContent = c.label || (c.number + " (" + c.frequency + ")");
+          let label = c.label || (c.number + " (" + c.frequency + ")");
+          if (curCh && String(c.number) === curCh) label += " · radio";
+          opt.textContent = label;
           channelSel.appendChild(opt);
         }
         channelSel.value = wantCh;
         if (channelSel.value !== wantCh) {
-          channelSel.value = curCh || "all";
+          channelSel.value = channelInList(list, curCh) ? curCh : (list.length ? String(list[0].number) : "all");
         }
         wantCh = channelSel.value;
       }
 
       if (wantBw === "all" && channelSel) channelSel.value = "all";
       if (wantCh === "all" && bwSel) bwSel.value = "all";
-      savePref("bandwidth", bwSel ? bwSel.value : wantBw);
-      savePref("channel", channelSel ? channelSel.value : wantCh);
+      const outBw = bwSel ? bwSel.value : wantBw;
+      const outCh = channelSel ? channelSel.value : wantCh;
+      savePref("bandwidth", outBw);
+      savePref("channel", outCh);
+      rememberNonAll(outCh, outBw);
       fillingScan = false;
     }
 
@@ -583,24 +643,50 @@
     if (bwSel) {
       bwSel.addEventListener("change", () => {
         if (fillingScan) return;
+        const scan = lastScan;
+        const curBw = scan && scan.current_bandwidth != null ? String(scan.current_bandwidth) : "10";
+        const curCh = scan && scan.current_channel != null ? String(scan.current_channel) : "";
+        const prevBw = loadPref("bandwidth", "");
+        const prevCh = channelSel ? channelSel.value : loadPref("channel", "");
         let bw = bwSel.value;
-        let ch = channelSel ? channelSel.value : "";
-        if (bw === "all") ch = "all";
+        let ch = prevCh;
+        if (bw === "all") {
+          rememberNonAll(prevCh, prevBw);
+          ch = "all";
+        } else if (prevBw === "all" || ch === "all") {
+          const list = channelsForBw(scan, bw);
+          ch = pickChannel(list, loadPref("lastChannel", ""), curCh);
+        } else {
+          const list = channelsForBw(scan, bw);
+          ch = pickChannel(list, ch, curCh);
+        }
         savePref("bandwidth", bw);
         savePref("channel", ch);
-        fillScanControls(lastScan ? { scan: lastScan } : null, { bandwidth: bw, channel: ch });
+        rememberNonAll(ch, bw);
+        fillScanControls(scan ? { scan: scan } : null, { bandwidth: bw, channel: ch });
       });
     }
 
     if (channelSel) {
       channelSel.addEventListener("change", () => {
         if (fillingScan) return;
+        const scan = lastScan;
+        const curBw = scan && scan.current_bandwidth != null ? String(scan.current_bandwidth) : "10";
+        const prevBw = bwSel ? bwSel.value : loadPref("bandwidth", "");
+        const prevCh = loadPref("channel", "");
         let ch = channelSel.value;
-        let bw = bwSel ? bwSel.value : "";
-        if (ch === "all") bw = "all";
+        let bw = prevBw;
+        if (ch === "all") {
+          rememberNonAll(prevCh, prevBw);
+          bw = "all";
+        } else if (prevCh === "all" || bw === "all") {
+          /* Leave ALL via Channel → BW resets to radio configured BW. */
+          bw = curBw;
+        }
         savePref("channel", ch);
         savePref("bandwidth", bw);
-        fillScanControls(lastScan ? { scan: lastScan } : null, { bandwidth: bw, channel: ch });
+        rememberNonAll(ch, bw);
+        fillScanControls(scan ? { scan: scan } : null, { bandwidth: bw, channel: ch });
       });
     }
 
