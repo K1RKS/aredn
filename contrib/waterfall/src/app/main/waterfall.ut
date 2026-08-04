@@ -76,8 +76,18 @@ const unsupportedMsg = cap.unsupported_message || "Waterfall is not supported on
             <select id="wf-radio" class="wf-radio" style="min-width:14rem;max-width:100%;flex:1"></select>
             <label for="wf-duration" style="font-size:0.9em">Duration</label>
             <select id="wf-duration" class="wf-duration" style="min-width:6rem"></select>
+            <label for="wf-channel" style="font-size:0.9em">Channel</label>
+            <select id="wf-channel" class="wf-channel" style="min-width:9rem"></select>
+            <label for="wf-bandwidth" style="font-size:0.9em">BW</label>
+            <select id="wf-bandwidth" class="wf-bandwidth" style="min-width:5.5rem"></select>
         </div>
         <canvas class="wf-canvas" width="800" height="400"></canvas>
+        <div class="wf-progress" hidden style="margin:8px 0 0;max-width:100%">
+            <div class="wf-progress-track" style="height:10px;background:#222;border-radius:4px;overflow:hidden">
+                <div class="wf-progress-bar" style="height:100%;width:0%;background:#3a7abd;transition:width 0.2s linear"></div>
+            </div>
+            <div class="wf-progress-label" style="margin-top:4px;font-size:0.85em;opacity:0.85"></div>
+        </div>
         <div class="wf-status"></div>
         <div class="wf-actions">
             {% if (supported) { %}

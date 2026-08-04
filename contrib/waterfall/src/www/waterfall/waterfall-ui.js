@@ -29,15 +29,17 @@
     return [255, 30, 30];
   }
 
-  function qs(action, iface, duration) {
+  function qs(action, iface, duration, channel, bandwidth) {
     let u = API + "?action=" + encodeURIComponent(action);
     if (iface) u += "&iface=" + encodeURIComponent(iface);
     if (duration != null && duration !== "") u += "&duration=" + encodeURIComponent(duration);
+    if (channel != null && channel !== "") u += "&channel=" + encodeURIComponent(channel);
+    if (bandwidth != null && bandwidth !== "") u += "&bandwidth=" + encodeURIComponent(bandwidth);
     return u;
   }
 
-  async function api(action, iface, duration) {
-    const r = await fetch(qs(action, iface, duration), { cache: "no-store", credentials: "same-origin" });
+  async function api(action, iface, duration, channel, bandwidth) {
+    const r = await fetch(qs(action, iface, duration, channel, bandwidth), { cache: "no-store", credentials: "same-origin" });
     const text = await r.text();
     let j = null;
     try {
@@ -102,10 +104,15 @@
     const rows = sweeps.length;
     const cols = sweeps[0].length || 1;
     const tStart = meta.t_start != null ? meta.t_start : 0;
-    let tStop = meta.t_stop != null ? meta.t_stop :
-      (meta.requested_duration_sec || meta.duration_sec || rows);
-    if (times.length) {
-      tStop = Math.max(tStop, times[times.length - 1] || 0);
+    /* Prefer requested session length so a 60s run shows 0→60 even if samples end early. */
+    let tStop;
+    if (meta.requested_duration_sec != null && meta.requested_duration_sec > 0) {
+      tStop = meta.requested_duration_sec;
+    } else {
+      tStop = meta.t_stop != null ? meta.t_stop : (meta.duration_sec || rows);
+      if (times.length) {
+        tStop = Math.max(tStop, times[times.length - 1] || 0);
+      }
     }
     if (tStop <= tStart) tStop = tStart + 1;
 
@@ -207,10 +214,67 @@
     const closeBtn = root.querySelector(".wf-close");
     const radioSel = root.querySelector(".wf-radio");
     const durSel = root.querySelector(".wf-duration");
+    const channelSel = root.querySelector(".wf-channel");
+    const bwSel = root.querySelector(".wf-bandwidth");
+    let progressWrap = root.querySelector(".wf-progress");
+    let progressBar = root.querySelector(".wf-progress-bar");
+    let progressLabel = root.querySelector(".wf-progress-label");
     let pollTimer = null;
+    let progressTimer = null;
     let alive = true;
     let selectedIface = null;
     let fillingRadios = false;
+    let fillingScan = false;
+    let lastScan = null;
+    /* Local wall-clock estimate between status polls (browser-only). */
+    let progressEndsAtMs = null;
+    let progressDurationSec = null;
+    let progressIface = null;
+
+    function prefKey(kind) {
+      return "waterfall." + kind + "." + (getIface() || "default");
+    }
+
+    function loadPref(kind, fallback) {
+      try {
+        const v = sessionStorage.getItem(prefKey(kind));
+        return v != null && v !== "" ? v : fallback;
+      } catch (_) {
+        return fallback;
+      }
+    }
+
+    function savePref(kind, value) {
+      try {
+        sessionStorage.setItem(prefKey(kind), String(value));
+      } catch (_) {}
+    }
+
+    function getChannel() {
+      if (channelSel && channelSel.value) return channelSel.value;
+      return loadPref("channel", "");
+    }
+
+    function getBandwidth() {
+      if (bwSel && bwSel.value) return bwSel.value;
+      return loadPref("bandwidth", "");
+    }
+
+    function ensureProgressEls() {
+      if (progressWrap && progressBar && progressLabel) return;
+      if (!canvas || !canvas.parentNode) return;
+      progressWrap = document.createElement("div");
+      progressWrap.className = "wf-progress";
+      progressWrap.hidden = true;
+      progressWrap.style.cssText = "margin:6px 0 0";
+      progressWrap.innerHTML =
+        '<div class="wf-progress-track" style="height:8px;background:#222;border-radius:4px;overflow:hidden">' +
+        '<div class="wf-progress-bar" style="height:100%;width:0%;background:#3a7abd;transition:width 0.15s linear"></div></div>' +
+        '<div class="wf-progress-label" style="margin-top:4px;font-size:0.8em;opacity:0.85"></div>';
+      canvas.parentNode.insertBefore(progressWrap, canvas.nextSibling);
+      progressBar = progressWrap.querySelector(".wf-progress-bar");
+      progressLabel = progressWrap.querySelector(".wf-progress-label");
+    }
 
     function setStatus(t) {
       if (statusEl) statusEl.textContent = t || "";
@@ -226,6 +290,70 @@
       return 30;
     }
 
+    function stopProgressTick() {
+      if (progressTimer) {
+        clearInterval(progressTimer);
+        progressTimer = null;
+      }
+    }
+
+    function hideProgress() {
+      stopProgressTick();
+      progressEndsAtMs = null;
+      progressDurationSec = null;
+      progressIface = null;
+      ensureProgressEls();
+      if (progressWrap) progressWrap.hidden = true;
+      if (progressBar) progressBar.style.width = "0%";
+      if (progressLabel) progressLabel.textContent = "";
+    }
+
+    function paintProgress() {
+      ensureProgressEls();
+      if (!progressWrap || !progressBar || !progressLabel) return;
+      if (progressEndsAtMs == null || !progressDurationSec || progressDurationSec <= 0) {
+        hideProgress();
+        return;
+      }
+      const leftSec = Math.max(0, (progressEndsAtMs - Date.now()) / 1000);
+      const done = Math.min(1, Math.max(0, 1 - leftSec / progressDurationSec));
+      progressWrap.hidden = false;
+      progressBar.style.width = (done * 100).toFixed(1) + "%";
+      const leftRound = Math.ceil(leftSec);
+      progressLabel.textContent =
+        (progressIface || "?") + " · " + Math.round(done * 100) + "% · ~" + leftRound + "s left";
+    }
+
+    function syncProgressFromStatus(status) {
+      if (!status || !status.running) {
+        hideProgress();
+        return;
+      }
+      const sess = status.session || {};
+      const dur = sess.duration_sec || status.remaining_sec || getDuration();
+      let left = status.remaining_sec;
+      if (left == null && sess.ends_at != null && status.server_now != null) {
+        left = Math.max(0, sess.ends_at - status.server_now);
+      }
+      if (left == null && sess.ends_at != null) {
+        left = Math.max(0, sess.ends_at - Math.floor(Date.now() / 1000));
+      }
+      if (left == null) left = dur;
+      progressDurationSec = dur > 0 ? dur : 30;
+      progressEndsAtMs = Date.now() + left * 1000;
+      progressIface = sess.iface || getIface() || "?";
+      paintProgress();
+      if (!progressTimer) {
+        progressTimer = setInterval(function () {
+          if (!alive) {
+            stopProgressTick();
+            return;
+          }
+          paintProgress();
+        }, 250);
+      }
+    }
+
     function applyRunningUi(status) {
       const running = !!(status && status.running);
       if (startBtn) {
@@ -238,6 +366,82 @@
       if (stopBtn) stopBtn.disabled = !running;
       if (durSel) durSel.disabled = running;
       if (radioSel) radioSel.disabled = running;
+      if (channelSel) channelSel.disabled = running;
+      if (bwSel) bwSel.disabled = running;
+      if (running) syncProgressFromStatus(status);
+      else hideProgress();
+    }
+
+    function channelsForBw(scan, bw) {
+      if (!scan) return [];
+      if (bw === "all") {
+        const bws = scan.bandwidths || [];
+        const key = bws.indexOf(20) >= 0 ? "20" : (bws[0] != null ? String(bws[0]) : "10");
+        const by = scan.channels_by_bw || {};
+        return by[key] || scan.channels || [];
+      }
+      const by = scan.channels_by_bw || {};
+      return by[String(bw)] || scan.channels || [];
+    }
+
+    function fillScanControls(status, opts) {
+      opts = opts || {};
+      if (!channelSel && !bwSel) return;
+      const scan = (status && status.scan) || lastScan;
+      if (!scan) return;
+      lastScan = scan;
+      fillingScan = true;
+      const bws = scan.bandwidths || [5, 10, 20, 40, 80];
+      const curBw = scan.current_bandwidth != null ? String(scan.current_bandwidth) : (bws[0] != null ? String(bws[0]) : "10");
+      const curCh = scan.current_channel != null ? String(scan.current_channel) : "";
+      let wantBw = opts.bandwidth != null ? String(opts.bandwidth) : loadPref("bandwidth", curBw);
+      let wantCh = opts.channel != null ? String(opts.channel) : loadPref("channel", curCh || "all");
+      if (wantBw === "all") wantCh = "all";
+      if (wantCh === "all") wantBw = "all";
+
+      if (bwSel) {
+        bwSel.innerHTML = "";
+        const allBw = document.createElement("option");
+        allBw.value = "all";
+        allBw.textContent = "ALL";
+        bwSel.appendChild(allBw);
+        for (let i = 0; i < bws.length; i++) {
+          const opt = document.createElement("option");
+          opt.value = String(bws[i]);
+          opt.textContent = bws[i] + " MHz";
+          bwSel.appendChild(opt);
+        }
+        bwSel.value = wantBw;
+        if (bwSel.value !== wantBw) bwSel.value = curBw;
+        wantBw = bwSel.value;
+      }
+
+      if (channelSel) {
+        const list = channelsForBw(scan, wantBw === "all" ? "all" : wantBw);
+        channelSel.innerHTML = "";
+        const allCh = document.createElement("option");
+        allCh.value = "all";
+        allCh.textContent = "ALL (full band)";
+        channelSel.appendChild(allCh);
+        for (let i = 0; i < list.length; i++) {
+          const c = list[i];
+          const opt = document.createElement("option");
+          opt.value = String(c.number);
+          opt.textContent = c.label || (c.number + " (" + c.frequency + ")");
+          channelSel.appendChild(opt);
+        }
+        channelSel.value = wantCh;
+        if (channelSel.value !== wantCh) {
+          channelSel.value = curCh || "all";
+        }
+        wantCh = channelSel.value;
+      }
+
+      if (wantBw === "all" && channelSel) channelSel.value = "all";
+      if (wantCh === "all" && bwSel) bwSel.value = "all";
+      savePref("bandwidth", bwSel ? bwSel.value : wantBw);
+      savePref("channel", channelSel ? channelSel.value : wantCh);
+      fillingScan = false;
     }
 
     function runningMessage(status) {
@@ -337,6 +541,7 @@
         const s = await api("status", getIface());
         fillRadios(s);
         fillDurations(s);
+        fillScanControls(s);
         applyRunningUi(s);
         if (s.running) {
           setStatus(runningMessage(s));
@@ -368,7 +573,34 @@
       radioSel.addEventListener("change", () => {
         if (fillingRadios) return;
         selectedIface = radioSel.value || null;
-        loadCache().catch((e) => setStatus(String(e.message || e)));
+        api("status", selectedIface).then((s) => {
+          fillScanControls(s);
+          return loadCache();
+        }).catch((e) => setStatus(String(e.message || e)));
+      });
+    }
+
+    if (bwSel) {
+      bwSel.addEventListener("change", () => {
+        if (fillingScan) return;
+        let bw = bwSel.value;
+        let ch = channelSel ? channelSel.value : "";
+        if (bw === "all") ch = "all";
+        savePref("bandwidth", bw);
+        savePref("channel", ch);
+        fillScanControls(lastScan ? { scan: lastScan } : null, { bandwidth: bw, channel: ch });
+      });
+    }
+
+    if (channelSel) {
+      channelSel.addEventListener("change", () => {
+        if (fillingScan) return;
+        let ch = channelSel.value;
+        let bw = bwSel ? bwSel.value : "";
+        if (ch === "all") bw = "all";
+        savePref("channel", ch);
+        savePref("bandwidth", bw);
+        fillScanControls(lastScan ? { scan: lastScan } : null, { bandwidth: bw, channel: ch });
       });
     }
 
@@ -378,6 +610,8 @@
           if (startBtn.disabled) return;
           const iface = getIface();
           const dur = getDuration();
+          const ch = getChannel() || undefined;
+          const bw = getBandwidth() || undefined;
           if (!iface) {
             setStatus("Select a radio with spectral support first");
             return;
@@ -390,9 +624,10 @@
             startPoll();
             return;
           }
-          setStatus("Starting " + dur + "s session on " + iface + "…");
+          setStatus("Starting " + dur + "s session on " + iface +
+            " (ch " + (ch || "current") + " / " + (bw || "current") + " MHz)…");
           startBtn.disabled = true;
-          const r = await api("start", iface, dur);
+          const r = await api("start", iface, dur, ch, bw);
           if (!r.ok) {
             const st = await api("status", iface).catch(() => null);
             if (st && st.running) {
@@ -405,15 +640,17 @@
             }
             return;
           }
-          applyRunningUi({
+          const started = {
             running: true,
             remaining_sec: dur,
-            session: { iface: r.iface || iface, ends_at: r.ends_at }
-          });
-          setStatus(runningMessage({
-            remaining_sec: dur,
-            session: { iface: r.iface || iface, ends_at: r.ends_at }
-          }));
+            session: {
+              iface: r.iface || iface,
+              ends_at: r.ends_at,
+              duration_sec: r.duration_sec || dur
+            }
+          };
+          applyRunningUi(started);
+          setStatus(runningMessage(started));
           startPoll();
         } catch (e) {
           applyRunningUi({ running: false });
@@ -438,6 +675,7 @@
       closeBtn.addEventListener("click", () => {
         alive = false;
         stopPoll();
+        hideProgress();
         /* Must call dialog.close() — clearing innerHTML alone leaves [open]
          * and the grey ::backdrop (see #ctrl-modal[open]:empty in admin.css). */
         const modal = document.getElementById("ctrl-modal");
@@ -452,12 +690,16 @@
     function destroy() {
       alive = false;
       stopPoll();
+      hideProgress();
     }
 
     resize();
+    ensureProgressEls();
+    hideProgress();
     api("status").then(async (s) => {
       fillRadios(s);
       fillDurations(s);
+      fillScanControls(s);
       applyRunningUi(s);
       if (s.running) {
         setStatus(runningMessage(s));

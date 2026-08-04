@@ -14,6 +14,10 @@ const mIface = match(q, /iface=([a-zA-Z0-9]+)/);
 const iface = mIface ? mIface[1] : null;
 const mDur = match(q, /duration=([0-9]+)/);
 const duration = mDur ? int(mDur[1]) : 30;
+const mCh = match(q, /channel=([a-zA-Z0-9_-]+)/);
+const channel = mCh ? mCh[1] : null;
+const mBw = match(q, /bandwidth=([a-zA-Z0-9_-]+)/);
+const bandwidth = mBw ? mBw[1] : null;
 const mFmt = match(q, /format=([a-zA-Z0-9]+)/);
 const wantJson = (mFmt && mFmt[1] === "json") ||
     action === "start" || action === "stop" || action === "cache" ||
@@ -56,7 +60,7 @@ if (wantJson) {
     }
 
     if (action === "start") {
-        jsonOut(wf.startSessionAsync(iface, duration));
+        jsonOut(wf.startSessionAsync(iface, duration, channel, bandwidth));
     }
     else if (action === "stop") {
         jsonOut(wf.stopSession());

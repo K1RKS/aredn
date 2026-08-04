@@ -1,18 +1,24 @@
 #!/bin/sh
 # Bound waterfall session wrapper: records PID, always exits after worker.
-# Invoked as: waterfall-session [-i iface] [-d secs]
+# Invoked as: waterfall-session [-i iface] [-d secs] [-c channel|all] [-b bw|all]
 set -e
 IFACE=""
 DUR=30
+CHANNEL=""
+BW=""
 while [ $# -gt 0 ]; do
   case "$1" in
     -i) IFACE="$2"; shift 2 ;;
     -d) DUR="$2"; shift 2 ;;
+    -c) CHANNEL="$2"; shift 2 ;;
+    -b) BW="$2"; shift 2 ;;
     *) shift ;;
   esac
 done
 echo $$ > /tmp/waterfall-session.pid
 ARGS="session -d $DUR"
-[ -n "$IFACE" ] && ARGS="session -i $IFACE -d $DUR"
+[ -n "$IFACE" ] && ARGS="$ARGS -i $IFACE"
+[ -n "$CHANNEL" ] && ARGS="$ARGS -c $CHANNEL"
+[ -n "$BW" ] && ARGS="$ARGS -b $BW"
 # shellcheck disable=SC2086
 exec /usr/bin/waterfall $ARGS

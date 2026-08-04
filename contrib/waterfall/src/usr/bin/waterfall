@@ -7,19 +7,23 @@ import * as wf from "waterfall";
 
 function usage()
 {
-    print("Usage: waterfall [-i iface] [-d secs] [status|capture|session|stop|cache]\n");
+    print("Usage: waterfall [-i iface] [-d secs] [-c channel|all] [-b bw|all] [status|capture|session|stop|cache]\n");
     print("  status   Probe radio / spectral availability (default; no RF change)\n");
     print("  capture  One-shot spectral dump (disrupts RF briefly; always disables)\n");
     print("  session  Bounded capture; caches sweeps per-radio in /tmp RAM\n");
     print("  stop     Request early session stop and force spectral disable\n");
     print("  cache    Print cached waterfall JSON meta for iface\n");
     print("  -i IFACE Prefer wifi interface\n");
-    print("  -d SECS  Session duration 5-600 (default 30; longer runs space samples)\n");
+    print("  -d SECS  Session duration 5-600 (default 30)\n");
+    print("  -c CHAN  Channel number or 'all' (default: current radio channel)\n");
+    print("  -b BW    Bandwidth MHz or 'all' (default: current radio BW)\n");
 };
 
 let iface = null;
 let cmd = "status";
 let duration = 30;
+let channel = null;
+let bandwidth = null;
 for (let i = 0; i < length(ARGV); i++) {
     const a = ARGV[i];
     if (a === "-h" || a === "--help") {
@@ -36,6 +40,16 @@ for (let i = 0; i < length(ARGV); i++) {
         duration = int(ARGV[i]);
         continue;
     }
+    if (a === "-c" || a === "--channel") {
+        i++;
+        channel = ARGV[i];
+        continue;
+    }
+    if (a === "-b" || a === "--bandwidth") {
+        i++;
+        bandwidth = ARGV[i];
+        continue;
+    }
     if (a === "status" || a === "probe" || a === "capture" || a === "session" || a === "stop" || a === "cache") {
         cmd = a === "probe" ? "status" : a;
         continue;
@@ -50,7 +64,7 @@ if (cmd === "capture") {
     exit(0);
 }
 if (cmd === "session") {
-    const cache = wf.runSession(iface, duration);
+    const cache = wf.runSession(iface, duration, channel, bandwidth);
     print(sprintf("%J\n", { ok: cache.ok, sweeps: length(cache.sweeps || []), meta: cache.meta, error: cache.error }));
     exit(cache.ok ? 0 : 1);
 }

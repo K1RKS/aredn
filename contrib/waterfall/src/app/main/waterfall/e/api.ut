@@ -17,12 +17,16 @@ const q = request.env.QUERY_STRING || "";
 const mAction = match(q, /action=([a-zA-Z0-9_-]+)/);
 const mIface = match(q, /iface=([a-zA-Z0-9]+)/);
 const mDur = match(q, /duration=([0-9]+)/);
+const mCh = match(q, /channel=([a-zA-Z0-9_-]+)/);
+const mBw = match(q, /bandwidth=([a-zA-Z0-9_-]+)/);
 const action = (request.args && request.args.action) || (mAction ? mAction[1] : "status");
 const iface = (request.args && request.args.iface) || (mIface ? mIface[1] : null);
 const duration = (request.args && request.args.duration) ? int(request.args.duration) : (mDur ? int(mDur[1]) : 30);
+const channel = (request.args && request.args.channel) || (mCh ? mCh[1] : null);
+const bandwidth = (request.args && request.args.bandwidth) || (mBw ? mBw[1] : null);
 
 if (action === "start") {
-    print(sprintf("%J", wf.startSessionAsync(iface, duration)));
+    print(sprintf("%J", wf.startSessionAsync(iface, duration, channel, bandwidth)));
 }
 else if (action === "stop") {
     print(sprintf("%J", wf.stopSession()));
