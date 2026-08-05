@@ -463,6 +463,7 @@ export function collectSample(store, cfg)
                 hostname: hn ? hn : "",
                 ipv6: m[1],
                 iface: m[2],
+                type: common.linkTypeLabel(m[2]),
                 lq: lq,
                 rxcost: int(m[4]),
                 txcost: int(m[5]),
@@ -734,7 +735,23 @@ export function collectSample(store, cfg)
     store.last.babel_state_seen = state_exists ? true : false;
     store.last.babel_pid = pid;
 
-    store.live_neighbors = live;
+    /* Live API: publish type, drop iface (not kept in the sample ring either) */
+    const live_pub = [];
+    for (let i = 0; i < length(live); i++) {
+        const n = live[i];
+        push(live_pub, {
+            hostname: n.hostname,
+            ipv6: n.ipv6,
+            type: n.type || common.linkTypeLabel(n.iface),
+            lq: n.lq,
+            rxcost: n.rxcost,
+            txcost: n.txcost,
+            cost: n.cost,
+            tx_packets_delta: n.tx_packets_delta,
+            rx_packets_delta: n.rx_packets_delta
+        });
+    }
+    store.live_neighbors = live_pub;
 
     store.wg = readWgTunnelStats();
 

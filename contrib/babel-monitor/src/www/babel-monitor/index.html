@@ -229,7 +229,7 @@
     <div style="overflow-x:auto">
       <table>
         <thead>
-          <tr><th>Host</th><th>IPv6</th><th>Iface</th><th>LQ</th><th>Cost</th><th>RxCost</th><th>TxCost</th><th>RX Δ</th><th>TX Δ</th></tr>
+          <tr><th>Host</th><th>IPv6</th><th>Type</th><th>LQ</th><th>Cost</th><th>RxCost</th><th>TxCost</th><th>RX Δ</th><th>TX Δ</th></tr>
         </thead>
         <tbody id="neigh"></tbody>
       </table>
@@ -462,7 +462,7 @@
   function formatIface(iface) {
     if (!iface) return "—";
     const m = /^br0\.(\d+)$/i.exec(String(iface));
-    if (m) return "X-Link(" + m[1] + ")";
+    if (m) return "XLink(" + m[1] + ")";
     return iface;
   }
 
@@ -659,7 +659,8 @@
     return String(s)
       .replace(/&/g, "&amp;")
       .replace(/"/g, "&quot;")
-      .replace(/</g, "&lt;");
+      .replace(/</g, "&lt;")
+      .replace(/\n/g, "&#10;");
   }
 
   function fmtRss(kb) {
@@ -736,13 +737,16 @@
     ];
     const wg = live.wg || {};
     const wgTip =
-      "live = recent WireGuard handshake (≤300s) · active = tunnel enabled · total = entries in tunnel config";
+      "live = recent WireGuard handshake (≤300s)\n" +
+      "active = tunnel enabled\n" +
+      "total = entries in tunnel config\n" +
+      "shown as live/active/total";
     function pushWg(label, st) {
       if (!st || !(Number(st.total) > 0)) return;
       items.push([
         label,
         (st.live ?? 0) + "/" + (st.active ?? 0) + "/" + (st.total ?? 0),
-        wgTip + " — shown as live/active/total"
+        wgTip
       ]);
     }
     pushWg("WG Server Tunnels", wg.server_tunnels);
@@ -762,10 +766,10 @@
     }
     tb.innerHTML = list.map(function (n) {
       const host = n.hostname || "—";
-      const iface = formatIface(n.iface);
+      const typ = n.type || formatIface(n.iface) || "—";
       const rxd = n.rx_packets_delta != null ? n.rx_packets_delta : "—";
       const txd = n.tx_packets_delta != null ? n.tx_packets_delta : "—";
-      return "<tr><td>" + host + "</td><td>" + n.ipv6 + "</td><td>" + iface +
+      return "<tr><td>" + host + "</td><td>" + n.ipv6 + "</td><td>" + typ +
         "</td><td>" + n.lq + "%</td><td>" + n.cost + "</td><td>" + n.rxcost +
         "</td><td>" + n.txcost + "</td><td>" + rxd + "</td><td>" + txd + "</td></tr>";
     }).join("");

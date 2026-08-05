@@ -5,7 +5,7 @@ import * as math from "math";
 
 export function packageVersion()
 {
-    return "0.1.39-r0";
+    return "0.1.41-r0";
 };
 
 /**
@@ -48,7 +48,7 @@ export const RETENTION_S_AT_DEFAULT = SAMPLE_CAP * 10;
 export const SAMPLE_HDR = 35;
 export const SAMPLE_WIDTH = SAMPLE_HDR + RF_NEIGHBOR_CAP * 2 + LINK_IO_CAP * 3;
 
-/** Display label for babel/LQM ifaces (br0.N → X-Link(N)). */
+/** Display label for babel/LQM ifaces (br0.N → XLink(N)). */
 export function formatIfaceLabel(iface)
 {
     if (!iface) {
@@ -56,9 +56,44 @@ export function formatIfaceLabel(iface)
     }
     const m = match(`${iface}`, /^br0\.([0-9]+)$/);
     if (m) {
-        return sprintf("X-Link(%s)", m[1]);
+        return sprintf("XLink(%s)", m[1]);
     }
     return `${iface}`;
+};
+
+/**
+ * Neighbor link type for live UI (not stored in the sample ring).
+ * WG: wgc* = server (WG-S), wgs* = client (WG-C).
+ */
+export function linkTypeLabel(iface)
+{
+    if (!iface) {
+        return "—";
+    }
+    const d = `${iface}`;
+    if (d === "br-dtdlink") {
+        return "DtD";
+    }
+    if (match(d, /^wgc/)) {
+        return "WG-S";
+    }
+    if (match(d, /^wgs/)) {
+        return "WG-C";
+    }
+    if (match(d, /^wg/)) {
+        return "WG";
+    }
+    const xm = match(d, /^br0\.([0-9]+)$/);
+    if (xm) {
+        return sprintf("XLink(%s)", xm[1]);
+    }
+    if (match(d, /^wlan/)) {
+        return "RF";
+    }
+    if (d === "br-wifi" || d === "br-fast") {
+        return "RRF";
+    }
+    return d;
 };
 
 export function parseBool(v, dflt)
