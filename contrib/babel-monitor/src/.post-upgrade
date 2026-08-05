@@ -1,6 +1,8 @@
 #!/bin/sh
-# Re-enable daemon after upgrade. No Tools menu.
+# Re-enable daemon after upgrade. Refresh app launcher permissions.
 chmod 755 /usr/sbin/babel-monitord /usr/bin/babel-monitor /www/cgi-bin/babel-monitor /etc/init.d/babel-monitor 2>/dev/null || true
+chmod 755 /www/cgi-bin/apps/babel-monitor/user /www/cgi-bin/apps/babel-monitor/admin 2>/dev/null || true
+chmod 644 /www/apps/babel-monitor/icon.svg 2>/dev/null || true
 [ -x /etc/init.d/babel-monitor ] && /etc/init.d/babel-monitor enable 2>/dev/null || true
 [ -x /etc/init.d/babel-monitor ] && /etc/init.d/babel-monitor restart 2>/dev/null || true
 exit 0

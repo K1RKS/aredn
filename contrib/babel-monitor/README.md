@@ -4,7 +4,7 @@ Side-loaded AREDN APK that keeps Babel / LQM / arednlink metrics in RAM, exposes
 stateless JSON pull API for external historians, a public status page, and a
 live-config CLI.
 
-- Package: `babel-monitor-0.1.43-r0.apk`
+- Package: `babel-monitor-0.1.44-r0.apk`
 - Daemon: `babel-monitord`
 - CLI: `babel-monitor`
 - Status UI: `/babel-monitor/`
@@ -18,7 +18,7 @@ cd contrib/babel-monitor
 ./build.sh
 ```
 
-APK lands in `dist/babel-monitor-0.1.43-r0.apk`.
+APK lands in `dist/babel-monitor-0.1.44-r0.apk`.
 
 ## Install on a node
 
@@ -31,7 +31,7 @@ From the work-area root (after configuring `install_package_remotely.conf`):
 Or copy the APK and:
 
 ```sh
-apk add --allow-untrusted /tmp/babel-monitor-0.1.43-r0.apk
+apk add --allow-untrusted /tmp/babel-monitor-0.1.44-r0.apk
 ```
 
 ## On-node storage
@@ -126,7 +126,7 @@ State/logs: `~/.babel-monitor/` (override with `BABEL_MONITOR_STATE`).
 
 ## Status page
 
-Open `http://<node>/babel-monitor/` — live neighbors, KPIs, and a history graph with metric tabs (LQ, Cost, Neighbors, Routes, Packets, Link I/O, Hosts, CPU, RAM, Self RSS, RF, Syslog, Top) and 5m / 30m / 1h / 4h ranges from RAM (ring retains ~4h @ 10s). Longer chart windows are fetched as 5m API slices. The X axis is fixed to the selected window. Hover for a crosshair and values. Optional **WG Server Tunnels** / **WG Server Clients** KPIs show `live/active/total` when the tunnel config has entries (live = handshake ≤300s, active = enabled, total = config list). Viewing the UI does not write flash. No Tools menu entry.
+Open `http://<node>/babel-monitor/` — live neighbors, KPIs, and a history graph with metric tabs (LQ, Cost, Neighbors, Routes, Packets, Link I/O, Hosts, CPU, RAM, Self RSS, RF, Syslog, Top) and 5m / 30m / 1h / 4h ranges from RAM (ring retains ~4h @ 10s). Longer chart windows are fetched as 5m API slices. The X axis is fixed to the selected window. Hover for a crosshair and values. Optional **WG Server Tunnels** / **WG Server Clients** KPIs show `live/active/total` when the tunnel config has entries (live = handshake ≤300s, active = enabled, total = config list). Viewing the UI does not write flash. An **Activity monitor** icon appears in the left admin bar (above Tools) via the app launcher and opens this page.
 
 ## Layout
 
@@ -142,5 +142,7 @@ contrib/babel-monitor/
     usr/share/ucode/babel_monitor/
     www/babel-monitor/index.html
     www/cgi-bin/babel-monitor
+    www/cgi-bin/apps/babel-monitor/{user,admin}   # admin-bar launcher
+    www/apps/babel-monitor/icon.svg
     .post-install / .post-upgrade / .pre-deinstall
 ```

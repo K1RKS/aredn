@@ -7,6 +7,8 @@ chmod +x \
   src/usr/sbin/babel-monitord \
   src/usr/bin/babel-monitor \
   src/www/cgi-bin/babel-monitor \
+  src/www/cgi-bin/apps/babel-monitor/user \
+  src/www/cgi-bin/apps/babel-monitor/admin \
   src/etc/init.d/babel-monitor \
   src/.post-install \
   src/.post-upgrade \
@@ -15,7 +17,7 @@ chmod +x \
   tools/babel-monitor-poller
 python3 tools/mkapk.py \
   -n babel-monitor \
-  -v 0.1.43 \
+  -v 0.1.44 \
   -r r0 \
   -a noarch \
   -d src \

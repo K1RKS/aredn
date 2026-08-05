@@ -1,0 +1,6 @@
+#!/bin/sh
+# App launcher (admin): open babel-monitor status page from the admin icon bar.
+printf 'Status: 302 Found\r\n'
+printf 'Location: /babel-monitor/\r\n'
+printf 'Cache-Control: no-store\r\n'
+printf '\r\n'

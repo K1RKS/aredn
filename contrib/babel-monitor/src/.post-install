@@ -1,7 +1,8 @@
 #!/bin/sh
-# Enable and start babel-monitord. No Tools menu (public URL only).
+# Enable and start babel-monitord. App launcher icon in admin bar (above Tools).
 chmod 755 /usr/sbin/babel-monitord /usr/bin/babel-monitor /www/cgi-bin/babel-monitor /etc/init.d/babel-monitor 2>/dev/null || true
-chmod 644 /etc/config/babel-monitor 2>/dev/null || true
+chmod 755 /www/cgi-bin/apps/babel-monitor/user /www/cgi-bin/apps/babel-monitor/admin 2>/dev/null || true
+chmod 644 /etc/config/babel-monitor /www/apps/babel-monitor/icon.svg 2>/dev/null || true
 [ -x /etc/init.d/babel-monitor ] && /etc/init.d/babel-monitor enable 2>/dev/null || true
 [ -x /etc/init.d/babel-monitor ] && /etc/init.d/babel-monitor restart 2>/dev/null || true
 exit 0
