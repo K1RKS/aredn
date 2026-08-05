@@ -221,6 +221,7 @@
         <button type="button" data-filter="auth">Auth</button>
       </div>
       <button type="button" id="syslogPauseBtn">Pause</button>
+      <button type="button" id="logDownloadBtn" title="Download full source (no filters / no tail)">Download</button>
     </div>
   </section>
   <section>
@@ -1245,6 +1246,15 @@
     }
     syncLogFilterButtons();
     if (!syslogPaused) refreshLogsSafe();
+  });
+
+  $("logDownloadBtn").addEventListener("click", function () {
+    const a = document.createElement("a");
+    a.href = API + "?api=download&source=" + encodeURIComponent(logSource);
+    a.rel = "noopener";
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
   });
 
   $("syslogPauseBtn").addEventListener("click", function () {

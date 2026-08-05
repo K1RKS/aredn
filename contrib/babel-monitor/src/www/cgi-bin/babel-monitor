@@ -1,14 +1,18 @@
 #!/usr/bin/ucode
 /**
- * babel-monitor CGI — public JSON pull API (meta/hello/sync/events/live/series/logs/syslog/top).
- * Optional gzip L1 via ucode-mod-zlib. Does not touch Prometheus.
+ * babel-monitor CGI — public JSON pull API (meta/hello/sync/events/live/series/logs/syslog/top)
+ * plus streaming text download (api=download). Optional gzip L1 via ucode-mod-zlib.
+ * Does not touch Prometheus.
  */
+import * as fs from "fs";
+import * as socket from "socket";
 import * as zlib from "zlib";
 import * as client from "babel_monitor.client";
 import * as configlib from "babel_monitor.config";
 
 const q = getenv("QUERY_STRING") || "";
 const cfg = configlib.loadConfig();
+const BABEL_SOCK = { path: "/var/run/babel.sock" };
 
 function qparam(name)
 {
@@ -31,10 +35,109 @@ function parseCompress(raw, dflt)
     return dflt;
 }
 
+/** Stream raw log sources as attachment — no JSON, no filters, no tail limit. */
+function downloadHeaders(filename)
+{
+    print("Status: 200 OK\r\n");
+    print("Content-Type: text/plain; charset=utf-8\r\n");
+    print(sprintf("Content-Disposition: attachment; filename=\"%s\"\r\n", filename));
+    print("Cache-Control: no-store\r\n");
+    print("Access-Control-Allow-Origin: *\r\n\r\n");
+}
+
+function streamPopen(cmd)
+{
+    const p = fs.popen(cmd);
+    if (!p) {
+        print("(unavailable)\n");
+        return;
+    }
+    for (let chunk = p.read(8192); length(chunk); chunk = p.read(8192)) {
+        print(chunk);
+    }
+    p.close();
+}
+
+function streamFile(path)
+{
+    const f = fs.open(path, "r");
+    if (!f) {
+        print(sprintf("(no %s)\n", path));
+        return;
+    }
+    for (let chunk = f.read(8192); length(chunk); chunk = f.read(8192)) {
+        print(chunk);
+    }
+    f.close();
+}
+
+function streamBabelDump(cmd)
+{
+    const c = socket.connect(BABEL_SOCK);
+    if (!c) {
+        print("(unavailable)\n");
+        return;
+    }
+    c.send(`${cmd}\nquit\n`);
+    for (let n = 0; n < 512; n++) {
+        const v = c.recv(8192);
+        if (!v || v === "") {
+            break;
+        }
+        print(v);
+        /* Soft cap so a stuck babel.sock cannot hang CGI forever */
+        if (n >= 511) {
+            print("\n… truncated\n");
+        }
+    }
+    c.close();
+}
+
+function handleDownload(source)
+{
+    const src = lc(source || "syslog");
+    if (src === "syslog") {
+        downloadHeaders("babel-monitor-syslog.txt");
+        /* Full logread ring — no -l, no filters */
+        streamPopen("logread 2>/dev/null");
+        exit(0);
+    }
+    if (src === "lqm") {
+        downloadHeaders("babel-monitor-lqm.info");
+        streamFile("/tmp/lqm.info");
+        exit(0);
+    }
+    if (src === "dmesg") {
+        downloadHeaders("babel-monitor-dmesg.txt");
+        streamPopen("dmesg 2>/dev/null");
+        exit(0);
+    }
+    if (src === "dumps") {
+        downloadHeaders("babel-monitor-dumps.txt");
+        print("=== dump-neighbors ===\n");
+        streamBabelDump("dump-neighbors");
+        print("\n=== dump-routable-neighbors ===\n");
+        streamBabelDump("dump-routable-neighbors");
+        print("\n=== dump-installed-routes ===\n");
+        streamBabelDump("dump-installed-routes");
+        exit(0);
+    }
+    print("Status: 400 Bad Request\r\n");
+    print("Content-Type: application/json\r\n");
+    print("Cache-Control: no-store\r\n");
+    print("Access-Control-Allow-Origin: *\r\n\r\n");
+    print(sprintf('{"error":"unknown download source","source":"%s"}\n', src));
+    exit(0);
+}
+
 let api = qparam("api") || "meta";
 api = lc(api);
 if (api === "hello") {
     api = "meta";
+}
+
+if (api === "download") {
+    handleDownload(qparam("source") || "syslog");
 }
 
 let cmd = null;

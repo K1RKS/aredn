@@ -5,7 +5,7 @@ import * as math from "math";
 
 export function packageVersion()
 {
-    return "0.1.33-r0";
+    return "0.1.35-r0";
 };
 
 export const SCHEMA_VERSION = 7;
@@ -85,9 +85,10 @@ export function clampInt(v, lo, hi, dflt)
     return n;
 };
 
+/** Wall-clock Unix seconds (for sample/event t and series windows). */
 export function nowUnix()
 {
-    return int(clock(true)[0]);
+    return int(clock()[0]);
 };
 
 export function bootIdNew()
