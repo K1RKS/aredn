@@ -4,7 +4,7 @@ Side-loaded AREDN APK that keeps Babel / LQM / arednlink metrics in RAM, exposes
 stateless JSON pull API for external historians, a public status page, and a
 live-config CLI.
 
-- Package: `babel-monitor-0.1.35-r0.apk`
+- Package: `babel-monitor-0.1.36-r0.apk`
 - Daemon: `babel-monitord`
 - CLI: `babel-monitor`
 - Status UI: `/babel-monitor/`
@@ -18,7 +18,7 @@ cd contrib/babel-monitor
 ./build.sh
 ```
 
-APK lands in `dist/babel-monitor-0.1.35-r0.apk`.
+APK lands in `dist/babel-monitor-0.1.36-r0.apk`.
 
 ## Install on a node
 
@@ -31,7 +31,7 @@ From the work-area root (after configuring `install_package_remotely.conf`):
 Or copy the APK and:
 
 ```sh
-apk add --allow-untrusted /tmp/babel-monitor-0.1.35-r0.apk
+apk add --allow-untrusted /tmp/babel-monitor-0.1.36-r0.apk
 ```
 
 ## On-node storage
@@ -75,7 +75,7 @@ Base: `/cgi-bin/babel-monitor`
 | `?api=live` | Current neighbors + latest sample |
 | `?api=series&seconds=S&end_age=A` | Samples in `[now-A-S, now-A]` (S capped at **300**/5m per request; UI fetches longer windows as slices) |
 | `?api=logs&source=S&filters=F&limit=N` | Log panel: `syslog` (optional filters: babel,lqm,arednlink,dnsmasq,netifd,auth), `dumps`, `lqm`, `dmesg` |
-| `?api=download&source=S` | Full raw download (no filters/tail): `syslog`, `lqm`, `dmesg`, `dumps` — streamed text attachment |
+| `?api=download&source=S` | Full raw download (no filters/tail): `syslog`, `lqm`, `dmesg`, `dumps` — streamed attachment named `{hostname}-{source}-yyyymmdd.ext` |
 | `?api=syslog&limit=N&filters=F` | Alias of logs source=syslog |
 | `?api=top` | One-shot `top -bn1` process table (not stored in the ring) |
 

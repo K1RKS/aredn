@@ -6,6 +6,7 @@
  */
 import * as fs from "fs";
 import * as socket from "socket";
+import * as uci from "uci";
 import * as zlib from "zlib";
 import * as client from "babel_monitor.client";
 import * as configlib from "babel_monitor.config";
@@ -33,6 +34,40 @@ function parseCompress(raw, dflt)
         return false;
     }
     return dflt;
+}
+
+function nodeNameForDownload()
+{
+    let host = "";
+    try {
+        const c = uci.cursor();
+        host = c.get("system", "@system[0]", "hostname") || "";
+    }
+    catch (e) {
+    }
+    if (host === "") {
+        host = trim(fs.readfile("/proc/sys/kernel/hostname") || "");
+    }
+    host = trim(host);
+    if (host === "") {
+        host = "node";
+    }
+    /* Safe for Content-Disposition filename */
+    host = replace(host, /[^A-Za-z0-9._-]+/g, "-");
+    host = replace(host, /^-+|-+$/g, "");
+    return host !== "" ? host : "node";
+}
+
+function downloadStamp()
+{
+    const t = localtime();
+    return sprintf("%04d%02d%02d", t.year, t.mon, t.mday);
+}
+
+/** {node}-{logtype}-yyyymmdd.ext — native bytes, no JSON wrap. */
+function downloadFilename(logtype, ext)
+{
+    return sprintf("%s-%s-%s.%s", nodeNameForDownload(), logtype, downloadStamp(), ext);
 }
 
 /** Stream raw log sources as attachment — no JSON, no filters, no tail limit. */
@@ -97,23 +132,23 @@ function handleDownload(source)
 {
     const src = lc(source || "syslog");
     if (src === "syslog") {
-        downloadHeaders("babel-monitor-syslog.txt");
+        downloadHeaders(downloadFilename("syslog", "txt"));
         /* Full logread ring — no -l, no filters */
         streamPopen("logread 2>/dev/null");
         exit(0);
     }
     if (src === "lqm") {
-        downloadHeaders("babel-monitor-lqm.info");
+        downloadHeaders(downloadFilename("lqm", "info"));
         streamFile("/tmp/lqm.info");
         exit(0);
     }
     if (src === "dmesg") {
-        downloadHeaders("babel-monitor-dmesg.txt");
+        downloadHeaders(downloadFilename("dmesg", "txt"));
         streamPopen("dmesg 2>/dev/null");
         exit(0);
     }
     if (src === "dumps") {
-        downloadHeaders("babel-monitor-dumps.txt");
+        downloadHeaders(downloadFilename("dumps", "txt"));
         print("=== dump-neighbors ===\n");
         streamBabelDump("dump-neighbors");
         print("\n=== dump-routable-neighbors ===\n");
