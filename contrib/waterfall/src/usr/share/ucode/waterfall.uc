@@ -40,7 +40,7 @@ const SPECTRAL_COOLDOWN = "/tmp/waterfall-spectral.cooldown";
 
 export function packageVersion()
 {
-    return "0.2.21-r0";
+    return "0.2.22-r0";
 };
 
 function isMeshMode(mode)
@@ -1022,9 +1022,119 @@ export function getSurveySummary(iface)
     return out;
 };
 
+/* ath10k often reports noise=0 on unused channels; that is not a real floor. */
+function surveyNoiseValid(noise)
+{
+    return noise != null && noise < -20;
+};
+
+function emptyBinRow(n)
+{
+    const out = [];
+    for (let i = 0; i < n; i++) {
+        push(out, 0);
+    }
+    return out;
+};
+
+function mergeBinMax(dst, src)
+{
+    if (!dst || !src) {
+        return dst;
+    }
+    const n = length(dst) < length(src) ? length(dst) : length(src);
+    for (let i = 0; i < n; i++) {
+        if (src[i] > dst[i]) {
+            dst[i] = src[i];
+        }
+    }
+    return dst;
+};
+
+function paintBinAtFreq(bins, freq, value, bandF0, bandF1)
+{
+    if (!bins || freq == null || bandF1 <= bandF0 || value <= 0) {
+        return;
+    }
+    const nOut = length(bins);
+    let idx = int(((freq - bandF0) / (bandF1 - bandF0)) * nOut);
+    if (idx < 0) {
+        idx = 0;
+    }
+    if (idx >= nOut) {
+        idx = nOut - 1;
+    }
+    if (value > bins[idx]) {
+        bins[idx] = value;
+    }
+    const soft = int(value * 0.6);
+    if (idx > 0 && bins[idx - 1] < soft) {
+        bins[idx - 1] = soft;
+    }
+    if (idx + 1 < nOut && bins[idx + 1] < soft) {
+        bins[idx + 1] = soft;
+    }
+};
+
+/**
+ * Band activity from survey: valid noise as a quiet floor, plus per-interval
+ * busy-time deltas so repeated dumps are not identical copies.
+ * Returns { bins, prev } where prev is the freq→counters map for the next sample.
+ */
+function surveyActivityToBins(iface, prevByFreq, nOut, bandF0, bandF1)
+{
+    const rows = getSurveySummary(iface);
+    const next = {};
+    const bins = emptyBinRow(nOut);
+    if (bandF0 == null || bandF1 == null || bandF1 <= bandF0) {
+        return { bins: bins, prev: next };
+    }
+    for (let i = 0; i < length(rows); i++) {
+        const r = rows[i];
+        const freq = r.frequency;
+        if (freq == null || freq < bandF0 || freq > bandF1) {
+            continue;
+        }
+        next[`${freq}`] = {
+            noise: r.noise,
+            time: r.time,
+            time_busy: r.time_busy
+        };
+        let v = 0;
+        if (surveyNoiseValid(r.noise)) {
+            /* Map -120..-60 dBm into a quiet 0..30 floor (FFT/busy can exceed). */
+            v = int((r.noise + 120) * 30 / 60);
+            if (v < 0) {
+                v = 0;
+            }
+            if (v > 30) {
+                v = 30;
+            }
+        }
+        if (prevByFreq) {
+            const prev = prevByFreq[`${freq}`];
+            if (prev && r.time != null && prev.time != null && r.time_busy != null && prev.time_busy != null) {
+                const dt = r.time - prev.time;
+                const db = r.time_busy - prev.time_busy;
+                if (dt > 0 && db >= 0) {
+                    let busyV = int((db * 100) / dt);
+                    if (busyV > 100) {
+                        busyV = 100;
+                    }
+                    if (busyV > v) {
+                        v = busyV;
+                    }
+                }
+            }
+        }
+        paintBinAtFreq(bins, freq, v, bandF0, bandF1);
+    }
+    return { bins: bins, prev: next };
+};
+
 /**
  * Build one heatmap sweep from nl80211 survey dump (ath10k-safe path).
- * Bin intensity = noise above a floor, blended with channel busy fraction when present.
+ * Bin intensity = valid noise floor, blended with channel busy fraction when present.
  */
 export function surveyToSweep(iface, nBins)
 {
@@ -1032,10 +1142,12 @@ export function surveyToSweep(iface, nBins)
     const usable = [];
     for (let i = 0; i < length(rows); i++) {
         const r = rows[i];
-        if (r.frequency == null || r.noise == null) {
+        if (r.frequency == null) {
             continue;
         }
-        /* Prefer 5 GHz survey rows when present; keep all if none qualify. */
+        if (!surveyNoiseValid(r.noise) && (r.time == null || r.time <= 0)) {
+            continue;
+        }
         push(usable, r);
     }
     if (!length(usable)) {
@@ -1062,24 +1174,12 @@ export function surveyToSweep(iface, nBins)
         fMax = fMin + 20;
     }
     const nb = nBins != null && nBins > 0 ? nBins : bandBinCount(fMin, fMax);
-    const bins = [];
-    for (let i = 0; i < nb; i++) {
-        push(bins, 0);
-    }
+    const bins = emptyBinRow(nb);
     for (let i = 0; i < length(use); i++) {
         const r = use[i];
-        let idx = int(((r.frequency - fMin) / (fMax - fMin)) * (nb - 1));
-        if (idx < 0) {
-            idx = 0;
-        }
-        if (idx >= nb) {
-            idx = nb - 1;
-        }
         let v = 0;
-        /* Map noise floor (-120..-60) into 0..100 */
-        const n = r.noise;
-        if (n != null) {
-            v = int((n + 120) * 100 / 60);
+        if (surveyNoiseValid(r.noise)) {
+            v = int((r.noise + 120) * 100 / 60);
             if (v < 0) {
                 v = 0;
             }
@@ -1093,16 +1193,7 @@ export function surveyToSweep(iface, nBins)
                 v = busy > 100 ? 100 : busy;
             }
         }
-        if (v > bins[idx]) {
-            bins[idx] = v;
-        }
-        /* Soft fill neighbors so sparse channel lists still look continuous */
-        if (idx > 0 && bins[idx - 1] < int(v * 0.6)) {
-            bins[idx - 1] = int(v * 0.6);
-        }
-        if (idx + 1 < nb && bins[idx + 1] < int(v * 0.6)) {
-            bins[idx + 1] = int(v * 0.6);
-        }
+        paintBinAtFreq(bins, r.frequency, v, fMin, fMax);
     }
     return {
         f_start: fMin,
@@ -1357,7 +1448,8 @@ export function captureSpectral(preferredIface)
 
 /**
  * Bounded RF session: dense time rows (Y = time from 0 → duration).
- * ALL = survey on full-band axis (no hop). Single non-current = temporary UCI retune.
+ * ALL = survey busy-deltas + live FFT on current channel (no hop).
+ * Single non-current = temporary UCI retune.
  */
 export function runSession(preferredIface, durationSec, channelSel, bandwidthSel)
 {
@@ -1473,18 +1565,109 @@ export function runSession(preferredIface, durationSec, channelSel, bandwidthSel
     function runSurveyLoop(untilFrac)
     {
         const endAt = untilFrac != null ? untilFrac : endsFrac;
+        let prevSurvey = null;
         while (nowFrac() < endAt) {
             if (fs.access(SESSION_STOP)) {
                 break;
             }
-            const sweep = surveyToSweep(cap.iface, nBins);
-            if (sweep) {
-                pushRow(sweep.bins, sweep.f_start, sweep.f_stop, null);
+            const act = surveyActivityToBins(cap.iface, prevSurvey, nBins, bandF0, bandF1);
+            prevSurvey = act.prev;
+            if (act.bins) {
+                pushRow(act.bins, bandF0, bandF1, null);
                 if (length(sweeps) >= MAX_SWEEPS) {
                     break;
                 }
             }
             system("sleep 1");
+        }
+    }
+
+    /* ALL: one row per tick = survey activity deltas + current-channel FFT overlay. */
+    function runAllHybridLoop()
+    {
+        let prevSurvey = null;
+        let useFft = !!cap.fft_available && !spectralCooldownActive();
+        let emptyStreak = 0;
+        mode = useFft ? "fft+survey" : "survey";
+        scanNote = useFft
+            ? "Full-band: survey busy-deltas + live FFT on current channel (no hop)"
+            : "Full-band: survey busy-deltas only (FFT unavailable; no hop)";
+
+        while (nowFrac() < endsFrac) {
+            if (fs.access(SESSION_STOP)) {
+                break;
+            }
+            if (length(sweeps) >= MAX_SWEEPS) {
+                break;
+            }
+
+            const row = emptyBinRow(nBins);
+            let gotFft = false;
+
+            if (useFft) {
+                const pulse = runAth10kFftPulse(cap.iface, cap.phy, false, null);
+                if (pulse.recovered) {
+                    recovered = true;
+                    useFft = false;
+                    usedSurveyFallback = true;
+                    mode = "survey";
+                }
+                else if (pulse.ok) {
+                    const buf = readFftBuffer(FFT_OUT);
+                    if (buf) {
+                        const rows = samplesToRows(parseFftTlvs(buf, 8));
+                        if (length(rows)) {
+                            gotFft = true;
+                            emptyStreak = 0;
+                            for (let i = 0; i < length(rows); i++) {
+                                const placed = placeBinsOnBand(
+                                    rows[i].bins, rows[i].f_start, rows[i].f_stop,
+                                    bandF0, bandF1, nBins
+                                );
+                                mergeBinMax(row, placed);
+                            }
+                        }
+                        else {
+                            emptyStreak++;
+                        }
+                    }
+                    else {
+                        emptyStreak++;
+                    }
+                    if (emptyStreak >= 4) {
+                        useFft = false;
+                        usedSurveyFallback = true;
+                        mode = "survey";
+                    }
+                }
+                else {
+                    emptyStreak++;
+                    if (emptyStreak >= 4) {
+                        useFft = false;
+                        usedSurveyFallback = true;
+                        mode = "survey";
+                    }
+                }
+            }
+
+            const act = surveyActivityToBins(cap.iface, prevSurvey, nBins, bandF0, bandF1);
+            prevSurvey = act.prev;
+            mergeBinMax(row, act.bins);
+
+            let any = false;
+            for (let i = 0; i < length(row); i++) {
+                if (row[i] > 0) {
+                    any = true;
+                    break;
+                }
+            }
+            if (any || gotFft || length(sweeps) > 0) {
+                pushRow(row, bandF0, bandF1, null);
+            }
+
+            if (!gotFft) {
+                system("sleep 1");
+            }
         }
     }
 
@@ -1494,14 +1677,16 @@ export function runSession(preferredIface, durationSec, channelSel, bandwidthSel
     else if (!plan.ok) {
         error = plan.error || "Invalid channel/bandwidth selection";
     }
-    else if (plan.mode === "all" && cap.survey_available) {
-        /* Full-band: survey only — never hop/retune (breaks mesh IBSS). */
-        mode = "survey";
-        scanNote = "Full-band survey (no RF retune; channel hop disabled for mesh safety)";
+    else if (plan.mode === "all") {
         try {
-            runSurveyLoop(endsFrac);
+            if (cap.survey_available || (cap.fft_available && !spectralCooldownActive())) {
+                runAllHybridLoop();
+            }
+            else {
+                error = "ALL scan needs survey or FFT";
+            }
             if (!length(sweeps)) {
-                error = "No survey sweeps captured";
+                error = error || "No ALL-band sweeps captured";
             }
         }
         catch (e) {
@@ -1652,10 +1837,15 @@ export function runSession(preferredIface, durationSec, channelSel, bandwidthSel
             ? "ath10k FFT timed out; Wi-Fi recovered; finished with survey waterfall."
             : "ath10k FFT empty/cooldown; finished with survey waterfall.";
     }
+    else if (mode === "fft+survey") {
+        note = scanNote
+            ? `${scanNote}. Other channels only move when survey busy-time increments.`
+            : "Full-band hybrid waterfall complete.";
+    }
     else if (mode === "survey" && plan.ok && plan.mode === "all") {
         note = scanNote
             ? `${scanNote}. Radio left on configured channel.`
-            : "Full-band survey waterfall complete (nl80211 noise/busy).";
+            : "Full-band survey waterfall complete (busy-time deltas).";
     }
     else if (mode === "survey") {
         note = "Survey waterfall complete (nl80211 noise/busy).";
@@ -1772,7 +1962,7 @@ export function startSessionAsync(preferredIface, durationSec, channelSel, bandw
     });
     system(`waterfall-session${ifaceArg} -d ${durationSec}${chArg}${bwArg} >/tmp/waterfall-session.log 2>&1 &`);
     const warn = plan.mode === "all"
-        ? `Full-band survey on ${cap.iface} (no channel hop). Up to ${durationSec}s.`
+        ? `Full-band hybrid on ${cap.iface} (survey deltas + live FFT on current ch; no hop). Up to ${durationSec}s.`
         : (plan.mode === "single"
             ? `Temporarily retune to ch ${plan.channel} @ ${plan.bandwidth} MHz on ${cap.iface} (RF disrupted up to ${durationSec}s + reload).`
             : (cap.chipset === "ath10k"

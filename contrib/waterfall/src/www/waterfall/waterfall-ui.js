@@ -76,6 +76,31 @@
     return bits.filter(Boolean).join(" · ");
   }
 
+  function formatStartedAt(sec) {
+    if (sec == null || !(sec > 0)) return null;
+    const d = new Date(sec * 1000);
+    if (isNaN(d.getTime())) return null;
+    const p = function (n) { return (n < 10 ? "0" : "") + n; };
+    return d.getFullYear() + "-" + p(d.getMonth() + 1) + "-" + p(d.getDate()) +
+      " " + p(d.getHours()) + ":" + p(d.getMinutes()) + ":" + p(d.getSeconds());
+  }
+
+  function scanSelectionLabel(meta) {
+    const parts = [];
+    const ch = meta.scan_channel;
+    const bw = meta.scan_bandwidth;
+    if (ch === "all" || ch === "ALL") parts.push("ch ALL");
+    else if (ch != null && ch !== "") parts.push("ch " + ch);
+    if (bw === "all" || bw === "ALL") parts.push("BW ALL");
+    else if (bw != null && bw !== "") parts.push(bw + " MHz BW");
+    const f0 = meta.f_start;
+    const f1 = meta.f_stop;
+    if (f0 != null && f1 != null && f1 > f0) {
+      parts.push(Math.round(f0) + "–" + Math.round(f1) + " MHz");
+    }
+    return parts.join(" · ");
+  }
+
   function drawHeatmap(canvas, cache) {
     const sweeps = (cache && cache.sweeps) || [];
     const times = (cache && cache.times) || [];
@@ -83,7 +108,10 @@
     const ctx = canvas.getContext("2d");
     const W = canvas.width;
     const H = canvas.height;
-    const padL = 52, padR = 56, padT = 40, padB = 40;
+    const startedLabel = formatStartedAt(meta.started_at);
+    const selectionLabel = scanSelectionLabel(meta);
+    const hasSubtitle = !!(startedLabel || selectionLabel);
+    const padL = 52, padR = 56, padT = hasSubtitle ? 52 : 40, padB = 40;
     const plotW = W - padL - padR;
     const plotH = H - padT - padB;
 
@@ -93,10 +121,18 @@
     ctx.fillStyle = "#fff";
     ctx.font = "13px sans-serif";
     ctx.textAlign = "center";
-    ctx.fillText("Waterfall History", W / 2, 14);
+    let title = "Waterfall History";
+    if (startedLabel) title += "  ·  " + startedLabel;
+    ctx.fillText(title, W / 2, 14);
+    if (selectionLabel) {
+      ctx.fillStyle = "#bbb";
+      ctx.font = "11px sans-serif";
+      ctx.fillText(selectionLabel, W / 2, 30);
+    }
 
     if (!sweeps.length) {
       ctx.fillStyle = "#888";
+      ctx.font = "13px sans-serif";
       ctx.fillText("No cached capture — click Start (RF session)", W / 2, H / 2);
       return;
     }
