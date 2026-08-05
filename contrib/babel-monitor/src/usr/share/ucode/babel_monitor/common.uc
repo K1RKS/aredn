@@ -5,7 +5,7 @@ import * as math from "math";
 
 export function packageVersion()
 {
-    return "0.1.32-r0";
+    return "0.1.33-r0";
 };
 
 export const SCHEMA_VERSION = 7;

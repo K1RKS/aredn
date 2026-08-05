@@ -760,3 +760,9 @@ export function collectSample(store, cfg)
 
     return sample;
 };
+
+/** Public babel.sock dump helper for Logs → Dumps UI. */
+export function babelDumpCmd(cmd)
+{
+    return babelDump(cmd);
+};

@@ -4,7 +4,7 @@ Side-loaded AREDN APK that keeps Babel / LQM / arednlink metrics in RAM, exposes
 stateless JSON pull API for external historians, a public status page, and a
 live-config CLI.
 
-- Package: `babel-monitor-0.1.32-r0.apk`
+- Package: `babel-monitor-0.1.33-r0.apk`
 - Daemon: `babel-monitord`
 - CLI: `babel-monitor`
 - Status UI: `/babel-monitor/`
@@ -18,7 +18,7 @@ cd contrib/babel-monitor
 ./build.sh
 ```
 
-APK lands in `dist/babel-monitor-0.1.32-r0.apk`.
+APK lands in `dist/babel-monitor-0.1.33-r0.apk`.
 
 ## Install on a node
 
@@ -31,7 +31,7 @@ From the work-area root (after configuring `install_package_remotely.conf`):
 Or copy the APK and:
 
 ```sh
-apk add --allow-untrusted /tmp/babel-monitor-0.1.32-r0.apk
+apk add --allow-untrusted /tmp/babel-monitor-0.1.33-r0.apk
 ```
 
 ## On-node storage
@@ -74,7 +74,8 @@ Base: `/cgi-bin/babel-monitor`
 | `?api=events&since_seq=N` | Event ring |
 | `?api=live` | Current neighbors + latest sample |
 | `?api=series&seconds=S&end_age=A` | Samples in `[now-A-S, now-A]` (S capped at **300**/5m per request; UI fetches longer windows as slices) |
-| `?api=syslog&limit=N` | Last N syslog lines via `logread` (default 50; not stored in the ring) |
+| `?api=logs&source=S&filters=F&limit=N` | Log panel: `syslog` (optional filters: babel,lqm,arednlink,dnsmasq,netifd,auth), `dumps`, `lqm`, `dmesg` |
+| `?api=syslog&limit=N&filters=F` | Alias of logs source=syslog |
 | `?api=top` | One-shot `top -bn1` process table (not stored in the ring) |
 
 Optional `compress=1|0|on|off` (default from UCI; gzip level 1 when body ≥ `compress_min_bytes` and client sends `Accept-Encoding: gzip`).

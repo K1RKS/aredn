@@ -64,12 +64,20 @@
   }
   .tabs[hidden],
   .chart-wrap[hidden],
-  .syslog-wrap[hidden] {
+  .syslog-wrap[hidden],
+  #logSourceTabs[hidden],
+  #logControls[hidden],
+  #syslogFilters[hidden] {
     display: none !important;
   }
   .tabs.metric { margin-bottom: 10px; }
   .tabs.time { margin-top: 10px; }
-  .tabs.syslog-ctl { margin-top: 10px; }
+  .tabs.log-source { margin-bottom: 10px; }
+  .tabs.log-ctl {
+    margin-top: 10px;
+    align-items: center;
+  }
+  .tabs.log-filters { margin: 0; }
   .tabs button {
     background: transparent;
     color: var(--muted);
@@ -179,8 +187,14 @@
       <button type="button" data-metric="ram">RAM</button>
       <button type="button" data-metric="selfrss">Self RSS</button>
       <button type="button" data-metric="rf">RF</button>
-      <button type="button" data-metric="syslog">Syslog</button>
+      <button type="button" data-metric="logs">Logs</button>
       <button type="button" data-metric="top">Top</button>
+    </div>
+    <div class="tabs log-source" id="logSourceTabs" role="tablist" aria-label="Log source" hidden>
+      <button type="button" data-source="syslog" class="active">Syslog</button>
+      <button type="button" data-source="dumps">Dumps</button>
+      <button type="button" data-source="lqm">LQM</button>
+      <button type="button" data-source="dmesg">dmesg</button>
     </div>
     <div class="chart-wrap" id="chartWrap">
       <div class="legend" id="legend"></div>
@@ -196,7 +210,16 @@
       <button type="button" data-sec="3600">1h</button>
       <button type="button" data-sec="14400">4h</button>
     </div>
-    <div class="tabs syslog-ctl" id="syslogControls" hidden>
+    <div class="tabs log-ctl" id="logControls" hidden>
+      <div class="tabs log-filters" id="syslogFilters" role="group" aria-label="Syslog filters">
+        <button type="button" data-filter="all" class="active">All</button>
+        <button type="button" data-filter="babel">Babel</button>
+        <button type="button" data-filter="lqm">LQM</button>
+        <button type="button" data-filter="arednlink">arednlink</button>
+        <button type="button" data-filter="dnsmasq">dnsmasq</button>
+        <button type="button" data-filter="netifd">netifd</button>
+        <button type="button" data-filter="auth">Auth</button>
+      </div>
       <button type="button" id="syslogPauseBtn">Pause</button>
     </div>
   </section>
@@ -319,12 +342,22 @@
   let failStreak = 0;
   let syslogPaused = false;
   let textBusy = false;
+  let logSource = "syslog"; /* syslog | dumps | lqm | dmesg */
+  let logFilterAll = true;
+  const logFilterOn = {
+    babel: false,
+    lqm: false,
+    arednlink: false,
+    dnsmasq: false,
+    netifd: false,
+    auth: false
+  };
 
   function $(id) { return document.getElementById(id); }
 
-  function isSyslog() { return metricId === "syslog"; }
+  function isLogs() { return metricId === "logs"; }
   function isTop() { return metricId === "top"; }
-  function isTextPanel() { return isSyslog() || isTop(); }
+  function isTextPanel() { return isLogs() || isTop(); }
 
   function syncSyslogPauseBtn() {
     const b = $("syslogPauseBtn");
@@ -333,17 +366,55 @@
     b.classList.toggle("active", !syslogPaused);
   }
 
+  function syncLogFilterButtons() {
+    const root = $("syslogFilters");
+    if (!root) return;
+    [].forEach.call(root.querySelectorAll("button[data-filter]"), function (b) {
+      const f = b.getAttribute("data-filter");
+      if (f === "all") b.classList.toggle("active", logFilterAll);
+      else b.classList.toggle("active", !logFilterAll && !!logFilterOn[f]);
+    });
+  }
+
+  function selectedLogFilters() {
+    if (logFilterAll) return [];
+    const out = [];
+    for (const k in logFilterOn) {
+      if (logFilterOn[k]) out.push(k);
+    }
+    return out;
+  }
+
+  function ensureLogFilterFallback() {
+    if (logFilterAll) return;
+    let any = false;
+    for (const k in logFilterOn) {
+      if (logFilterOn[k]) { any = true; break; }
+    }
+    if (!any) {
+      logFilterAll = true;
+      for (const k in logFilterOn) logFilterOn[k] = false;
+    }
+  }
+
   function updateHistoryMode() {
     const text = isTextPanel();
+    const logs = isLogs();
     $("chartWrap").hidden = text;
     $("textWrap").hidden = !text;
     $("timeTabs").hidden = text;
-    $("syslogControls").hidden = !isSyslog();
+    $("logSourceTabs").hidden = !logs;
+    $("logControls").hidden = !logs;
+    $("syslogFilters").hidden = !(logs && logSource === "syslog");
+    $("syslogPauseBtn").hidden = !(logs && logSource === "syslog");
     if (text) hideTip();
-    if (isSyslog()) syncSyslogPauseBtn();
+    if (logs && logSource === "syslog") {
+      syncSyslogPauseBtn();
+      syncLogFilterButtons();
+    }
   }
 
-  function renderTextPanel(lines, emptyMsg) {
+  function renderTextPanel(lines, emptyMsg, stickBottom) {
     const box = $("textBox");
     if (!lines || !lines.length) {
       box.textContent = "";
@@ -354,26 +425,23 @@
       return;
     }
     box.textContent = lines.join("\n");
-    box.scrollTop = 0;
+    box.scrollTop = stickBottom ? box.scrollHeight : 0;
   }
 
-  async function refreshSyslog() {
+  async function refreshLogs() {
     if (textBusy) return;
     textBusy = true;
     try {
-      const data = await getJsonRetry(API + "?api=syslog&limit=50");
-      const box = $("textBox");
-      const lines = data.lines || [];
-      if (!lines.length) {
-        box.textContent = "";
-        const span = document.createElement("span");
-        span.className = "syslog-empty";
-        span.textContent = "No syslog lines";
-        box.appendChild(span);
-      } else {
-        box.textContent = lines.join("\n");
-        if (!syslogPaused) box.scrollTop = box.scrollHeight;
+      let url = API + "?api=logs&source=" + encodeURIComponent(logSource);
+      if (logSource === "syslog") {
+        const filters = selectedLogFilters();
+        url += "&limit=50&filters=" + encodeURIComponent(filters.length ? filters.join(",") : "all");
+      } else if (logSource === "dmesg") {
+        url += "&limit=80";
       }
+      const data = await getJsonRetry(url);
+      const stick = logSource === "syslog" && !syslogPaused;
+      renderTextPanel(data.lines || [], "No output", stick);
     } finally {
       textBusy = false;
     }
@@ -384,7 +452,7 @@
     textBusy = true;
     try {
       const data = await getJsonRetry(API + "?api=top");
-      renderTextPanel(data.lines || [], "No top output");
+      renderTextPanel(data.lines || [], "No top output", false);
     } finally {
       textBusy = false;
     }
@@ -1087,8 +1155,8 @@
     tickBusy = true;
     try {
       await refreshLive();
-      if (isSyslog()) {
-        if (!syslogPaused) await refreshSyslog();
+      if (isLogs()) {
+        if (logSource !== "syslog" || !syslogPaused) await refreshLogs();
       } else if (isTop()) {
         await refreshTop();
       } else {
@@ -1117,18 +1185,20 @@
     });
   }
 
+  function refreshLogsSafe() {
+    refreshLogs().catch(function (e) {
+      failStreak++;
+      if (failStreak >= 2) setErr(e.message);
+    });
+  }
+
   bindTabGroup("metricTabs", function (b) {
     metricId = b.getAttribute("data-metric") || "lq";
     hoverIdx = -1;
     hideTip();
     updateHistoryMode();
-    if (isSyslog()) {
-      if (!syslogPaused) {
-        refreshSyslog().catch(function (e) {
-          failStreak++;
-          if (failStreak >= 2) setErr(e.message);
-        });
-      }
+    if (isLogs()) {
+      if (logSource !== "syslog" || !syslogPaused) refreshLogsSafe();
     } else if (isTop()) {
       refreshTop().catch(function (e) {
         failStreak++;
@@ -1137,6 +1207,12 @@
     } else {
       drawChart();
     }
+  });
+
+  bindTabGroup("logSourceTabs", function (b) {
+    logSource = b.getAttribute("data-source") || "syslog";
+    updateHistoryMode();
+    refreshLogsSafe();
   });
 
   bindTabGroup("timeTabs", function (b) {
@@ -1150,15 +1226,31 @@
     });
   });
 
+  $("syslogFilters").addEventListener("click", function (ev) {
+    const b = ev.target.closest("button[data-filter]");
+    if (!b || !$("syslogFilters").contains(b)) return;
+    const f = b.getAttribute("data-filter");
+    if (f === "all") {
+      logFilterAll = true;
+      for (const k in logFilterOn) logFilterOn[k] = false;
+    } else if (logFilterOn.hasOwnProperty(f)) {
+      if (logFilterAll) {
+        logFilterAll = false;
+        for (const k in logFilterOn) logFilterOn[k] = false;
+        logFilterOn[f] = true;
+      } else {
+        logFilterOn[f] = !logFilterOn[f];
+        ensureLogFilterFallback();
+      }
+    }
+    syncLogFilterButtons();
+    if (!syslogPaused) refreshLogsSafe();
+  });
+
   $("syslogPauseBtn").addEventListener("click", function () {
     syslogPaused = !syslogPaused;
     syncSyslogPauseBtn();
-    if (!syslogPaused) {
-      refreshSyslog().catch(function (e) {
-        failStreak++;
-        if (failStreak >= 2) setErr(e.message);
-      });
-    }
+    if (!syslogPaused) refreshLogsSafe();
   });
 
   (function bindChartHover() {

@@ -34,19 +34,168 @@ function readDaemonRssKb()
 }
 
 /** Last N syslog lines via logread (not stored in the sample ring). */
-function readSyslogLines(limit)
+function readSyslogLines(limit, filters)
 {
-    const n = common.clampInt(limit, 1, 200, 50);
-    const lines = [];
-    const p = fs.popen(sprintf("logread -l %d 2>/dev/null", n));
+    /* Pull extra when filtering so the returned set still has useful depth */
+    const want = common.clampInt(limit, 1, 200, 50);
+    const pull = length(filters) ? common.clampInt(want * 4, want, 400, want * 4) : want;
+    const raw = [];
+    const p = fs.popen(sprintf("logread -l %d 2>/dev/null", pull));
     if (!p) {
-        return lines;
+        return raw;
     }
     for (let line = p.read("line"); length(line); line = p.read("line")) {
-        push(lines, trim(line));
+        push(raw, trim(line));
     }
     p.close();
-    return lines;
+
+    if (!length(filters)) {
+        /* newest last — keep last want lines */
+        if (length(raw) <= want) {
+            return raw;
+        }
+        const out = [];
+        for (let i = length(raw) - want; i < length(raw); i++) {
+            push(out, raw[i]);
+        }
+        return out;
+    }
+
+    const out = [];
+    for (let i = 0; i < length(raw); i++) {
+        const line = raw[i];
+        const low = lc(line);
+        let hit = false;
+        for (let fi = 0; fi < length(filters); fi++) {
+            const f = filters[fi];
+            if (f === "babel" && index(low, "babel") >= 0) {
+                hit = true;
+            }
+            else if (f === "lqm" && index(low, "lqm") >= 0) {
+                hit = true;
+            }
+            else if (f === "arednlink" && index(low, "arednlink") >= 0) {
+                hit = true;
+            }
+            else if (f === "dnsmasq" && index(low, "dnsmasq") >= 0) {
+                hit = true;
+            }
+            else if (f === "netifd" && index(low, "netifd") >= 0) {
+                hit = true;
+            }
+            else if (f === "auth" && (index(low, "dropbear") >= 0 ||
+                index(low, "authpriv") >= 0 || index(low, "auth.") >= 0)) {
+                hit = true;
+            }
+            if (hit) {
+                break;
+            }
+        }
+        if (hit) {
+            push(out, line);
+        }
+    }
+    if (length(out) <= want) {
+        return out;
+    }
+    const trimmed = [];
+    for (let i = length(out) - want; i < length(out); i++) {
+        push(trimmed, out[i]);
+    }
+    return trimmed;
+}
+
+function parseFilterList(raw)
+{
+    const filters = [];
+    if (raw == null || raw === "" || lc(raw) === "all") {
+        return filters;
+    }
+    const parts = split(raw, ",");
+    for (let i = 0; i < length(parts); i++) {
+        const f = lc(trim(parts[i]));
+        if (f === "babel" || f === "lqm" || f === "arednlink" ||
+            f === "dnsmasq" || f === "netifd" || f === "auth") {
+            push(filters, f);
+        }
+    }
+    return filters;
+}
+
+function readDmesgLines(limit)
+{
+    const want = common.clampInt(limit, 1, 200, 80);
+    const raw = [];
+    const p = fs.popen("dmesg 2>/dev/null");
+    if (!p) {
+        return raw;
+    }
+    for (let line = p.read("line"); length(line); line = p.read("line")) {
+        push(raw, replace(`${line}`, /\r?\n$/, ""));
+    }
+    p.close();
+    if (length(raw) <= want) {
+        return raw;
+    }
+    const out = [];
+    for (let i = length(raw) - want; i < length(raw); i++) {
+        push(out, raw[i]);
+    }
+    return out;
+}
+
+function readLqmInfoLines()
+{
+    const lines = [];
+    const raw = fs.readfile("/tmp/lqm.info");
+    if (!raw || raw === "") {
+        push(lines, "(no /tmp/lqm.info)");
+        return lines;
+    }
+    /* Prefer pretty JSON when valid */
+    try {
+        const obj = json(raw);
+        push(lines, sprintf("%.J", obj));
+        return lines;
+    }
+    catch (e) {
+    }
+    return split(replace(`${raw}`, /\r$/, ""), "\n");
+}
+
+function appendDumpSection(out, title, dump_lines, max_lines)
+{
+    push(out, "=== " + title + " ===");
+    if (!dump_lines) {
+        push(out, "(unavailable)");
+        push(out, "");
+        return;
+    }
+    let n = 0;
+    for (let i = 0; i < length(dump_lines); i++) {
+        const line = dump_lines[i];
+        if (line === "") {
+            continue;
+        }
+        if (max_lines && n >= max_lines) {
+            push(out, sprintf("… truncated after %d lines", max_lines));
+            break;
+        }
+        push(out, line);
+        n++;
+    }
+    push(out, "");
+}
+
+function readBabelDumpLines()
+{
+    const out = [];
+    appendDumpSection(out, "dump-neighbors", samplelib.babelDumpCmd("dump-neighbors"), 200);
+    appendDumpSection(out, "dump-routable-neighbors",
+        samplelib.babelDumpCmd("dump-routable-neighbors"), 200);
+    appendDumpSection(out, "dump-installed-routes",
+        samplelib.babelDumpCmd("dump-installed-routes"), 150);
+    return out;
 }
 
 /** One-shot process table via busybox top -bn1 (not stored in the ring). */
@@ -169,11 +318,51 @@ function handleRequest(line)
     }
     if (cmd === "syslog") {
         const limit = common.clampInt(args.limit || 50, 1, 200, 50);
+        const filters = parseFilterList(args.filters);
         return {
             boot_id: store.boot_id,
+            source: "syslog",
             limit: limit,
-            lines: readSyslogLines(limit)
+            filters: filters,
+            lines: readSyslogLines(limit, filters)
         };
+    }
+    if (cmd === "logs") {
+        const source = lc(args.source || "syslog");
+        const limit = common.clampInt(args.limit || 50, 1, 200, 50);
+        if (source === "syslog") {
+            const filters = parseFilterList(args.filters);
+            return {
+                boot_id: store.boot_id,
+                source: "syslog",
+                limit: limit,
+                filters: filters,
+                lines: readSyslogLines(limit, filters)
+            };
+        }
+        if (source === "dumps") {
+            return {
+                boot_id: store.boot_id,
+                source: "dumps",
+                lines: readBabelDumpLines()
+            };
+        }
+        if (source === "lqm") {
+            return {
+                boot_id: store.boot_id,
+                source: "lqm",
+                lines: readLqmInfoLines()
+            };
+        }
+        if (source === "dmesg") {
+            return {
+                boot_id: store.boot_id,
+                source: "dmesg",
+                limit: limit,
+                lines: readDmesgLines(limit)
+            };
+        }
+        return { error: "unknown logs source", source: source };
     }
     if (cmd === "top") {
         return {
