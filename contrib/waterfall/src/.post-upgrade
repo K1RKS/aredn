@@ -11,5 +11,5 @@ chmod 644 /app/main/tools/e/waterfall.ut 2>/dev/null || true
 chmod 644 /app/main/waterfall.ut 2>/dev/null || true
 chmod 644 /app/main/waterfall/e/api.ut 2>/dev/null || true
 chmod 644 /www/waterfall/waterfall-ui.js 2>/dev/null || true
-[ -x /etc/init.d/uhttpd ] && /etc/init.d/uhttpd restart 2>/dev/null || true
+# Intentionally no uhttpd restart — see tools-menu.sh.
 exit 0

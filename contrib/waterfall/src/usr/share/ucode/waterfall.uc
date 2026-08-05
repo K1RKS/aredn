@@ -40,7 +40,7 @@ const SPECTRAL_COOLDOWN = "/tmp/waterfall-spectral.cooldown";
 
 export function packageVersion()
 {
-    return "0.2.22-r0";
+    return "0.2.30-r0";
 };
 
 function isMeshMode(mode)
@@ -150,9 +150,16 @@ function spectralCooldownActive()
     if (!fs.access(SPECTRAL_COOLDOWN)) {
         return false;
     }
+    /* Use clock() directly — calling nowSec() from nested session helpers
+     * can throw "undeclared variable nowSec" on some ucode builds. */
     const until = int(trim(fs.readfile(SPECTRAL_COOLDOWN) || "0"));
-    return until > nowSec();
-}
+    const now = int(clock()[0]);
+    if (until <= now) {
+        fs.unlink(SPECTRAL_COOLDOWN);
+        return false;
+    }
+    return true;
+};
 
 /**
  * Run isolated ath10k FFT capture. durationSec>0 streams for that wall time.
@@ -272,6 +279,30 @@ function downsampleBins(bins, target)
     return out;
 }
 
+/* ath10k reports 11/22/44/88 for 10/20/40/80-ish channel widths. */
+function ath10kChanWidthMhz(bw)
+{
+    if (bw == null) {
+        return 20;
+    }
+    if (bw === 11 || bw === 10) {
+        return 10;
+    }
+    if (bw === 22 || bw === 20) {
+        return 20;
+    }
+    if (bw === 44 || bw === 40) {
+        return 40;
+    }
+    if (bw === 88 || bw === 80) {
+        return 80;
+    }
+    if (bw >= 5 && bw <= 160) {
+        return bw;
+    }
+    return 20;
+}
+
 /**
  * Parse spectral TLV binary into sample objects { type, f_start, f_stop, noise, bins }.
  */
@@ -322,15 +353,12 @@ export function parseFftTlvs(buf, maxSamples)
             for (let i = 0; i < binCount; i++) {
                 push(bins, ord(buf, base + hdr + i));
             }
-            let width = bw;
-            if (width < 5 || width > 160) {
-                width = 20;
-            }
+            let width = ath10kChanWidthMhz(bw);
             push(samples, {
                 type: "ath10k",
                 freq1: freq1,
-                f_start: freq1 - width / 2,
-                f_stop: freq1 + width / 2,
+                f_start: freq1 - width / 2.0,
+                f_stop: freq1 + width / 2.0,
                 noise: noise,
                 tsf: tsf,
                 bins: downsampleBins(bins, TARGET_BINS)
@@ -839,8 +867,159 @@ function freqSpanForChannel(iface, channel, bw)
     return { f_start: f - half, f_stop: f + half, frequency: f };
 };
 
+/* GUI BW = waterfall plot width. Scan BW = widest radio BW that fits in the plot. */
+function maxRadioBw(radio)
+{
+    const bws = radio.bws || hardware.getRfBandwidths(radio.iface) || [];
+    let m = 0;
+    for (let i = 0; i < length(bws); i++) {
+        if (bws[i] != null && bws[i] > m) {
+            m = bws[i];
+        }
+    }
+    return m > 0 ? m : 20;
+};
+
+function widestScanBw(radio, plotWidthMhz)
+{
+    const cap = plotWidthMhz != null && plotWidthMhz > 0 ? plotWidthMhz : 10000;
+    const bws = radio.bws || hardware.getRfBandwidths(radio.iface) || [];
+    let best = 0;
+    for (let i = 0; i < length(bws); i++) {
+        const b = bws[i];
+        if (b != null && b <= cap && b > best) {
+            best = b;
+        }
+    }
+    if (best > 0) {
+        return best;
+    }
+    const m = maxRadioBw(radio);
+    return m <= cap ? m : cap;
+};
+
+/* Prefer hop centers spaced ~scanBw apart (AREDN's 80 list may still be 40-spaced). */
+function thinHopsBySpacing(hops, minSpacingMhz)
+{
+    if (!hops || !length(hops)) {
+        return [];
+    }
+    const space = minSpacingMhz != null && minSpacingMhz > 0 ? minSpacingMhz : 20;
+    const out = [];
+    let lastF = null;
+    for (let i = 0; i < length(hops); i++) {
+        const h = hops[i];
+        if (h == null || h.frequency == null) {
+            continue;
+        }
+        if (lastF == null || (h.frequency - lastF) >= (space * 0.75)) {
+            push(out, h);
+            lastF = h.frequency;
+        }
+    }
+    if (!length(out)) {
+        push(out, hops[0]);
+    }
+    /* Always include last so the top of the band is covered. */
+    const last = hops[length(hops) - 1];
+    if (length(out) && last && last.frequency != null &&
+        out[length(out) - 1].frequency !== last.frequency) {
+        push(out, last);
+    }
+    return out;
+};
+
+function channelNearFrequency(radio, freqMhz, fallbackCh)
+{
+    if (freqMhz == null) {
+        return fallbackCh;
+    }
+    let best = null;
+    let bestDist = null;
+    const bws = radio.bws || [5, 10, 20, 40, 80];
+    for (let bi = 0; bi < length(bws); bi++) {
+        const list = channelListForBw(radio, bws[bi]);
+        for (let i = 0; i < length(list); i++) {
+            const h = list[i];
+            if (h == null || h.frequency == null || h.number == null) {
+                continue;
+            }
+            const d = h.frequency > freqMhz ? (h.frequency - freqMhz) : (freqMhz - h.frequency);
+            if (bestDist == null || d < bestDist) {
+                bestDist = d;
+                best = h.number;
+            }
+        }
+    }
+    return best != null ? best : fallbackCh;
+}
+
+/**
+ * Cover [plotF0, plotF1] with listen windows of width scanBw (no frequency stretch).
+ * Centers spaced by scanBw; channel numbers are nearest legal channels for retune.
+ */
+function sectionsCoveringPlot(radio, plotF0, plotF1, scanBw, anchorCh, anchorFreq)
+{
+    const out = [];
+    if (plotF0 == null || plotF1 == null || plotF1 <= plotF0) {
+        return out;
+    }
+    const bw = scanBw != null && scanBw > 0 ? scanBw : 20;
+    const half = bw / 2.0;
+    const span = plotF1 - plotF0;
+    if (span <= bw + 0.5) {
+        const f = anchorFreq != null ? anchorFreq : ((plotF0 + plotF1) / 2.0);
+        push(out, {
+            number: channelNearFrequency(radio, f, anchorCh),
+            frequency: f
+        });
+        return out;
+    }
+    /* Prefer real channels whose listen window overlaps the plot. */
+    let list = channelListForBw(radio, bw);
+    if (!length(list)) {
+        list = channelListForBw(radio, 20);
+    }
+    if (!length(list)) {
+        list = channelListForBw(radio, 10);
+    }
+    const overlapping = [];
+    for (let i = 0; i < length(list); i++) {
+        const h = list[i];
+        if (h == null || h.frequency == null) {
+            continue;
+        }
+        if ((h.frequency + half) >= plotF0 && (h.frequency - half) <= plotF1) {
+            push(overlapping, h);
+        }
+    }
+    let hop = thinHopsBySpacing(overlapping, bw);
+    if (!length(hop)) {
+        /* Geometric centers if channel list is sparse. */
+        let center = plotF0 + half;
+        const lastCenter = plotF1 - half;
+        while (center <= lastCenter + 0.05) {
+            push(hop, {
+                number: channelNearFrequency(radio, center, anchorCh),
+                frequency: center
+            });
+            center = center + bw;
+        }
+        if (!length(hop)) {
+            push(hop, {
+                number: anchorCh,
+                frequency: anchorFreq != null ? anchorFreq : ((plotF0 + plotF1) / 2.0)
+            });
+        }
+    }
+    return hop;
+}
+
 /**
  * Resolve GUI channel/bw ("all" or numbers) into a capture plan.
+ * bandwidth / plot width = what the waterfall axis shows.
+ * scan_bandwidth = widest RF BW used while hopping (≤ plot width).
+ * If plot wider than one listen, sections stitch side-by-side (no stretch).
  */
 export function resolveScanPlan(preferredIface, channelSel, bandwidthSel)
 {
@@ -861,26 +1040,33 @@ export function resolveScanPlan(preferredIface, channelSel, bandwidthSel)
         wantAllCh = true;
     }
 
-    let bw = curBw;
+    let plotBw = curBw;
     if (!wantAllBw && bandwidthSel != null && bandwidthSel !== "" && bandwidthSel !== "current") {
-        bw = int(bandwidthSel);
+        plotBw = int(bandwidthSel);
     }
-    if (bw == null || bw <= 0) {
-        bw = 10;
+    if (plotBw == null || plotBw <= 0) {
+        plotBw = 10;
     }
 
     if (wantAllCh) {
-        /* Full-band axis from densest list; hop using 20 MHz centers when available. */
+        /* Full-band plot; scan at widest radio BW (e.g. 80) to cover faster. */
         const dense = channelListForBw(radio, length(channelListForBw(radio, 5)) ? 5 : 10);
-        const hopBw = length(channelListForBw(radio, 20)) ? 20 : bw;
-        const hop = channelListForBw(radio, hopBw);
+        const scanBw = widestScanBw(radio, 10000);
+        let hop = channelListForBw(radio, scanBw);
+        if (!length(hop)) {
+            hop = channelListForBw(radio, 40);
+        }
+        if (!length(hop)) {
+            hop = channelListForBw(radio, 20);
+        }
+        hop = thinHopsBySpacing(hop, scanBw);
         if (!length(dense) && !length(hop)) {
             return { ok: false, error: "No channels available for ALL scan" };
         }
         const use = length(dense) ? dense : hop;
         const first = use[0];
         const last = use[length(use) - 1];
-        const half = (hopBw / 2.0);
+        const halfPlot = (length(dense) ? 10 : scanBw) / 2.0;
         return {
             ok: true,
             mode: "all",
@@ -889,11 +1075,15 @@ export function resolveScanPlan(preferredIface, channelSel, bandwidthSel)
             restore_channel: curCh,
             restore_bandwidth: curBw,
             restore_freq: hardware.getChannelFrequency(iface, curCh),
-            bandwidth: hopBw,
+            bandwidth: "all",
+            plot_bandwidth: null,
+            scan_bandwidth: scanBw,
             channel: "all",
             hop_channels: hop,
-            f_start: first.frequency - half,
-            f_stop: last.frequency + half
+            sections: hop,
+            section_count: length(hop),
+            f_start: first.frequency - halfPlot,
+            f_stop: last.frequency + halfPlot
         };
     }
 
@@ -901,31 +1091,139 @@ export function resolveScanPlan(preferredIface, channelSel, bandwidthSel)
     if (channelSel != null && channelSel !== "" && channelSel !== "current") {
         ch = int(channelSel);
     }
-    const span = freqSpanForChannel(iface, ch, bw);
+    const scanBw = widestScanBw(radio, plotBw);
+    const span = freqSpanForChannel(iface, ch, plotBw);
     if (!span) {
         return { ok: false, error: `Cannot resolve frequency for channel ${ch}` };
     }
-    const same = (ch === curCh && bw === curBw);
+    const hop = sectionsCoveringPlot(radio, span.f_start, span.f_stop, scanBw, ch, span.frequency);
+    const nSec = length(hop) > 0 ? length(hop) : 1;
+    const sameOne =
+        nSec === 1 &&
+        ch === curCh &&
+        scanBw === curBw &&
+        plotBw === curBw;
     return {
         ok: true,
-        mode: same ? "current" : "single",
+        mode: sameOne ? "current" : (nSec > 1 ? "stitch" : "single"),
         iface: iface,
         ssid: opts.current_ssid,
         restore_channel: curCh,
         restore_bandwidth: curBw,
         restore_freq: hardware.getChannelFrequency(iface, curCh),
         channel: ch,
-        bandwidth: bw,
-        hop_channels: [{ number: ch, frequency: span.frequency }],
+        bandwidth: plotBw,
+        plot_bandwidth: plotBw,
+        scan_bandwidth: scanBw,
+        hop_channels: hop,
+        sections: hop,
+        section_count: nSec,
         f_start: span.f_start,
         f_stop: span.f_stop,
         frequency: span.frequency
     };
 };
 
-/* IBSS leave/join hop is unsafe on AREDN mesh (leaves iface unchannelized).
- * Single-channel retune uses UCI + wifi reload; ALL uses survey (no retune). */
-function retuneViaWifi(iface, channel, bandwidth, waitSec)
+const SECTION_RETUNE_SEC = 3;
+const SECTION_RESTORE_SEC = 12;
+
+function planSections(plan)
+{
+    const scanBw = plan.scan_bandwidth != null ? plan.scan_bandwidth : 20;
+    const half = scanBw / 2.0;
+    const src = plan.sections || plan.hop_channels || [];
+    const out = [];
+    for (let i = 0; i < length(src); i++) {
+        const h = src[i];
+        if (h == null || h.frequency == null) {
+            continue;
+        }
+        push(out, {
+            number: h.number,
+            frequency: h.frequency,
+            f_start: h.frequency - half,
+            f_stop: h.frequency + half
+        });
+    }
+    return out;
+};
+
+function estimateSessionSec(sectionCount, sectionDurSec)
+{
+    const n = sectionCount > 0 ? sectionCount : 1;
+    const d = sectionDurSec > 0 ? sectionDurSec : 30;
+    return n * (d + SECTION_RETUNE_SEC) + SECTION_RESTORE_SEC;
+};
+
+/* Mesh-safe retune: never leave IBSS without an immediate join.
+ * Prefer leave→join (fast); fall back to UCI + wifi reload; always verify. */
+function iwBwToken(bw)
+{
+    if (bw === 5) {
+        return "5MHz";
+    }
+    if (bw === 10) {
+        return "10MHz";
+    }
+    if (bw === 40) {
+        return "HT40+";
+    }
+    if (bw === 80) {
+        return "80MHz";
+    }
+    return "HT20";
+};
+
+function readLiveChannelInfo(iface)
+{
+    if (!iface) {
+        return null;
+    }
+    system(`iw dev ${iface} info >/tmp/waterfall-iwdev.txt 2>/dev/null`);
+    let text = "";
+    try {
+        text = fs.readfile("/tmp/waterfall-iwdev.txt") || "";
+    }
+    catch (_) {
+        text = "";
+    }
+    let m = match(text, /channel\s+([0-9]+)\s*\(([0-9]+)\s*MHz\)/);
+    if (m) {
+        return { channel: int(m[1]), frequency: int(m[2]) };
+    }
+    system(`iwinfo ${iface} info >/tmp/waterfall-iwinfo.txt 2>/dev/null`);
+    try {
+        text = fs.readfile("/tmp/waterfall-iwinfo.txt") || "";
+    }
+    catch (_) {
+        text = "";
+    }
+    m = match(text, /Channel:\s*([0-9]+)\s*\(([0-9]+)\.([0-9]+)\s*GHz\)/);
+    if (m) {
+        const ch = int(m[1]);
+        const mhz = int(m[2]) * 1000 + int(m[3]);
+        return { channel: ch, frequency: mhz };
+    }
+    m = match(text, /Channel:\s*([0-9]+)\s*\(([0-9.]+)\s*GHz\)/);
+    if (m) {
+        return { channel: int(m[1]), frequency: int(m[2] * 1000) };
+    }
+    return null;
+};
+
+function freqClose(a, b, tol)
+{
+    if (a == null || b == null) {
+        return false;
+    }
+    let d = a - b;
+    if (d < 0) {
+        d = -d;
+    }
+    return d <= (tol != null ? tol : 5);
+};
+
+function retuneViaWifiReload(iface, channel, bandwidth, waitSec)
 {
     const dev = hardware.getRadioDevice(iface);
     if (!dev) {
@@ -938,9 +1236,104 @@ function retuneViaWifi(iface, channel, bandwidth, waitSec)
         system(`uci set wireless.${dev}.chanbw=${int(bandwidth)} >/dev/null 2>&1`);
     }
     system("/sbin/wifi reload >/dev/null 2>&1");
-    const w = waitSec != null ? waitSec : 8;
+    const w = waitSec != null ? waitSec : 10;
     system(`sleep ${w}`);
     return true;
+};
+
+function retuneIbssLeaveJoin(iface, ssid, freqMhz, bw)
+{
+    if (!iface || !ssid || freqMhz == null || freqMhz <= 0) {
+        return false;
+    }
+    if (match(ssid, /['\\$`]/)) {
+        return false;
+    }
+    const tok = iwBwToken(bw || 10);
+    /* leave then join in one shell so we never stop after leave alone */
+    system(`iw dev ${iface} ibss leave >/dev/null 2>&1; iw dev ${iface} ibss join '${ssid}' ${int(freqMhz)} ${tok} fixed-freq >/dev/null 2>&1`);
+    system("sleep 2");
+    return true;
+};
+
+/**
+ * Retune and verify the live channel/freq. Returns { ok, method, channel, frequency, error }.
+ */
+function retuneVerified(iface, ssid, channel, freqMhz, bw, opts)
+{
+    opts = opts || {};
+    const reloadWait = opts.reloadWait != null ? opts.reloadWait : 10;
+    if (ssid && freqMhz != null) {
+        retuneIbssLeaveJoin(iface, ssid, freqMhz, bw);
+        let info = readLiveChannelInfo(iface);
+        if (info && (info.channel === int(channel) || freqClose(info.frequency, freqMhz))) {
+            return { ok: true, method: "ibss", channel: info.channel, frequency: info.frequency };
+        }
+    }
+    retuneViaWifiReload(iface, channel, bw, reloadWait);
+    let info = readLiveChannelInfo(iface);
+    if (info && (info.channel === int(channel) || freqClose(info.frequency, freqMhz))) {
+        return { ok: true, method: "wifi", channel: info.channel, frequency: info.frequency };
+    }
+    return {
+        ok: false,
+        method: null,
+        channel: info ? info.channel : null,
+        frequency: info ? info.frequency : null,
+        error: "retune not verified on live iface"
+    };
+};
+
+function restoreVerified(iface, ssid, channel, freqMhz, bw)
+{
+    const r = retuneVerified(iface, ssid, channel, freqMhz, bw, { reloadWait: 12 });
+    if (r.ok) {
+        return r;
+    }
+    /* Emergency: bounce wifi from UCI config */
+    const dev = hardware.getRadioDevice(iface);
+    if (dev && channel != null) {
+        system(`uci set wireless.${dev}.channel=${int(channel)} >/dev/null 2>&1`);
+        if (bw != null) {
+            system(`uci set wireless.${dev}.chanbw=${int(bw)} >/dev/null 2>&1`);
+        }
+    }
+    system("/sbin/wifi down >/dev/null 2>&1");
+    system("sleep 2");
+    system("/sbin/wifi up >/dev/null 2>&1");
+    system("sleep 12");
+    const info = readLiveChannelInfo(iface);
+    if (info && (info.channel === int(channel) || freqClose(info.frequency, freqMhz))) {
+        return { ok: true, method: "wifi-up", channel: info.channel, frequency: info.frequency };
+    }
+    return {
+        ok: false,
+        method: "wifi-up",
+        channel: info ? info.channel : null,
+        frequency: info ? info.frequency : null,
+        error: "restore not verified — node may need reboot"
+    };
+};
+
+function thinHops(hops, maxN)
+{
+    const n = length(hops);
+    if (n <= 0 || maxN <= 0) {
+        return [];
+    }
+    if (n <= maxN) {
+        return hops;
+    }
+    const out = [];
+    if (maxN === 1) {
+        push(out, hops[int(n / 2)]);
+        return out;
+    }
+    for (let i = 0; i < maxN; i++) {
+        const idx = int((i * (n - 1)) / (maxN - 1));
+        push(out, hops[idx]);
+    }
+    return out;
 };
 
 function bandBinCount(f0, f1)
@@ -967,11 +1360,19 @@ function placeBinsOnBand(bins, sampleF0, sampleF1, bandF0, bandF1, nOut)
     if (!bins || !length(bins) || bandF1 <= bandF0) {
         return out;
     }
+    if (sampleF0 == null || sampleF1 == null || sampleF1 <= sampleF0) {
+        /* Refuse to invent a frequency span — no stretch onto the plot. */
+        return out;
+    }
     const n = length(bins);
     const span = sampleF1 - sampleF0;
+    const bandSpan = bandF1 - bandF0;
     for (let i = 0; i < n; i++) {
         const fc = sampleF0 + (i + 0.5) * (span / n);
-        let idx = int(((fc - bandF0) / (bandF1 - bandF0)) * nOut);
+        if (fc < bandF0 || fc > bandF1) {
+            continue;
+        }
+        let idx = int(((fc - bandF0) / bandSpan) * nOut);
         if (idx < 0) {
             idx = 0;
         }
@@ -1447,22 +1848,26 @@ export function captureSpectral(preferredIface)
 };
 
 /**
- * Bounded RF session: dense time rows (Y = time from 0 → duration).
- * ALL = survey busy-deltas + live FFT on current channel (no hop).
- * Single non-current = temporary UCI retune.
+ * Bounded RF session: dense time rows (Y = time).
+ * GUI duration = listen time per section. Total wall time ≈ N×(section + retune) + restore.
+ * ALL/multi = verified retune→listen section→next→restore.
  */
 export function runSession(preferredIface, durationSec, channelSel, bandwidthSel)
 {
-    durationSec = clampDuration(durationSec);
-    const sleepSec = durationSec >= 300 ? 1 : 0;
+    const sectionDur = clampDuration(durationSec);
+    const sleepSec = sectionDur >= 300 ? 1 : 0;
     fs.unlink(SESSION_STOP);
 
     const cap = probeCapability(preferredIface);
     const plan = resolveScanPlan(preferredIface, channelSel, bandwidthSel);
+    const sections = plan.ok ? planSections(plan) : [];
+    const sectionCount = length(sections) > 0 ? length(sections) : 1;
+    const scanBw = plan.ok && plan.scan_bandwidth != null ? plan.scan_bandwidth : 20;
+    const totalEst = estimateSessionSec(sectionCount, sectionDur);
     const started = nowSec();
     const startedFrac = nowFrac();
-    const ends = started + durationSec;
-    const endsFrac = startedFrac + durationSec;
+    const ends = started + totalEst;
+    const endsFrac = startedFrac + totalEst;
     const sweeps = [];
     const times = [];
     let mode = cap.capture_mode;
@@ -1470,19 +1875,39 @@ export function runSession(preferredIface, durationSec, channelSel, bandwidthSel
     let recovered = false;
     let retuned = false;
     let scanNote = null;
+    let sectionIndex = 0;
 
-    writeSessionState({
-        running: true,
-        started_at: started,
-        ends_at: ends,
-        duration_sec: durationSec,
-        iface: cap.iface,
-        chipset: cap.chipset,
-        capture_mode: mode,
-        scan_channel: plan.ok ? plan.channel : null,
-        scan_bandwidth: plan.ok ? plan.bandwidth : null,
-        version: packageVersion()
-    });
+    function publishSession(extra)
+    {
+        const now = nowSec();
+        const st = {
+            running: true,
+            started_at: started,
+            ends_at: ends,
+            duration_sec: totalEst,
+            section_duration_sec: sectionDur,
+            section_count: sectionCount,
+            section_index: sectionIndex,
+            section_ends_at: extra && extra.section_ends_at != null ? extra.section_ends_at : null,
+            section_remaining_sec: null,
+            scan_bandwidth: scanBw,
+            plot_bandwidth: plan.ok ? plan.plot_bandwidth : null,
+            iface: cap.iface,
+            chipset: cap.chipset,
+            capture_mode: mode,
+            scan_channel: plan.ok ? plan.channel : null,
+            scan_mode: plan.ok ? plan.mode : null,
+            version: packageVersion(),
+            server_now: now,
+            remaining_sec: ends > now ? ends - now : 0
+        };
+        if (st.section_ends_at != null) {
+            st.section_remaining_sec = st.section_ends_at > now ? st.section_ends_at - now : 0;
+        }
+        writeSessionState(st);
+    }
+
+    publishSession({});
 
     let error = null;
     let fStart = plan.ok ? plan.f_start : null;
@@ -1496,18 +1921,28 @@ export function runSession(preferredIface, durationSec, channelSel, bandwidthSel
         if (!bins || !length(bins)) {
             return;
         }
-        let rowBins = bins;
-        if (bandF0 != null && bandF1 != null && f0 != null && f1 != null &&
-            (f0 !== bandF0 || f1 !== bandF1 || length(bins) !== nBins)) {
-            rowBins = placeBinsOnBand(bins, f0, f1, bandF0, bandF1, nBins);
+        if (bandF0 == null || bandF1 == null || f0 == null || f1 == null || f1 <= f0) {
+            return;
         }
-        else if (length(bins) !== nBins) {
-            rowBins = placeBinsOnBand(bins, f0 != null ? f0 : bandF0, f1 != null ? f1 : bandF1,
-                bandF0 != null ? bandF0 : f0, bandF1 != null ? bandF1 : f1, nBins);
+        /* Honest map only: place sample bins at their measured MHz. Never stretch
+         * a narrow listen across a wider plot axis. */
+        if (f1 < bandF0 || f0 > bandF1) {
+            return;
+        }
+        const rowBins = placeBinsOnBand(bins, f0, f1, bandF0, bandF1, nBins);
+        let any = false;
+        for (let i = 0; i < length(rowBins); i++) {
+            if (rowBins[i] > 0) {
+                any = true;
+                break;
+            }
+        }
+        if (!any) {
+            return;
         }
         if (fStart == null) {
-            fStart = f0;
-            fStop = f1;
+            fStart = bandF0;
+            fStop = bandF1;
         }
         let t = tVal;
         if (t == null) {
@@ -1556,10 +1991,74 @@ export function runSession(preferredIface, durationSec, channelSel, bandwidthSel
         if (!retuned || !plan.ok) {
             return;
         }
-        if (plan.restore_channel != null) {
-            retuneViaWifi(plan.iface, plan.restore_channel, plan.restore_bandwidth, 10);
+        const r = restoreVerified(
+            plan.iface,
+            plan.ssid,
+            plan.restore_channel,
+            plan.restore_freq,
+            plan.restore_bandwidth
+        );
+        if (!r.ok) {
+            scanNote = (scanNote ? scanNote + "; " : "") +
+                "WARNING: restore not verified — check radio channel / reboot if needed";
         }
         retuned = false;
+    }
+
+    function listenFftOnBand(untilFrac)
+    {
+        let useFft = !!cap.fft_available && !spectralCooldownActive();
+        let emptyStreak = 0;
+        let got = 0;
+        while (nowFrac() < untilFrac && nowFrac() < endsFrac) {
+            if (fs.access(SESSION_STOP)) {
+                break;
+            }
+            if (length(sweeps) >= MAX_SWEEPS) {
+                break;
+            }
+            if (!useFft) {
+                break;
+            }
+            const pulse = runAth10kFftPulse(cap.iface, cap.phy, false, null);
+            if (pulse.recovered) {
+                recovered = true;
+                useFft = false;
+                usedSurveyFallback = true;
+                break;
+            }
+            if (pulse.ok) {
+                const buf = readFftBuffer(FFT_OUT);
+                if (buf) {
+                    const rows = samplesToRows(parseFftTlvs(buf, 8));
+                    if (length(rows)) {
+                        emptyStreak = 0;
+                        for (let i = 0; i < length(rows); i++) {
+                            pushRow(rows[i].bins, rows[i].f_start, rows[i].f_stop, null);
+                            got++;
+                        }
+                    }
+                    else {
+                        emptyStreak++;
+                    }
+                }
+                else {
+                    emptyStreak++;
+                }
+                if (emptyStreak >= 3) {
+                    useFft = false;
+                    break;
+                }
+            }
+            else {
+                emptyStreak++;
+                if (emptyStreak >= 3) {
+                    useFft = false;
+                    break;
+                }
+            }
+        }
+        return got;
     }
 
     function runSurveyLoop(untilFrac)
@@ -1582,92 +2081,58 @@ export function runSession(preferredIface, durationSec, channelSel, bandwidthSel
         }
     }
 
-    /* ALL: one row per tick = survey activity deltas + current-channel FFT overlay. */
-    function runAllHybridLoop()
+    /* Multi-section: verified retune → listen one section → next → restore.
+     * Used for ALL and for stitch (plot wider than one scan BW). */
+    function runSectionDwellLoop()
     {
-        let prevSurvey = null;
-        let useFft = !!cap.fft_available && !spectralCooldownActive();
-        let emptyStreak = 0;
-        mode = useFft ? "fft+survey" : "survey";
-        scanNote = useFft
-            ? "Full-band: survey busy-deltas + live FFT on current channel (no hop)"
-            : "Full-band: survey busy-deltas only (FFT unavailable; no hop)";
+        const list = length(sections) ? sections : planSections(plan);
+        const n = length(list);
+        let sectionOk = 0;
+        let sectionFail = 0;
+        mode = "fft";
+        const kind = plan.mode === "all" ? "Full-band" : "Stitched";
+        scanNote = `${kind}: ${n} sections @ ${scanBw} MHz scan BW, ${sectionDur}s each (no freq stretch), then restore`;
 
-        while (nowFrac() < endsFrac) {
+        for (let i = 0; i < n; i++) {
             if (fs.access(SESSION_STOP)) {
                 break;
             }
             if (length(sweeps) >= MAX_SWEEPS) {
                 break;
             }
-
-            const row = emptyBinRow(nBins);
-            let gotFft = false;
-
-            if (useFft) {
-                const pulse = runAth10kFftPulse(cap.iface, cap.phy, false, null);
-                if (pulse.recovered) {
-                    recovered = true;
-                    useFft = false;
-                    usedSurveyFallback = true;
-                    mode = "survey";
-                }
-                else if (pulse.ok) {
-                    const buf = readFftBuffer(FFT_OUT);
-                    if (buf) {
-                        const rows = samplesToRows(parseFftTlvs(buf, 8));
-                        if (length(rows)) {
-                            gotFft = true;
-                            emptyStreak = 0;
-                            for (let i = 0; i < length(rows); i++) {
-                                const placed = placeBinsOnBand(
-                                    rows[i].bins, rows[i].f_start, rows[i].f_stop,
-                                    bandF0, bandF1, nBins
-                                );
-                                mergeBinMax(row, placed);
-                            }
-                        }
-                        else {
-                            emptyStreak++;
-                        }
-                    }
-                    else {
-                        emptyStreak++;
-                    }
-                    if (emptyStreak >= 4) {
-                        useFft = false;
-                        usedSurveyFallback = true;
-                        mode = "survey";
-                    }
-                }
-                else {
-                    emptyStreak++;
-                    if (emptyStreak >= 4) {
-                        useFft = false;
-                        usedSurveyFallback = true;
-                        mode = "survey";
-                    }
-                }
-            }
-
-            const act = surveyActivityToBins(cap.iface, prevSurvey, nBins, bandF0, bandF1);
-            prevSurvey = act.prev;
-            mergeBinMax(row, act.bins);
-
-            let any = false;
-            for (let i = 0; i < length(row); i++) {
-                if (row[i] > 0) {
-                    any = true;
+            const sec = list[i];
+            sectionIndex = i + 1;
+            const r = retuneVerified(
+                plan.iface, plan.ssid, sec.number, sec.frequency, scanBw, { reloadWait: 8 }
+            );
+            retuned = true;
+            if (!r.ok) {
+                sectionFail++;
+                publishSession({ section_ends_at: null });
+                if (sectionFail >= 2) {
+                    scanNote = `${scanNote}; abort after ${sectionFail} unverified retunes`;
                     break;
                 }
+                continue;
             }
-            if (any || gotFft || length(sweeps) > 0) {
-                pushRow(row, bandF0, bandF1, null);
-            }
+            sectionOk++;
+            sectionFail = 0;
+            const sectionEnds = nowSec() + sectionDur;
+            publishSession({ section_ends_at: sectionEnds });
+            listenFftOnBand(nowFrac() + sectionDur);
+        }
 
-            if (!gotFft) {
-                system("sleep 1");
-            }
+        sectionIndex = sectionCount;
+        publishSession({ section_ends_at: null });
+
+        if (sectionOk === 0 && cap.survey_available) {
+            usedSurveyFallback = true;
+            mode = "survey";
+            scanNote = "Section retune failed; fell back to survey (not live FFT; not full-band spectrum)";
+            runSurveyLoop(nowFrac() + sectionDur);
+        }
+        else {
+            scanNote = `${kind}: ${sectionOk}/${n} verified sections @ ${scanBw} MHz (${sectionDur}s each)`;
         }
     }
 
@@ -1677,47 +2142,52 @@ export function runSession(preferredIface, durationSec, channelSel, bandwidthSel
     else if (!plan.ok) {
         error = plan.error || "Invalid channel/bandwidth selection";
     }
-    else if (plan.mode === "all") {
+    else if (plan.mode === "all" || plan.mode === "stitch" || sectionCount > 1) {
         try {
-            if (cap.survey_available || (cap.fft_available && !spectralCooldownActive())) {
-                runAllHybridLoop();
+            if (cap.fft_available || cap.survey_available) {
+                runSectionDwellLoop();
             }
             else {
-                error = "ALL scan needs survey or FFT";
+                error = "Multi-section scan needs FFT or survey";
             }
             if (!length(sweeps)) {
-                error = error || "No ALL-band sweeps captured";
+                error = error || "No section sweeps captured";
             }
         }
         catch (e) {
             error = `${e}`;
         }
+        restoreRadio();
     }
     else if (cap.chipset === "ath10k") {
         let useFft = !!cap.fft_available && !spectralCooldownActive();
         let emptyStreak = 0;
         try {
             if (plan.mode === "single") {
-                if (retuneViaWifi(plan.iface, plan.channel, plan.bandwidth, 10)) {
+                const r = retuneVerified(
+                    plan.iface, plan.ssid, plan.channel, plan.frequency, scanBw,
+                    { reloadWait: 10 }
+                );
+                if (r.ok) {
                     retuned = true;
-                    scanNote = `Temporarily retuned to ch ${plan.channel} @ ${plan.bandwidth} MHz for scan`;
+                    scanNote = `Temporarily retuned to ch ${plan.channel} (plot ${plan.plot_bandwidth} MHz, scan ${scanBw} MHz, ${r.method})`;
                 }
                 else {
-                    scanNote = "Retune failed; capturing on current radio channel";
+                    error = r.error || "Could not verify retune to requested channel";
+                    scanNote = "Retune failed; not capturing off-channel without verification";
+                    useFft = false;
                 }
             }
-            else if (plan.mode === "all") {
-                scanNote = "ALL without survey path; capturing current RF on full-band axis (no hop)";
-            }
 
-            while (nowFrac() < endsFrac) {
+            sectionIndex = 1;
+            const sectionEnds = nowSec() + sectionDur;
+            publishSession({ section_ends_at: sectionEnds });
+
+            while (useFft && nowFrac() < startedFrac + sectionDur) {
                 if (fs.access(SESSION_STOP)) {
                     break;
                 }
                 if (length(sweeps) >= MAX_SWEEPS) {
-                    break;
-                }
-                if (!useFft) {
                     break;
                 }
 
@@ -1730,7 +2200,7 @@ export function runSession(preferredIface, durationSec, channelSel, bandwidthSel
                     break;
                 }
                 if (pulse.ok) {
-                    const n = ingestFftBuffer(durationSec);
+                    const n = ingestFftBuffer(sectionDur);
                     emptyStreak = n > 0 ? 0 : emptyStreak + 1;
                 }
                 else {
@@ -1744,12 +2214,12 @@ export function runSession(preferredIface, durationSec, channelSel, bandwidthSel
                 }
             }
 
-            if (!length(sweeps) && cap.survey_available) {
+            if (!length(sweeps) && cap.survey_available && plan.mode === "current") {
                 usedSurveyFallback = true;
                 mode = "survey";
-                runSurveyLoop(nowFrac() + durationSec);
+                runSurveyLoop(nowFrac() + sectionDur);
             }
-            if (!length(sweeps)) {
+            if (!length(sweeps) && !error) {
                 error = recovered
                     ? "FFT timed out (Wi-Fi recovered); survey also empty"
                     : "No FFT or survey sweeps captured";
@@ -1776,15 +2246,21 @@ export function runSession(preferredIface, durationSec, channelSel, bandwidthSel
         const relay = cap.paths.relay;
         try {
             if (plan.mode === "single") {
-                if (retuneViaWifi(plan.iface, plan.channel, plan.bandwidth, 10)) {
+                const r = retuneVerified(
+                    plan.iface, plan.ssid, plan.channel, plan.frequency, scanBw,
+                    { reloadWait: 10 }
+                );
+                if (r.ok) {
                     retuned = true;
-                    scanNote = `Temporarily retuned to ch ${plan.channel} @ ${plan.bandwidth} MHz for scan`;
+                    scanNote = `Temporarily retuned to ch ${plan.channel} (plot ${plan.plot_bandwidth} MHz, scan ${scanBw} MHz, ${r.method})`;
+                }
+                else {
+                    error = r.error || "Could not verify retune to requested channel";
                 }
             }
-            else if (plan.mode === "all") {
-                scanNote = "ALL without hop (mesh-safe); capturing current RF on full-band axis";
-            }
-            while (nowFrac() < endsFrac) {
+            sectionIndex = 1;
+            publishSession({ section_ends_at: nowSec() + sectionDur });
+            while (!error && nowFrac() < startedFrac + sectionDur) {
                 if (fs.access(SESSION_STOP)) {
                     break;
                 }
@@ -1825,8 +2301,9 @@ export function runSession(preferredIface, durationSec, channelSel, bandwidthSel
 
     const ended = nowSec();
     let tStop = length(times) ? times[length(times) - 1] : (ended - started);
-    if (tStop < durationSec) {
-        tStop = durationSec;
+    const listenTotal = sectionCount * sectionDur;
+    if (tStop < listenTotal) {
+        tStop = listenTotal;
     }
     let note = "RF spectral session complete; radio restored to normal use.";
     if (scanNote) {
@@ -1837,15 +2314,10 @@ export function runSession(preferredIface, durationSec, channelSel, bandwidthSel
             ? "ath10k FFT timed out; Wi-Fi recovered; finished with survey waterfall."
             : "ath10k FFT empty/cooldown; finished with survey waterfall.";
     }
-    else if (mode === "fft+survey") {
-        note = scanNote
-            ? `${scanNote}. Other channels only move when survey busy-time increments.`
-            : "Full-band hybrid waterfall complete.";
-    }
     else if (mode === "survey" && plan.ok && plan.mode === "all") {
         note = scanNote
-            ? `${scanNote}. Radio left on configured channel.`
-            : "Full-band survey waterfall complete (busy-time deltas).";
+            ? `${scanNote}.`
+            : "Full-band survey fallback complete.";
     }
     else if (mode === "survey") {
         note = "Survey waterfall complete (nl80211 noise/busy).";
@@ -1877,11 +2349,14 @@ export function runSession(preferredIface, durationSec, channelSel, bandwidthSel
             started_at: started,
             ended_at: ended,
             duration_sec: ended - started,
-            requested_duration_sec: durationSec,
+            requested_duration_sec: listenTotal,
+            section_duration_sec: sectionDur,
+            section_count: sectionCount,
             sweep_count: length(sweeps),
             sample_interval_sec: sleepSec,
             scan_channel: plan.ok ? plan.channel : null,
-            scan_bandwidth: plan.ok ? plan.bandwidth : null,
+            scan_bandwidth: scanBw,
+            plot_bandwidth: plan.ok ? plan.plot_bandwidth : null,
             scan_mode: plan.ok ? plan.mode : null,
             axis_channels: plan.ok ? axisChannelsForPlan(plan) : [],
             experimental: cap.chipset === "ath10k",
@@ -1896,7 +2371,10 @@ export function runSession(preferredIface, durationSec, channelSel, bandwidthSel
         started_at: started,
         ends_at: ends,
         ended_at: ended,
-        duration_sec: durationSec,
+        duration_sec: totalEst,
+        section_duration_sec: sectionDur,
+        section_count: sectionCount,
+        section_index: sectionCount,
         iface: cap.iface,
         chipset: cap.chipset,
         capture_mode: mode,
@@ -1936,7 +2414,11 @@ export function startSessionAsync(preferredIface, durationSec, channelSel, bandw
     if (!plan.ok) {
         return { ok: false, error: plan.error || "Invalid channel/bandwidth" };
     }
-    durationSec = clampDuration(durationSec);
+    const sectionDur = clampDuration(durationSec);
+    const sections = planSections(plan);
+    const sectionCount = length(sections) > 0 ? length(sections) : 1;
+    const scanBw = plan.scan_bandwidth != null ? plan.scan_bandwidth : 20;
+    const totalEst = estimateSessionSec(sectionCount, sectionDur);
     const ifaceArg = preferredIface ? ` -i ${preferredIface}` : "";
     let chArg = "";
     let bwArg = "";
@@ -1951,34 +2433,45 @@ export function startSessionAsync(preferredIface, durationSec, channelSel, bandw
     writeSessionState({
         running: true,
         started_at: started,
-        ends_at: started + durationSec,
-        duration_sec: durationSec,
+        ends_at: started + totalEst,
+        duration_sec: totalEst,
+        section_duration_sec: sectionDur,
+        section_count: sectionCount,
+        section_index: 0,
+        section_ends_at: null,
         iface: cap.iface,
         chipset: cap.chipset,
         capture_mode: cap.capture_mode,
         scan_channel: plan.channel,
-        scan_bandwidth: plan.bandwidth,
+        scan_bandwidth: scanBw,
+        plot_bandwidth: plan.plot_bandwidth,
+        scan_mode: plan.mode,
         version: packageVersion()
     });
-    system(`waterfall-session${ifaceArg} -d ${durationSec}${chArg}${bwArg} >/tmp/waterfall-session.log 2>&1 &`);
+    system(`waterfall-session${ifaceArg} -d ${sectionDur}${chArg}${bwArg} >/tmp/waterfall-session.log 2>&1 &`);
     const warn = plan.mode === "all"
-        ? `Full-band hybrid on ${cap.iface} (survey deltas + live FFT on current ch; no hop). Up to ${durationSec}s.`
-        : (plan.mode === "single"
-            ? `Temporarily retune to ch ${plan.channel} @ ${plan.bandwidth} MHz on ${cap.iface} (RF disrupted up to ${durationSec}s + reload).`
-            : (cap.chipset === "ath10k"
-                ? `ath10k isolated FFT on ${cap.iface} (hard timeout ${ATH10K_FFT_HARD_TIMEOUT}s + recovery; survey fallback). Up to ${durationSec}s.`
-                : `Spectral capture disrupts RF for up to ${durationSec}s on ${cap.iface}.`));
+        ? `Full-band on ${cap.iface}: ${sectionCount} sections × ${sectionDur}s @ ${scanBw} MHz scan BW (~${totalEst}s incl. retune/restore).`
+        : (plan.mode === "stitch" || sectionCount > 1
+            ? `Stitched plot ${plan.plot_bandwidth} MHz on ${cap.iface}: ${sectionCount} sections × ${sectionDur}s @ ${scanBw} MHz listen (~${totalEst}s). No frequency stretch.`
+            : (plan.mode === "single"
+                ? `Scan ch ${plan.channel} (plot ${plan.plot_bandwidth} MHz, scan ${scanBw} MHz) for ${sectionDur}s + restore.`
+                : (cap.chipset === "ath10k"
+                    ? `ath10k isolated FFT on ${cap.iface} (${sectionDur}s section).`
+                    : `Spectral capture on ${cap.iface} for ${sectionDur}s.`)));
     return {
         ok: true,
         started: true,
         started_at: started,
-        ends_at: started + durationSec,
-        duration_sec: durationSec,
+        ends_at: started + totalEst,
+        duration_sec: totalEst,
+        section_duration_sec: sectionDur,
+        section_count: sectionCount,
         iface: cap.iface,
         chipset: cap.chipset,
         capture_mode: cap.capture_mode,
         scan_channel: plan.channel,
-        scan_bandwidth: plan.bandwidth,
+        scan_bandwidth: scanBw,
+        plot_bandwidth: plan.plot_bandwidth,
         scan_mode: plan.mode,
         f_start: plan.f_start,
         f_stop: plan.f_stop,
@@ -2013,6 +2506,18 @@ export function sessionStatus(preferredIface)
             remaining = 0;
         }
     }
+    let sectionRemaining = null;
+    if (running && sess.section_ends_at != null) {
+        sectionRemaining = int(sess.section_ends_at) - now;
+        if (sectionRemaining < 0) {
+            sectionRemaining = 0;
+        }
+        sess.section_remaining_sec = sectionRemaining;
+    }
+    sess.server_now = now;
+    if (remaining != null) {
+        sess.remaining_sec = remaining;
+    }
     const sel = preferredIface || cap.iface || null;
     const cache = readCache(sel);
     const scan = getScanOptions(sel);
@@ -2021,6 +2526,11 @@ export function sessionStatus(preferredIface)
         version: packageVersion(),
         running: running,
         remaining_sec: remaining,
+        section_remaining_sec: sectionRemaining,
+        section_count: sess.section_count != null ? sess.section_count : null,
+        section_index: sess.section_index != null ? sess.section_index : null,
+        section_duration_sec: sess.section_duration_sec != null ? sess.section_duration_sec : null,
+        scan_mode: sess.scan_mode != null ? sess.scan_mode : null,
         server_now: now,
         session: sess,
         have_cache: cache.have_cache,

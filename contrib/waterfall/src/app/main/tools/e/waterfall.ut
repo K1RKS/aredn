@@ -27,8 +27,8 @@ const unsupportedMsg = cap.unsupported_message || "Waterfall is not supported on
         <div class="wf-radio-row" style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin:0 0 8px">
             <label style="font-size:0.9em">Radio</label>
             <select class="wf-radio" style="min-width:12rem;max-width:100%;flex:1"></select>
-            <label style="font-size:0.9em">Duration</label>
-            <select class="wf-duration" style="min-width:6rem"></select>
+            <label style="font-size:0.9em">Section</label>
+            <select class="wf-duration" style="min-width:6rem" title="Listen time per frequency section"></select>
             <label style="font-size:0.9em">Channel</label>
             <select class="wf-channel" style="min-width:8rem"></select>
             <label style="font-size:0.9em">BW</label>
@@ -36,10 +36,18 @@ const unsupportedMsg = cap.unsupported_message || "Waterfall is not supported on
         </div>
         <canvas class="wf-canvas" style="width:100%;background:#000;border-radius:4px;display:block"></canvas>
         <div class="wf-progress" hidden style="margin:6px 0 0">
-            <div class="wf-progress-track" style="height:8px;background:#222;border-radius:4px;overflow:hidden">
-                <div class="wf-progress-bar" style="height:100%;width:0%;background:#3a7abd;transition:width 0.2s linear"></div>
+            <div class="wf-progress-sections" hidden style="margin:0 0 6px">
+                <div class="wf-progress-sections-label" style="font-size:0.8em;opacity:0.85;margin-bottom:2px">Sections</div>
+                <div class="wf-progress-track" style="height:8px;background:#222;border-radius:4px;overflow:hidden">
+                    <div class="wf-progress-sections-bar" style="height:100%;width:0%;background:#5a8a3a;transition:width 0.15s linear"></div>
+                </div>
             </div>
-            <div class="wf-progress-label" style="margin-top:4px;font-size:0.8em;opacity:0.85"></div>
+            <div class="wf-progress-time">
+                <div class="wf-progress-label" style="font-size:0.8em;opacity:0.85;margin-bottom:2px"></div>
+                <div class="wf-progress-track" style="height:8px;background:#222;border-radius:4px;overflow:hidden">
+                    <div class="wf-progress-bar" style="height:100%;width:0%;background:#3a7abd;transition:width 0.15s linear"></div>
+                </div>
+            </div>
         </div>
         <div class="wf-status" style="margin:8px 0;font-size:0.85em;min-height:1.2em;opacity:0.9"></div>
         <div class="cols" style="gap:8px;align-items:center;margin:0 0 4px">
@@ -74,7 +82,7 @@ const unsupportedMsg = cap.unsupported_message || "Waterfall is not supported on
             return;
         }
         const s = document.createElement("script");
-        s.src = "/waterfall/waterfall-ui.js";
+        s.src = "/waterfall/waterfall-ui.js?v={{wf.packageVersion()}}";
         s.onload = mount;
         s.onerror = function () {
             const st = root && root.querySelector(".wf-status");

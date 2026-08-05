@@ -1,0 +1,127 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Waterfall scan truthfulness review</title>
+  <style>
+    :root { --bg:#0f1115; --fg:#e6e8ec; --muted:#9aa3b2; --card:#181c24; --line:#2a3140; --warn:#c4a35a; --ok:#6a9a6a; --bad:#c07070; }
+    body { margin:0; font:15px/1.45 system-ui,sans-serif; background:var(--bg); color:var(--fg); }
+    main { max-width:980px; margin:0 auto; padding:28px 20px 48px; }
+    h1 { font-size:1.6rem; margin:0 0 6px; }
+    h2 { font-size:1.15rem; margin:28px 0 10px; }
+    p, li { color:var(--fg); }
+    .muted { color:var(--muted); }
+    .callout { border:1px solid var(--warn); background:#221c10; padding:12px 14px; border-radius:6px; margin:16px 0; }
+    .stats { display:flex; gap:12px; flex-wrap:wrap; margin:14px 0; }
+    .stat { background:var(--card); border:1px solid var(--line); padding:10px 14px; border-radius:6px; min-width:120px; }
+    .stat b { display:block; font-size:1.3rem; }
+    .stat span { color:var(--muted); font-size:0.85rem; }
+    table { width:100%; border-collapse:collapse; font-size:0.9rem; }
+    th, td { border:1px solid var(--line); padding:8px 10px; vertical-align:top; text-align:left; }
+    th { background:var(--card); color:var(--muted); font-weight:600; }
+    .card { background:var(--card); border:1px solid var(--line); border-radius:6px; padding:12px 14px; margin:10px 0; }
+    .best { color:var(--ok); font-weight:600; }
+    .risk { color:var(--warn); font-weight:600; }
+    .bad { color:var(--bad); font-weight:600; }
+  </style>
+</head>
+<body>
+<main>
+  <h1>Waterfall scan truthfulness review</h1>
+  <p class="muted">Package 0.2.29 · Do GUI frequency/BW choices produce FFT plots that match what the radio actually measured?</p>
+
+  <div class="stats">
+    <div class="stat"><b>3</b><span>Plan modes</span></div>
+    <div class="stat"><b>2</b><span>Widths (plot vs scan)</span></div>
+    <div class="stat"><b>No</b><span>All perms FFT-true</span></div>
+  </div>
+
+  <div class="callout">
+    <strong>Short answer:</strong> No. Only “current channel + current BW” with a successful FFT path is closely truthful.
+    Wider plot than scan, ALL (time-multiplexed), and survey fallback all show something easy to misread as a full FFT across the axis.
+  </div>
+
+  <h2>How a request becomes a plot</h2>
+  <table>
+    <thead><tr><th>Stage</th><th>What happens</th></tr></thead>
+    <tbody>
+      <tr><td>GUI</td><td>Channel + BW (+ Section seconds)</td></tr>
+      <tr><td>Plan</td><td>plotBw = axis width; scanBw = widest radio BW ≤ plotBw; mode current|single|all</td></tr>
+      <tr><td>RF</td><td>current: stay · single/all: retuneVerified(ch, scanBw) · restore after</td></tr>
+      <tr><td>Capture</td><td>ath10k isolated FFT pulse (or ath9k ctl/trigger) · else survey</td></tr>
+      <tr><td>Map</td><td>placeBinsOnBand onto plot axis · same-section stretch · drop wrong-ch FFT</td></tr>
+      <tr><td>UI</td><td>Heatmap X = plan f_start…f_stop · Y = request time</td></tr>
+    </tbody>
+  </table>
+
+  <h2>Contract: plot BW vs scan BW</h2>
+  <p>GUI BW is the waterfall <em>axis</em> width (plotBw), not necessarily the RF listen width.
+  scanBw = widest bandwidth the radio advertises that is ≤ plotBw. Retune/listen uses scanBw.</p>
+  <p class="muted">ALL forces both channel and BW to ALL. Plot spans the band; each section listens at max scanBw (often 80 on hAP).</p>
+
+  <h2>Permutation matrix</h2>
+  <table>
+    <thead>
+      <tr><th>Selection</th><th>Mode</th><th>RF action</th><th>Plot axis</th><th>Matches?</th><th>Caveat</th></tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td>Ch = current · BW = current</td><td>current</td>
+        <td>No retune. Radio stays on live ch/BW.</td>
+        <td>Axis = center ± plotBw/2 (= radio BW)</td>
+        <td class="best">Best</td>
+        <td>FFT bins stretched across plot; ath10k often reports width 11 for 10 MHz — close after normalize.</td>
+      </tr>
+      <tr>
+        <td>Ch = current · BW &gt; radio BW</td><td>single</td>
+        <td>Retune same ch to scanBw = widest ≤ plotBw</td>
+        <td>Axis uses full plotBw even if scanBw &lt; plotBw</td>
+        <td class="risk">Risk</td>
+        <td>If radio cannot open plotBw, plot is wider than measured — bins stretched (40 MHz look from 20 MHz listen).</td>
+      </tr>
+      <tr>
+        <td>Ch = other · BW = any number</td><td>single</td>
+        <td>Verified retune to that ch @ scanBw, listen, restore</td>
+        <td>Axis = requested ch ± plotBw/2</td>
+        <td class="risk">OK if retune verifies</td>
+        <td>Failed retune → no off-channel FFT. Success → same stretch risk if scanBw &lt; plotBw.</td>
+      </tr>
+      <tr>
+        <td>Ch = ALL or BW = ALL</td><td>all</td>
+        <td>Hop sections @ widest scanBw, dwell section-time each, restore</td>
+        <td>Full band axis</td>
+        <td class="risk">Time-sliced</td>
+        <td>Not simultaneous full-band spectrum. Empty X = not listening there yet, not “quiet RF.”</td>
+      </tr>
+      <tr>
+        <td>Any · FFT empty / cooldown</td><td>survey fallback</td>
+        <td>nl80211 survey on current radio channel</td>
+        <td>Same as requested plan</td>
+        <td class="bad">Not FFT</td>
+        <td>Channel-level noise/busy only; single-section spread is synthetic. ALL+survey is especially misleading.</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <h2>Where the plot lies (or tells a partial truth)</h2>
+  <div class="card"><strong>1. Plot wider than scan</strong><p>plot 40 / scan 20 → stretch. Looks full-axis; measured ~20 MHz.</p></div>
+  <div class="card"><strong>2. ALL is a hop movie</strong><p>Sequential sections. Empty regions mean “not tuned there.”</p></div>
+  <div class="card"><strong>3. Survey is not an FFT waterfall</strong><p>Occupancy, not sub-bin spectrum.</p></div>
+  <div class="card"><strong>4. Off-channel only if retune verifies</strong><p>Failed verify → skip/error rather than paint the wrong channel on the axis.</p></div>
+
+  <h2>What does match when FFT works</h2>
+  <p>Verified dwell on channel C at scanBw S with plotBw = S: TLV samples near C mapped across C±S/2 are a real spectral snapshot of that listen window.
+  Color is relative (UI-normalized), not calibrated dBm.</p>
+  <p class="muted">ath10k widths 11/22/44/88 → 10/20/40/80. Out-of-band bins skipped. Far-off-channel FFT dropped.</p>
+
+  <h2>How to read the UI</h2>
+  <ol>
+    <li>Trust title: plot vs scan MHz and section count.</li>
+    <li>If note says survey/fallback — occupancy, not spectrum.</li>
+    <li>ALL: Y = which section was live, not whole band at once.</li>
+    <li>Prefer plot BW ≤ what the radio can open (often = current BW) for truthful FFT.</li>
+  </ol>
+</main>
+</body>
+</html>

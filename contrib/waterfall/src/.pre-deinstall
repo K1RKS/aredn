@@ -2,5 +2,5 @@
 # Remove Tools → Waterfall menu entry before package files are removed.
 . /usr/share/waterfall/tools-menu.sh 2>/dev/null || exit 0
 remove_tools_menu
-[ -x /etc/init.d/uhttpd ] && /etc/init.d/uhttpd restart 2>/dev/null || true
+# Intentionally no uhttpd restart — see tools-menu.sh.
 exit 0

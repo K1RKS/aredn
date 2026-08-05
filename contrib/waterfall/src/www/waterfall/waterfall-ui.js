@@ -88,11 +88,14 @@
   function scanSelectionLabel(meta) {
     const parts = [];
     const ch = meta.scan_channel;
-    const bw = meta.scan_bandwidth;
+    const plotBw = meta.plot_bandwidth;
+    const scanBw = meta.scan_bandwidth;
     if (ch === "all" || ch === "ALL") parts.push("ch ALL");
     else if (ch != null && ch !== "") parts.push("ch " + ch);
-    if (bw === "all" || bw === "ALL") parts.push("BW ALL");
-    else if (bw != null && bw !== "") parts.push(bw + " MHz BW");
+    if (plotBw != null && plotBw !== "" && plotBw !== "all") parts.push("plot " + plotBw + " MHz");
+    else if (ch === "all" || ch === "ALL") parts.push("plot full band");
+    if (scanBw != null && scanBw !== "" && scanBw !== "all") parts.push("scan " + scanBw + " MHz");
+    if (meta.section_count != null) parts.push(meta.section_count + " section" + (meta.section_count === 1 ? "" : "s"));
     const f0 = meta.f_start;
     const f1 = meta.f_stop;
     if (f0 != null && f1 != null && f1 > f0) {
@@ -287,6 +290,9 @@
     const channelSel = root.querySelector(".wf-channel");
     const bwSel = root.querySelector(".wf-bandwidth");
     let progressWrap = root.querySelector(".wf-progress");
+    let progressSections = null;
+    let progressSectionsBar = null;
+    let progressSectionsLabel = null;
     let progressBar = root.querySelector(".wf-progress-bar");
     let progressLabel = root.querySelector(".wf-progress-label");
     let pollTimer = null;
@@ -300,6 +306,11 @@
     let progressEndsAtMs = null;
     let progressDurationSec = null;
     let progressIface = null;
+    let progressSectionCount = 1;
+    let progressSectionIndex = 0;
+    let progressSectionEndsAtMs = null;
+    let progressSectionDurSec = null;
+    let progressScanMode = null;
 
     function prefKey(kind) {
       return "waterfall." + kind + "." + (getIface() || "default");
@@ -331,17 +342,36 @@
     }
 
     function ensureProgressEls() {
-      if (progressWrap && progressBar && progressLabel) return;
       if (!canvas || !canvas.parentNode) return;
-      progressWrap = document.createElement("div");
-      progressWrap.className = "wf-progress";
-      progressWrap.hidden = true;
-      progressWrap.style.cssText = "margin:6px 0 0";
-      progressWrap.innerHTML =
-        '<div class="wf-progress-track" style="height:8px;background:#222;border-radius:4px;overflow:hidden">' +
-        '<div class="wf-progress-bar" style="height:100%;width:0%;background:#3a7abd;transition:width 0.15s linear"></div></div>' +
-        '<div class="wf-progress-label" style="margin-top:4px;font-size:0.8em;opacity:0.85"></div>';
-      canvas.parentNode.insertBefore(progressWrap, canvas.nextSibling);
+      if (!progressWrap) {
+        progressWrap = root.querySelector(".wf-progress");
+      }
+      if (!progressWrap) {
+        progressWrap = document.createElement("div");
+        progressWrap.className = "wf-progress";
+        progressWrap.style.cssText = "margin:6px 0 0";
+        canvas.parentNode.insertBefore(progressWrap, canvas.nextSibling);
+      }
+      /* Upgrade old single-bar markup (or first mount) to dual bars. */
+      const needRebuild = !progressWrap.querySelector(".wf-progress-sections") ||
+        !progressWrap.querySelector(".wf-progress-bar") ||
+        !progressWrap.querySelector(".wf-progress-label");
+      if (needRebuild) {
+        const wasHidden = progressWrap.hidden;
+        progressWrap.innerHTML =
+          '<div class="wf-progress-sections" hidden style="margin:0 0 6px">' +
+          '<div class="wf-progress-sections-label" style="font-size:0.8em;opacity:0.85;margin-bottom:2px">Sections</div>' +
+          '<div class="wf-progress-track" style="height:8px;background:#222;border-radius:4px;overflow:hidden">' +
+          '<div class="wf-progress-sections-bar" style="height:100%;width:0%;background:#5a8a3a;transition:width 0.15s linear"></div></div></div>' +
+          '<div class="wf-progress-time">' +
+          '<div class="wf-progress-label" style="font-size:0.8em;opacity:0.85;margin-bottom:2px"></div>' +
+          '<div class="wf-progress-track" style="height:8px;background:#222;border-radius:4px;overflow:hidden">' +
+          '<div class="wf-progress-bar" style="height:100%;width:0%;background:#3a7abd;transition:width 0.15s linear"></div></div></div>';
+        progressWrap.hidden = wasHidden;
+      }
+      progressSections = progressWrap.querySelector(".wf-progress-sections");
+      progressSectionsBar = progressWrap.querySelector(".wf-progress-sections-bar");
+      progressSectionsLabel = progressWrap.querySelector(".wf-progress-sections-label");
       progressBar = progressWrap.querySelector(".wf-progress-bar");
       progressLabel = progressWrap.querySelector(".wf-progress-label");
     }
@@ -372,26 +402,67 @@
       progressEndsAtMs = null;
       progressDurationSec = null;
       progressIface = null;
+      progressSectionCount = 1;
+      progressSectionIndex = 0;
+      progressSectionEndsAtMs = null;
+      progressSectionDurSec = null;
+      progressScanMode = null;
       ensureProgressEls();
       if (progressWrap) progressWrap.hidden = true;
+      if (progressSections) progressSections.hidden = true;
       if (progressBar) progressBar.style.width = "0%";
+      if (progressSectionsBar) progressSectionsBar.style.width = "0%";
       if (progressLabel) progressLabel.textContent = "";
     }
 
     function paintProgress() {
       ensureProgressEls();
       if (!progressWrap || !progressBar || !progressLabel) return;
-      if (progressEndsAtMs == null || !progressDurationSec || progressDurationSec <= 0) {
+      if (progressSectionEndsAtMs == null && progressEndsAtMs == null) {
         hideProgress();
         return;
       }
-      const leftSec = Math.max(0, (progressEndsAtMs - Date.now()) / 1000);
-      const done = Math.min(1, Math.max(0, 1 - leftSec / progressDurationSec));
       progressWrap.hidden = false;
+      const multi = progressSectionCount > 1 || progressScanMode === "all";
+      if (progressSections) progressSections.hidden = !multi;
+
+      if (multi && progressSectionsBar && progressSectionsLabel) {
+        const idx = Math.max(0, progressSectionIndex || 0);
+        const cur = idx > 0 ? idx : (progressSectionEndsAtMs != null ? 1 : 0);
+        let sectionFrac = 0;
+        if (progressSectionEndsAtMs != null && (progressSectionDurSec || 0) > 0) {
+          const left = Math.max(0, (progressSectionEndsAtMs - Date.now()) / 1000);
+          sectionFrac = Math.min(1, Math.max(0, 1 - left / progressSectionDurSec));
+        }
+        const completed = Math.max(0, cur > 0 ? cur - 1 : 0);
+        const total = progressSectionCount > 0 ? progressSectionCount : 1;
+        const frac = Math.min(1, (completed + sectionFrac) / total);
+        const remaining = Math.max(0, total - completed);
+        progressSectionsBar.style.width = (frac * 100).toFixed(1) + "%";
+        progressSectionsLabel.textContent =
+          "Sections " + (cur > 0 ? cur : 0) + " / " + total +
+          " · " + remaining + " remaining";
+      }
+
+      let leftSec = 0;
+      let dur = progressSectionDurSec || progressDurationSec || 30;
+      if (progressSectionEndsAtMs != null) {
+        leftSec = Math.max(0, (progressSectionEndsAtMs - Date.now()) / 1000);
+        dur = progressSectionDurSec || dur;
+      } else if (progressEndsAtMs != null) {
+        leftSec = Math.max(0, (progressEndsAtMs - Date.now()) / 1000);
+        dur = progressDurationSec || dur;
+      }
+      const done = dur > 0 ? Math.min(1, Math.max(0, 1 - leftSec / dur)) : 0;
       progressBar.style.width = (done * 100).toFixed(1) + "%";
       const leftRound = Math.ceil(leftSec);
-      progressLabel.textContent =
-        (progressIface || "?") + " · " + Math.round(done * 100) + "% · ~" + leftRound + "s left";
+      if (multi) {
+        progressLabel.textContent =
+          "Section time · " + Math.round(done * 100) + "% · ~" + leftRound + "s left in section";
+      } else {
+        progressLabel.textContent =
+          (progressIface || "?") + " · " + Math.round(done * 100) + "% · ~" + leftRound + "s left";
+      }
     }
 
     function syncProgressFromStatus(status) {
@@ -400,18 +471,38 @@
         return;
       }
       const sess = status.session || {};
-      const dur = sess.duration_sec || status.remaining_sec || getDuration();
-      let left = status.remaining_sec;
-      if (left == null && sess.ends_at != null && status.server_now != null) {
-        left = Math.max(0, sess.ends_at - status.server_now);
-      }
-      if (left == null && sess.ends_at != null) {
-        left = Math.max(0, sess.ends_at - Math.floor(Date.now() / 1000));
-      }
-      if (left == null) left = dur;
-      progressDurationSec = dur > 0 ? dur : 30;
-      progressEndsAtMs = Date.now() + left * 1000;
       progressIface = sess.iface || getIface() || "?";
+      progressScanMode = sess.scan_mode || status.scan_mode || null;
+      let nSec = sess.section_count != null ? sess.section_count : status.section_count;
+      nSec = parseInt(nSec, 10);
+      if (!(nSec > 0)) nSec = progressScanMode === "all" ? 2 : 1;
+      progressSectionCount = nSec;
+      progressSectionIndex = sess.section_index != null ? parseInt(sess.section_index, 10) || 0 : 0;
+      progressSectionDurSec = sess.section_duration_sec || status.section_duration_sec || getDuration();
+
+      let secLeft = status.section_remaining_sec;
+      if (secLeft == null) secLeft = sess.section_remaining_sec;
+      if (secLeft == null && sess.section_ends_at != null && status.server_now != null) {
+        secLeft = Math.max(0, sess.section_ends_at - status.server_now);
+      }
+      if (secLeft == null && progressSectionCount <= 1 && progressScanMode !== "all") {
+        secLeft = status.remaining_sec;
+        if (secLeft == null && sess.ends_at != null && status.server_now != null) {
+          secLeft = Math.max(0, sess.ends_at - status.server_now);
+        }
+      }
+      if (secLeft == null) secLeft = progressSectionDurSec;
+      progressSectionEndsAtMs = Date.now() + secLeft * 1000;
+
+      const totalDur = sess.duration_sec || status.remaining_sec || getDuration();
+      let totalLeft = status.remaining_sec;
+      if (totalLeft == null && sess.ends_at != null && status.server_now != null) {
+        totalLeft = Math.max(0, sess.ends_at - status.server_now);
+      }
+      if (totalLeft == null) totalLeft = totalDur;
+      progressDurationSec = totalDur > 0 ? totalDur : 30;
+      progressEndsAtMs = Date.now() + totalLeft * 1000;
+
       paintProgress();
       if (!progressTimer) {
         progressTimer = setInterval(function () {
@@ -424,8 +515,27 @@
       }
     }
 
+    function clearStartHitStyle() {
+      if (!startBtn) return;
+      startBtn.style.backgroundColor = "";
+      startBtn.style.borderColor = "";
+      startBtn.style.color = "";
+      startBtn.style.opacity = "";
+    }
+
+    function markStartHit() {
+      if (!startBtn) return;
+      /* Immediate click feedback until the next status-driven applyRunningUi. */
+      startBtn.disabled = true;
+      startBtn.style.backgroundColor = "#2d6a3e";
+      startBtn.style.borderColor = "#1f4d2c";
+      startBtn.style.color = "#fff";
+      startBtn.style.opacity = "1";
+    }
+
     function applyRunningUi(status) {
       const running = !!(status && status.running);
+      clearStartHitStyle();
       if (startBtn) {
         startBtn.disabled = running;
         startBtn.title = running
@@ -518,8 +628,8 @@
           const c = list[i];
           const opt = document.createElement("option");
           opt.value = String(c.number);
-          let label = c.label || (c.number + " (" + c.frequency + ")");
-          if (curCh && String(c.number) === curCh) label += " · radio";
+          let label = String(c.number);
+          if (curCh && String(c.number) === curCh) label += "*";
           opt.textContent = label;
           channelSel.appendChild(opt);
         }
@@ -543,6 +653,8 @@
     function runningMessage(status) {
       const sess = (status && status.session) || {};
       const iface = sess.iface || "?";
+      const nSec = sess.section_count > 0 ? sess.section_count : 1;
+      const iSec = sess.section_index != null ? sess.section_index : 0;
       let left = status.remaining_sec;
       if (left == null && sess.ends_at != null && status.server_now != null) {
         left = Math.max(0, sess.ends_at - status.server_now);
@@ -551,8 +663,11 @@
         left = Math.max(0, sess.ends_at - Math.floor(Date.now() / 1000));
       }
       const leftTxt = left != null ? ("~" + left + "s left") : "time unknown";
+      const secTxt = nSec > 1
+        ? ("sections " + (iSec > 0 ? iSec : 0) + "/" + nSec + " · ")
+        : "";
       return "A waterfall scan is already in progress on " + iface +
-        " · est. " + leftTxt + " · RF disrupted until it finishes (or Stop)";
+        " · " + secTxt + "est. " + leftTxt + " · RF disrupted until it finishes (or Stop)";
     }
 
     function fillDurations(status) {
@@ -738,6 +853,7 @@
             setStatus("Select a radio with spectral support first");
             return;
           }
+          markStartHit();
           /* Re-check before start in case another UI started a scan. */
           const cur = await api("status", iface);
           if (cur.running) {
@@ -746,9 +862,8 @@
             startPoll();
             return;
           }
-          setStatus("Starting " + dur + "s session on " + iface +
+          setStatus("Starting " + dur + "s/section on " + iface +
             " (ch " + (ch || "current") + " / " + (bw || "current") + " MHz)…");
-          startBtn.disabled = true;
           const r = await api("start", iface, dur, ch, bw);
           if (!r.ok) {
             const st = await api("status", iface).catch(() => null);
@@ -764,15 +879,23 @@
           }
           const started = {
             running: true,
-            remaining_sec: dur,
+            remaining_sec: r.duration_sec || dur,
+            section_remaining_sec: r.section_duration_sec || dur,
+            section_count: r.section_count || 1,
+            scan_mode: r.scan_mode || null,
             session: {
               iface: r.iface || iface,
               ends_at: r.ends_at,
-              duration_sec: r.duration_sec || dur
+              duration_sec: r.duration_sec || dur,
+              section_duration_sec: r.section_duration_sec || dur,
+              section_count: r.section_count || 1,
+              section_index: 0,
+              section_ends_at: null,
+              scan_mode: r.scan_mode || null
             }
           };
           applyRunningUi(started);
-          setStatus(runningMessage(started));
+          setStatus(r.warning || runningMessage(started));
           startPoll();
         } catch (e) {
           applyRunningUi({ running: false });
