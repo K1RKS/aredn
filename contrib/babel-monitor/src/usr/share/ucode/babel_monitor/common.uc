@@ -5,9 +5,15 @@ import * as math from "math";
 
 export function packageVersion()
 {
-    return "0.1.36-r0";
+    return "0.1.37-r0";
 };
 
+/**
+ * Public CGI/JSON wire contract for central pollers.
+ * Bump when endpoints, query params, or response fields change in a way
+ * that clients must adapt (independent of SCHEMA_VERSION / packageVersion).
+ */
+export const API_VERSION = 1;
 export const SCHEMA_VERSION = 7;
 export const SOCK_PATH = "/var/run/babel-monitor.sock";
 export const RUN_DIR = "/var/run/babel-monitor";

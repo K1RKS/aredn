@@ -219,6 +219,7 @@ function metaObj()
     const oldest = storelib.peekOldest(store);
     const newest = storelib.peekNewest(store);
     return {
+        api_version: common.API_VERSION,
         schema_version: common.SCHEMA_VERSION,
         package_version: common.packageVersion(),
         node_id: store.identity.node_id,

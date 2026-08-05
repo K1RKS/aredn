@@ -38,6 +38,8 @@ function printStatus(resp)
     print("\n");
     print("status:\n");
     print(sprintf("  package            %s\n", st.package_version || common.packageVersion()));
+    print(sprintf("  api_version        %s\n", st.api_version != null ? st.api_version : common.API_VERSION));
+    print(sprintf("  schema_version     %s\n", st.schema_version != null ? st.schema_version : common.SCHEMA_VERSION));
     print(sprintf("  node_id            %s\n", st.node_id || ""));
     print(sprintf("  hostname           %s\n", st.hostname || ""));
     print(sprintf("  mac                %s\n", st.mac || ""));

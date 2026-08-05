@@ -89,7 +89,9 @@ def cmd_hello(node: str) -> int:
             "mac": meta.get("mac"),
             "hostname": meta.get("hostname"),
             "boot_id": meta.get("boot_id"),
+            "api_version": meta.get("api_version"),
             "schema_version": meta.get("schema_version"),
+            "package_version": meta.get("package_version"),
             "since_seq": st.get("since_seq", 0),
             "log": str(log_path(node)),
         }
@@ -104,7 +106,9 @@ def cmd_hello(node: str) -> int:
     print(f"hostname  {st.get('hostname')}")
     print(f"mac       {st.get('mac')}")
     print(f"boot_id   {st.get('boot_id')}")
+    print(f"api       {st.get('api_version')}")
     print(f"schema    {st.get('schema_version')}")
+    print(f"package   {st.get('package_version')}")
     print(f"state     {state_path(node)}")
     return 0
 
@@ -167,6 +171,9 @@ def cmd_status(node: str) -> int:
         "mac",
         "boot_id",
         "seen_boot_id",
+        "api_version",
+        "schema_version",
+        "package_version",
         "since_seq",
         "last_truncated",
         "last_complete",
