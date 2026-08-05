@@ -67,8 +67,8 @@ function readTopLines()
 
 function metaObj()
 {
-    const oldest = storelib.oldestSample(store);
-    const newest = storelib.latestSample(store);
+    const oldest = storelib.peekOldest(store);
+    const newest = storelib.peekNewest(store);
     return {
         schema_version: common.SCHEMA_VERSION,
         package_version: common.packageVersion(),
@@ -84,6 +84,7 @@ function metaObj()
         oldest_seq: oldest ? oldest.seq : 0,
         newest_t: newest ? newest.t : null,
         newest_seq: newest ? newest.seq : 0,
+        label_count: length(store.labels),
         mem_total_kb: store.last.mem_total_kb,
         compress_default: cfg.compress ? "on" : "off",
         enabled: cfg.enabled ? "on" : "off",
@@ -157,11 +158,13 @@ function handleRequest(line)
         };
     }
     if (cmd === "series") {
-        const sec = common.clampInt(args.seconds || 3600, 60, 14400, 3600);
+        const sec = common.clampInt(args.seconds || common.SERIES_SLICE_S, 1, common.SERIES_SLICE_S, common.SERIES_SLICE_S);
+        const end_age = common.clampInt(args.end_age || 0, 0, 14400, 0);
         return {
             boot_id: store.boot_id,
             seconds: sec,
-            samples: storelib.seriesWindow(store, sec)
+            end_age: end_age,
+            samples: storelib.seriesWindow(store, sec, end_age)
         };
     }
     if (cmd === "syslog") {

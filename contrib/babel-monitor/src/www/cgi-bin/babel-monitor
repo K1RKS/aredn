@@ -61,8 +61,9 @@ else if (api === "events") {
     }
 }
 else if (api === "series") {
-    const sec = qparam("seconds") || "3600";
-    cmd = sprintf("series seconds=%s", sec);
+    const sec = qparam("seconds") || "300";
+    const end_age = qparam("end_age") || "0";
+    cmd = sprintf("series seconds=%s end_age=%s", sec, end_age);
 }
 else if (api === "syslog") {
     const limit = qparam("limit") || "50";

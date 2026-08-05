@@ -1,43 +1,36 @@
 /**
- * In-RAM packed sample + event rings (no flash I/O).
+ * In-RAM dense sample + event rings (no flash I/O).
  *
- * Samples are stored as dense arrays (not keyed objects) to cut ucode RAM.
- * Wire/API responses expand back to named fields via expandSample().
- *
- * Packed layout (schema 5):
- *  0 t, 1 seq,
- *  2 neighbor_count, 3 routable_count,
- *  4 route_count_20, 5 route_count_21, 6 route_count_22,
- *  7 mean_lq, 8 min_lq, 9 mean_cost, 10 bad_cost_count,
- *  11 neighbor_add, 12 neighbor_remove,
- *  13 tx_packets_delta, 14 tx_retries_delta, 15 tx_fail_delta,
- *  16 mean_snr, 17 mean_tx_bitrate,
- *  18 host_count, 19 host_change_delta,
- *  20 dns_reload_delta, 21 babel_hard_delta, 22 babel_soft_delta,
- *  23 uptime_s, 24 reboot_delta,
- *  25 mem_used_pct, 26 mem_available_kb,
- *  27 cpu_pct, 28 cpu_peak_pct,
- *  29 lqm_ok, 30 babel_ok,
- *  31 rf (null or {label: snr, ...} when non-empty),
- *  32 rx_packets_delta,
- *  33 links (null or {label: [tx_delta, rx_delta], ...} when non-empty)
+ * Samples live in one statically allocated flat int buffer:
+ *   index i → offset i * SAMPLE_WIDTH (schema 7).
+ * A rolling sample_head overwrites slots in place — never allocate/drop sample
+ * vectors. RF/link labels live once in store.labels; the buffer stores indices.
+ * Wire/API expands to named fields on demand (never cached on the store).
  */
 import * as common from "babel_monitor.common";
 
+function newEventSlot()
+{
+    return { t: 0, seq: 0, type: "", detail: "" };
+}
+
 export function createStore()
 {
-    const samples = [];
-    const events = [];
-    for (let i = 0; i < common.SAMPLE_CAP; i++) {
-        push(samples, null);
+    const buf = [];
+    const n = common.SAMPLE_CAP * common.SAMPLE_WIDTH;
+    for (let i = 0; i < n; i++) {
+        push(buf, 0);
     }
+    const events = [];
     for (let i = 0; i < common.EVENT_CAP; i++) {
-        push(events, null);
+        push(events, newEventSlot());
     }
 
     return {
-        samples,
+        buf,
         events,
+        labels: [],
+        label_by_name: {},
         sample_cap: common.SAMPLE_CAP,
         event_cap: common.EVENT_CAP,
         sample_head: 0,
@@ -76,119 +69,228 @@ export function createStore()
     };
 };
 
-function mapNonEmpty(m)
+function slotOff(i)
 {
-    if (m == null) {
-        return null;
-    }
-    for (let k in m) {
-        return m;
-    }
-    return null;
+    return i * common.SAMPLE_WIDTH;
 };
 
-/** Pack a named sample object into a dense array for the ring. */
-export function packSample(s)
+/** Intern a display label; returns index or -1 if dictionary is full. */
+export function internLabel(store, name)
 {
-    return [
-        int(s.t), int(s.seq),
-        int(s.neighbor_count), int(s.routable_count),
-        int(s.route_count_20), int(s.route_count_21), int(s.route_count_22),
-        int(s.mean_lq), int(s.min_lq), int(s.mean_cost), int(s.bad_cost_count),
-        int(s.neighbor_add), int(s.neighbor_remove),
-        int(s.tx_packets_delta), int(s.tx_retries_delta), int(s.tx_fail_delta),
-        int(s.mean_snr), int(s.mean_tx_bitrate),
-        int(s.host_count), int(s.host_change_delta),
-        int(s.dns_reload_delta), int(s.babel_hard_delta), int(s.babel_soft_delta),
-        int(s.uptime_s), int(s.reboot_delta),
-        int(s.mem_used_pct), int(s.mem_available_kb),
-        int(s.cpu_pct), int(s.cpu_peak_pct),
-        int(s.lqm_ok), int(s.babel_ok),
-        mapNonEmpty(s.rf),
-        int(s.rx_packets_delta),
-        mapNonEmpty(s.links)
-    ];
+    if (name == null || name === "") {
+        return -1;
+    }
+    const key = `${name}`;
+    const existing = store.label_by_name[key];
+    if (existing != null) {
+        return int(existing);
+    }
+    if (length(store.labels) >= common.LABEL_CAP) {
+        return -1;
+    }
+    const idx = length(store.labels);
+    push(store.labels, key);
+    store.label_by_name[key] = idx;
+    return idx;
 };
 
-/** Expand a packed ring entry (or pass through a legacy object). */
-export function expandSample(p)
+function labelAt(store, idx)
 {
-    if (p == null) {
-        return null;
+    if (idx == null || idx < 0) {
+        return "";
     }
-    if (type(p) != "array") {
-        return p;
+    const n = length(store.labels);
+    if (idx >= n) {
+        return "";
     }
-    const o = {
-        t: p[0],
-        seq: p[1],
-        neighbor_count: p[2],
-        routable_count: p[3],
-        route_count_20: p[4],
-        route_count_21: p[5],
-        route_count_22: p[6],
-        mean_lq: p[7],
-        min_lq: p[8],
-        mean_cost: p[9],
-        bad_cost_count: p[10],
-        neighbor_add: p[11],
-        neighbor_remove: p[12],
-        tx_packets_delta: p[13],
-        tx_retries_delta: p[14],
-        tx_fail_delta: p[15],
-        mean_snr: p[16],
-        mean_tx_bitrate: p[17],
-        host_count: p[18],
-        host_change_delta: p[19],
-        dns_reload_delta: p[20],
-        babel_hard_delta: p[21],
-        babel_soft_delta: p[22],
-        uptime_s: p[23],
-        reboot_delta: p[24],
-        mem_used_pct: p[25],
-        mem_available_kb: p[26],
-        cpu_pct: p[27],
-        cpu_peak_pct: p[28],
-        lqm_ok: p[29],
-        babel_ok: p[30],
-        rx_packets_delta: length(p) > 32 ? p[32] : 0
+    return store.labels[idx];
+};
+
+function packedTAt(store, slot)
+{
+    return int(store.buf[slotOff(slot)]);
+};
+
+function packedSeqAt(store, slot)
+{
+    return int(store.buf[slotOff(slot) + 1]);
+};
+
+/**
+ * Write sample fields into flat buffer slot (in place).
+ * Optional s.rf / s.links maps become label-index pairs/triples.
+ */
+export function writeSampleSlot(store, slot, s)
+{
+    const b = store.buf;
+    const o = slotOff(slot);
+    b[o + 0] = int(s.t);
+    b[o + 1] = int(s.seq);
+    b[o + 2] = int(s.neighbor_count);
+    b[o + 3] = int(s.routable_count);
+    b[o + 4] = int(s.route_count_20);
+    b[o + 5] = int(s.route_count_21);
+    b[o + 6] = int(s.route_count_22);
+    b[o + 7] = int(s.mean_lq);
+    b[o + 8] = int(s.min_lq);
+    b[o + 9] = int(s.mean_cost);
+    b[o + 10] = int(s.bad_cost_count);
+    b[o + 11] = int(s.neighbor_add);
+    b[o + 12] = int(s.neighbor_remove);
+    b[o + 13] = int(s.tx_packets_delta);
+    b[o + 14] = int(s.tx_retries_delta);
+    b[o + 15] = int(s.tx_fail_delta);
+    b[o + 16] = int(s.mean_snr);
+    b[o + 17] = int(s.mean_tx_bitrate);
+    b[o + 18] = int(s.host_count);
+    b[o + 19] = int(s.host_change_delta);
+    b[o + 20] = int(s.dns_reload_delta);
+    b[o + 21] = int(s.babel_hard_delta);
+    b[o + 22] = int(s.babel_soft_delta);
+    b[o + 23] = int(s.uptime_s);
+    b[o + 24] = int(s.reboot_delta);
+    b[o + 25] = int(s.mem_used_pct);
+    b[o + 26] = int(s.mem_available_kb);
+    b[o + 27] = int(s.cpu_pct);
+    b[o + 28] = int(s.cpu_peak_pct);
+    b[o + 29] = int(s.lqm_ok);
+    b[o + 30] = int(s.babel_ok);
+    b[o + 31] = int(s.rx_packets_delta);
+    b[o + 32] = s.daemon_rss_kb != null ? int(s.daemon_rss_kb) : 0;
+
+    let rf_n = 0;
+    const rf_base = o + common.SAMPLE_HDR;
+    if (s.rf) {
+        for (let name in s.rf) {
+            if (rf_n >= common.RF_NEIGHBOR_CAP) {
+                break;
+            }
+            const li = internLabel(store, name);
+            if (li < 0) {
+                continue;
+            }
+            b[rf_base + rf_n * 2] = li;
+            b[rf_base + rf_n * 2 + 1] = int(s.rf[name]);
+            rf_n++;
+        }
+    }
+    b[o + 33] = rf_n;
+    for (let i = rf_n; i < common.RF_NEIGHBOR_CAP; i++) {
+        b[rf_base + i * 2] = 0;
+        b[rf_base + i * 2 + 1] = 0;
+    }
+
+    let link_n = 0;
+    const link_base = o + common.SAMPLE_HDR + common.RF_NEIGHBOR_CAP * 2;
+    if (s.links) {
+        for (let name in s.links) {
+            if (link_n >= common.LINK_IO_CAP) {
+                break;
+            }
+            const li = internLabel(store, name);
+            if (li < 0) {
+                continue;
+            }
+            const pair = s.links[name];
+            let tx = 0;
+            let rx = 0;
+            if (type(pair) == "array") {
+                tx = int(pair[0]);
+                rx = int(pair[1]);
+            }
+            else if (pair) {
+                tx = int(pair.tx);
+                rx = int(pair.rx);
+            }
+            b[link_base + link_n * 3] = li;
+            b[link_base + link_n * 3 + 1] = tx;
+            b[link_base + link_n * 3 + 2] = rx;
+            link_n++;
+        }
+    }
+    b[o + 34] = link_n;
+    for (let i = link_n; i < common.LINK_IO_CAP; i++) {
+        b[link_base + i * 3] = 0;
+        b[link_base + i * 3 + 1] = 0;
+        b[link_base + i * 3 + 2] = 0;
+    }
+};
+
+/** Expand one ring slot to named wire fields (ephemeral). */
+export function expandSampleAt(store, slot)
+{
+    const b = store.buf;
+    const o = slotOff(slot);
+    const obj = {
+        t: b[o + 0],
+        seq: b[o + 1],
+        neighbor_count: b[o + 2],
+        routable_count: b[o + 3],
+        route_count_20: b[o + 4],
+        route_count_21: b[o + 5],
+        route_count_22: b[o + 6],
+        mean_lq: b[o + 7],
+        min_lq: b[o + 8],
+        mean_cost: b[o + 9],
+        bad_cost_count: b[o + 10],
+        neighbor_add: b[o + 11],
+        neighbor_remove: b[o + 12],
+        tx_packets_delta: b[o + 13],
+        tx_retries_delta: b[o + 14],
+        tx_fail_delta: b[o + 15],
+        mean_snr: b[o + 16],
+        mean_tx_bitrate: b[o + 17],
+        host_count: b[o + 18],
+        host_change_delta: b[o + 19],
+        dns_reload_delta: b[o + 20],
+        babel_hard_delta: b[o + 21],
+        babel_soft_delta: b[o + 22],
+        uptime_s: b[o + 23],
+        reboot_delta: b[o + 24],
+        mem_used_pct: b[o + 25],
+        mem_available_kb: b[o + 26],
+        cpu_pct: b[o + 27],
+        cpu_peak_pct: b[o + 28],
+        lqm_ok: b[o + 29],
+        babel_ok: b[o + 30],
+        rx_packets_delta: b[o + 31],
+        daemon_rss_kb: b[o + 32]
     };
-    if (p[31] != null) {
-        o.rf = p[31];
-    }
-    if (length(p) > 33 && p[33] != null) {
-        o.links = p[33];
-    }
-    return o;
-};
 
-function packedT(p)
-{
-    if (p == null) {
-        return 0;
+    const rf_n = int(b[o + 33] || 0);
+    if (rf_n > 0) {
+        const rf = {};
+        const rf_base = o + common.SAMPLE_HDR;
+        for (let i = 0; i < rf_n && i < common.RF_NEIGHBOR_CAP; i++) {
+            const name = labelAt(store, b[rf_base + i * 2]);
+            if (name !== "") {
+                rf[name] = b[rf_base + i * 2 + 1];
+            }
+        }
+        obj.rf = rf;
     }
-    if (type(p) == "array") {
-        return p[0];
-    }
-    return p.t;
-};
 
-function packedSeq(p)
-{
-    if (p == null) {
-        return 0;
+    const link_n = int(b[o + 34] || 0);
+    if (link_n > 0) {
+        const links = {};
+        const link_base = o + common.SAMPLE_HDR + common.RF_NEIGHBOR_CAP * 2;
+        for (let i = 0; i < link_n && i < common.LINK_IO_CAP; i++) {
+            const name = labelAt(store, b[link_base + i * 3]);
+            if (name !== "") {
+                links[name] = [ int(b[link_base + i * 3 + 1]), int(b[link_base + i * 3 + 2]) ];
+            }
+        }
+        obj.links = links;
     }
-    if (type(p) == "array") {
-        return p[1];
-    }
-    return p.seq;
+
+    return obj;
 };
 
 export function pushSample(store, s)
 {
     s.seq = store.next_seq;
     store.next_seq++;
-    store.samples[store.sample_head] = packSample(s);
+    writeSampleSlot(store, store.sample_head, s);
     store.sample_head = (store.sample_head + 1) % store.sample_cap;
     if (store.sample_count < store.sample_cap) {
         store.sample_count++;
@@ -197,21 +299,36 @@ export function pushSample(store, s)
 
 export function pushEvent(store, type, detail)
 {
-    const e = {
-        t: common.nowUnix(),
-        seq: store.next_event_seq,
-        type: type,
-        detail: detail || ""
-    };
+    const e = store.events[store.event_head];
+    e.t = common.nowUnix();
+    e.seq = store.next_event_seq;
+    e.type = type || "";
+    e.detail = detail || "";
     store.next_event_seq++;
-    store.events[store.event_head] = e;
     store.event_head = (store.event_head + 1) % store.event_cap;
     if (store.event_count < store.event_cap) {
         store.event_count++;
     }
 };
 
-/** Oldest-first list of samples with seq > since_seq, max limit (expanded). */
+export function peekOldest(store)
+{
+    if (store.sample_count < 1) {
+        return null;
+    }
+    const slot = (store.sample_head - store.sample_count + store.sample_cap) % store.sample_cap;
+    return { t: packedTAt(store, slot), seq: packedSeqAt(store, slot) };
+};
+
+export function peekNewest(store)
+{
+    if (store.sample_count < 1) {
+        return null;
+    }
+    const slot = (store.sample_head - 1 + store.sample_cap) % store.sample_cap;
+    return { t: packedTAt(store, slot), seq: packedSeqAt(store, slot) };
+};
+
 export function syncSamples(store, since_seq, limit)
 {
     const out = [];
@@ -224,19 +341,14 @@ export function syncSamples(store, since_seq, limit)
     let oldest_seq = 0;
     let newest_seq = 0;
     for (let i = 0; i < n; i++) {
-        const raw = store.samples[(start + i) % store.sample_cap];
-        if (!raw) {
-            continue;
-        }
-        const seq = packedSeq(raw);
+        const slot = (start + i) % store.sample_cap;
+        const seq = packedSeqAt(store, slot);
         if (oldest_seq === 0) {
             oldest_seq = seq;
         }
         newest_seq = seq;
-        if (seq > since_seq) {
-            if (length(out) < limit) {
-                push(out, expandSample(raw));
-            }
+        if (seq > since_seq && length(out) < limit) {
+            push(out, expandSampleAt(store, slot));
         }
     }
     const truncated = since_seq > 0 && since_seq < oldest_seq - 1;
@@ -262,15 +374,17 @@ export function syncEvents(store, since_seq, limit)
     let newest_seq = 0;
     for (let i = 0; i < n; i++) {
         const e = store.events[(start + i) % store.event_cap];
-        if (!e) {
-            continue;
-        }
         if (oldest_seq === 0) {
             oldest_seq = e.seq;
         }
         newest_seq = e.seq;
         if (e.seq > since_seq && length(out) < limit) {
-            push(out, e);
+            push(out, {
+                t: e.t,
+                seq: e.seq,
+                type: e.type,
+                detail: e.detail
+            });
         }
     }
     return {
@@ -281,19 +395,28 @@ export function syncEvents(store, since_seq, limit)
     };
 };
 
-export function seriesWindow(store, seconds)
+/**
+ * Expand samples in [now - end_age - seconds, now - end_age].
+ * seconds capped to SERIES_SLICE_S (5m) so one request cannot expand the full ring.
+ */
+export function seriesWindow(store, seconds, end_age)
 {
     const out = [];
     const n = store.sample_count;
     if (n === 0) {
         return out;
     }
-    const cutoff = common.nowUnix() - seconds;
+    const sec = common.clampInt(seconds, 1, common.SERIES_SLICE_S, common.SERIES_SLICE_S);
+    const age = common.clampInt(end_age || 0, 0, 14400, 0);
+    const now = common.nowUnix();
+    const win_end = now - age;
+    const win_start = win_end - sec;
     const start = (store.sample_head - n + store.sample_cap) % store.sample_cap;
     for (let i = 0; i < n; i++) {
-        const raw = store.samples[(start + i) % store.sample_cap];
-        if (raw && packedT(raw) >= cutoff) {
-            push(out, expandSample(raw));
+        const slot = (start + i) % store.sample_cap;
+        const t = packedTAt(store, slot);
+        if (t >= win_start && t <= win_end) {
+            push(out, expandSampleAt(store, slot));
         }
     }
     return out;
@@ -304,7 +427,7 @@ export function latestSample(store)
     if (store.sample_count < 1) {
         return null;
     }
-    return expandSample(store.samples[(store.sample_head - 1 + store.sample_cap) % store.sample_cap]);
+    return expandSampleAt(store, (store.sample_head - 1 + store.sample_cap) % store.sample_cap);
 };
 
 export function oldestSample(store)
@@ -312,11 +435,18 @@ export function oldestSample(store)
     if (store.sample_count < 1) {
         return null;
     }
-    return expandSample(store.samples[(store.sample_head - store.sample_count + store.sample_cap) % store.sample_cap]);
+    return expandSampleAt(store, (store.sample_head - store.sample_count + store.sample_cap) % store.sample_cap);
 };
 
 export function estimateBytes(store)
 {
-    /* Packed arrays + optional rf/links maps; ucode still has overhead */
-    return 98304 + store.sample_count * 480 + store.event_count * 64;
+    let label_bytes = 0;
+    for (let i = 0; i < length(store.labels); i++) {
+        label_bytes += 24 + length(store.labels[i]);
+    }
+    /* One flat buf + event shells + labels */
+    return 49152
+        + length(store.buf) * 12
+        + store.event_cap * 96
+        + label_bytes;
 };

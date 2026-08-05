@@ -257,6 +257,20 @@ function cpuPctFromDelta(prev, cur)
     return pct;
 }
 
+/** babel-monitord VmRSS (kB) — /proc/self while sampling in-daemon. */
+function readDaemonRssKb()
+{
+    const raw = fs.readfile("/proc/self/status");
+    if (!raw) {
+        return null;
+    }
+    const m = match(raw, /VmRSS:\s+([0-9]+)/);
+    if (!m) {
+        return null;
+    }
+    return int(m[1]);
+}
+
 /**
  * 1s peak sampler — call from daemon timer between samples.
  * Updates store.last.cpu_peak_pct with max busy% over short windows.
@@ -719,7 +733,8 @@ export function collectSample(store, cfg)
         cpu_peak_pct: cpu_peak_pct,
         lqm_ok: lqm_ok ? 1 : 0,
         babel_ok: babel_ok ? 1 : 0,
-        rx_packets_delta: rx_packets_delta
+        rx_packets_delta: rx_packets_delta,
+        daemon_rss_kb: readDaemonRssKb()
     };
     /* Only attach rf/links maps when non-empty (avoids 1440 empty objects) */
     let rf_n = 0;

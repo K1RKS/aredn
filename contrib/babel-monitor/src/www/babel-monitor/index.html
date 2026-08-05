@@ -177,6 +177,7 @@
       <button type="button" data-metric="hosts">Hosts</button>
       <button type="button" data-metric="cpu">CPU</button>
       <button type="button" data-metric="ram">RAM</button>
+      <button type="button" data-metric="selfrss">Self RSS</button>
       <button type="button" data-metric="rf">RF</button>
       <button type="button" data-metric="syslog">Syslog</button>
       <button type="button" data-metric="top">Top</button>
@@ -291,6 +292,13 @@
       ],
       minY: 0,
       maxY: 100
+    },
+    selfrss: {
+      label: "Self RSS",
+      series: [
+        { key: "daemon_rss_kb", label: "Self RSS KB", color: PALETTE[0] }
+      ],
+      minY: 0
     },
     rf: {
       label: "RF",
@@ -1038,8 +1046,35 @@
   }
 
   async function refreshSeries() {
-    const data = await getJsonRetry(API + "?api=series&seconds=" + windowSec);
-    series = data.samples || [];
+    const slice = 300; /* match server SERIES_SLICE_S — one expand peak at a time */
+    const want = windowSec;
+    let all = [];
+    if (want <= slice) {
+      const data = await getJsonRetry(API + "?api=series&seconds=" + want + "&end_age=0");
+      all = data.samples || [];
+    } else {
+      for (let endAge = want - slice; endAge >= 0; endAge -= slice) {
+        const sec = Math.min(slice, want - endAge);
+        const data = await getJsonRetry(
+          API + "?api=series&seconds=" + sec + "&end_age=" + endAge
+        );
+        const part = data.samples || [];
+        for (let i = 0; i < part.length; i++) all.push(part[i]);
+      }
+      /* Dedupe by seq (slice edges can overlap by one sample) */
+      all.sort(function (a, b) { return (a.seq || 0) - (b.seq || 0); });
+      const dedup = [];
+      let lastSeq = -1;
+      for (let i = 0; i < all.length; i++) {
+        const s = all[i];
+        const seq = s.seq || 0;
+        if (seq === lastSeq) continue;
+        dedup.push(s);
+        lastSeq = seq;
+      }
+      all = dedup;
+    }
+    series = all;
     if (hoverIdx >= series.length) {
       hoverIdx = series.length ? series.length - 1 : -1;
       if (hoverIdx < 0) hideTip();

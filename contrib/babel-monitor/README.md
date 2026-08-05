@@ -4,7 +4,7 @@ Side-loaded AREDN APK that keeps Babel / LQM / arednlink metrics in RAM, exposes
 stateless JSON pull API for external historians, a public status page, and a
 live-config CLI.
 
-- Package: `babel-monitor-0.1.29-r0.apk`
+- Package: `babel-monitor-0.1.32-r0.apk`
 - Daemon: `babel-monitord`
 - CLI: `babel-monitor`
 - Status UI: `/babel-monitor/`
@@ -18,7 +18,7 @@ cd contrib/babel-monitor
 ./build.sh
 ```
 
-APK lands in `dist/babel-monitor-0.1.29-r0.apk`.
+APK lands in `dist/babel-monitor-0.1.32-r0.apk`.
 
 ## Install on a node
 
@@ -31,17 +31,18 @@ From the work-area root (after configuring `install_package_remotely.conf`):
 Or copy the APK and:
 
 ```sh
-apk add --allow-untrusted /tmp/babel-monitor-0.1.29-r0.apk
+apk add --allow-untrusted /tmp/babel-monitor-0.1.32-r0.apk
 ```
 
 ## On-node storage
 
 - Fixed in-RAM sample ring (`1440` slots ≈ **4h @ 10s**) + event ring (`512`)
-- Samples stored as **packed arrays** in the ring (expanded to named JSON on the API)
-- `mem_total_kb` lives in meta only (not every sample); empty `rf` / `links` maps are omitted
-- Per-sample optional maps capped at 12 entries each (`rf` SNR, `links` TX/RX Δ)
-- Target RSS ~≤1–1.5MB with maps (hard ceiling 2MB); reboot clears history
-- Flash/UCI holds **config only** — never metrics
+- Each sample slot is a slice of one **statically allocated flat int buffer** (schema 7), overwritten in place via a rolling head index (not allocate/drop)
+- RF/link **names** live in a shared label dictionary (cap 64); the buffer stores indices + values only
+- Series expands at most **5 minutes** of samples per API call (UI stitches longer windows)
+- Expanded named objects are built only for the response — never retained on the store
+- `mem_total_kb` lives in meta only; flash/UCI holds **config only** — never metrics
+- Reboot / daemon restart clears history
 
 ## CLI
 
@@ -72,7 +73,7 @@ Base: `/cgi-bin/babel-monitor`
 | `?api=sync&since_seq=N&limit=M` | Samples with `seq > N` for current `boot_id` |
 | `?api=events&since_seq=N` | Event ring |
 | `?api=live` | Current neighbors + latest sample |
-| `?api=series&seconds=S` | Samples in a time window (status graphs) |
+| `?api=series&seconds=S&end_age=A` | Samples in `[now-A-S, now-A]` (S capped at **300**/5m per request; UI fetches longer windows as slices) |
 | `?api=syslog&limit=N` | Last N syslog lines via `logread` (default 50; not stored in the ring) |
 | `?api=top` | One-shot `top -bn1` process table (not stored in the ring) |
 
@@ -80,15 +81,16 @@ Optional `compress=1|0|on|off` (default from UCI; gzip level 1 when body ≥ `co
 
 Gap-tolerant: HTTP 200 when the daemon is up; responses include `truncated`, `gap_before`, `next_seq`, `complete`, `boot_id`. No per-poller state on the node.
 
-### Sample host / RF / link fields (schema 5)
+### Sample host / RF / link fields (schema 7)
 
-Wire samples (sync/series/live) use named fields. Internally the ring stores packed arrays.
+Wire samples (sync/series/live) use named fields. Internally the ring is one **flat int buffer** (schema 7; slots overwritten in place). RF/link **labels live once** in a shared dictionary (`LABEL_CAP=64`); each sample stores label indices + values only.
 
 | Field | Meaning |
 |-------|---------|
 | `uptime_s` | Seconds since boot (`/proc/uptime`) — drops on reboot |
 | `reboot_delta` | `1` if uptime decreased since the previous sample |
 | `mem_available_kb` / `mem_used_pct` | RAM from `/proc/meminfo` |
+| `daemon_rss_kb` | babel-monitord VmRSS (kB) from `/proc/self` at sample time |
 | `cpu_pct` | Busy % over the full sample interval (`/proc/stat`) |
 | `cpu_peak_pct` | Peak busy % from 1s windows within the interval |
 | `mean_snr` | Average SNR across RF LQM trackers (AVG on the RF graph) |
@@ -97,7 +99,7 @@ Wire samples (sync/series/live) use named fields. Internally the ring stores pac
 | `tx_retries_delta` / `tx_fail_delta` | LQM TX retry/fail Δ (mainly RF) |
 | `links` | Present when link I/O exists: label → `[tx_delta, rx_delta]` (capped at 12; `br0.N` labeled `X-Link(N)`) |
 
-`mem_total_kb` and `daemon_rss_kb` (babel-monitord VmRSS from `/proc/self`) are on `?api=meta` / live `meta` only — not stored in the sample ring. `rss_estimate_bytes` remains a packed-ring size heuristic.
+`mem_total_kb` is on `?api=meta` / live `meta` only (nearly constant). Live `meta.daemon_rss_kb` is the current reading; per-sample `daemon_rss_kb` is in the ring for history. `meta.label_count` is the shared label dictionary size. `rss_estimate_bytes` estimates the dense ring.
 
 Live neighbors also include `tx_packets_delta` / `rx_packets_delta` per neighbor (iface or LQM station). Xlink ifaces `br0.N` display as `X-Link(N)`.
 
@@ -117,7 +119,7 @@ State/logs: `~/.babel-monitor/` (override with `BABEL_MONITOR_STATE`).
 
 ## Status page
 
-Open `http://<node>/babel-monitor/` — live neighbors, KPIs, and a history graph with metric tabs (LQ, Cost, Neighbors, Routes, Links, Link I/O, Hosts, CPU, RAM, RF) and 5m / 30m / 1h / 4h ranges from RAM (ring retains ~4h @ 10s). The X axis is fixed to the selected window (partial buffers are not stretched). Hover for a crosshair and values at that sample. **Links** plots node-wide TX/RX/retry/fail Δ; **Link I/O** plots per-link TX/RX Δ (plus Σ). The RF tab plots SNR for each RF neighbor plus AVG (up to 12 neighbors per sample). Viewing the UI does not write flash. No Tools menu entry.
+Open `http://<node>/babel-monitor/` — live neighbors, KPIs, and a history graph with metric tabs (LQ, Cost, Neighbors, Routes, Packets, Link I/O, Hosts, CPU, RAM, Self RSS, RF, Syslog, Top) and 5m / 30m / 1h / 4h ranges from RAM (ring retains ~4h @ 10s). Longer chart windows are fetched as 5m API slices. The X axis is fixed to the selected window. Hover for a crosshair and values. Viewing the UI does not write flash. No Tools menu entry.
 
 ## Layout
 
