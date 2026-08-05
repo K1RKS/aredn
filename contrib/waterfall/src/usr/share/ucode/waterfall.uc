@@ -4,17 +4,22 @@
  * Focus: Rocket M5, PowerBeam 500 / 500 AC, MikroTik hAP ac lite.
  *
  * Capture modes:
- *   ath9k  — spectral FFT via spectral_scan_ctl
+ *   ath9k  — spectral FFT via spectral_scan_ctl.
+ *            Current/single: background+trigger (mesh-safer).
+ *            ALL/wide stitch: classic kn6plv path — chanscan + iw scan freq
+ *            (temporary mesh RF interrupt; denser full-band FFT).
  *   ath10k — spectral FFT via isolated worker (flock + hard timeout + local
  *            Wi-Fi recovery). Survey waterfall is the automatic fallback if
  *            FFT returns empty, is in cooldown, or recovery fires.
  *
  * ath10k spectral_scan_ctl can wedge QCA988x on IBSS/mesh; the worker never
  * leaves ctl enabled, serializes captures, and recovers with iface bounce /
- * wifi reload (not power cycle) when the hard timeout fires.
+ * wifi reload (not power cycle) when the hard timeout fires. Do not use
+ * Tim’s iw-scan-while-spectral as the ath10k primary path.
  */
 
 import * as fs from "fs";
+import * as math from "math";
 import * as nl80211 from "nl80211";
 import * as radios from "aredn.radios";
 import * as hardware from "aredn.hardware";
@@ -37,10 +42,14 @@ const MAX_SWEEPS = 400;
 const TARGET_BINS = 64;
 const ATH10K_FFT_HARD_TIMEOUT = 4;
 const SPECTRAL_COOLDOWN = "/tmp/waterfall-spectral.cooldown";
+/* kn6plv-style absolute floor; bins stored as level = max(0, dBm - MIN_SIG). */
+const MIN_SIG_DBM = -125;
+const MAX_SIG_DBM = -35;
+const SPECTRAL_COUNT_DEFAULT = 32;
 
 export function packageVersion()
 {
-    return "0.2.30-r0";
+    return "0.2.31-r0";
 };
 
 function isMeshMode(mode)
@@ -112,7 +121,7 @@ function ath10kNote(board)
 function focusNote(chipset, fftAvailable, board, captureSafe, mode)
 {
     if (chipset === "ath9k" && fftAvailable) {
-        return "ath9k spectral FFT available (Rocket M5 / PowerBeam M5 class; also hAP ac lite 2.4 GHz). Current-channel capture supported.";
+        return "ath9k spectral FFT available (Rocket M5 / PowerBeam M5 class; also hAP ac lite 2.4 GHz). Current-channel: background+trigger; ALL/wide: classic chanscan+iw scan (temporary mesh RF interrupt).";
     }
     if (chipset === "ath10k") {
         return ath10kNote(board);
@@ -212,6 +221,39 @@ function writeCtl(path, value)
     return true;
 }
 
+function writeSpectralCount(paths, count)
+{
+    if (!paths?.count) {
+        return false;
+    }
+    return writeCtl(paths.count, `${count != null ? count : SPECTRAL_COUNT_DEFAULT}`);
+}
+
+function s8(b)
+{
+    return b >= 128 ? b - 256 : b;
+}
+
+function log10safe(x)
+{
+    if (x == null || x <= 0) {
+        return -999;
+    }
+    if (math.log10) {
+        return math.log10(x);
+    }
+    return math.log(x) / math.log(10);
+}
+
+/* kn6plv absolute dBm → non-negative heatmap level (0 = empty / below floor). */
+function powerToLevel(sig)
+{
+    if (sig == null || sig < MIN_SIG_DBM || sig > MAX_SIG_DBM) {
+        return 0;
+    }
+    return int(sig - MIN_SIG_DBM);
+}
+
 function nowSec()
 {
     return int(clock()[0]);
@@ -305,6 +347,7 @@ function ath10kChanWidthMhz(bw)
 
 /**
  * Parse spectral TLV binary into sample objects { type, f_start, f_stop, noise, bins }.
+ * bins are kn6plv-style levels (dBm − MIN_SIG_DBM), not raw FFT magnitudes.
  */
 export function parseFftTlvs(buf, maxSamples)
 {
@@ -342,6 +385,8 @@ export function parseFftTlvs(buf, maxSamples)
             const bw = ord(buf, base);
             const freq1 = be16(buf, base + 1);
             const noise = be16s(buf, base + 5);
+            const rssi = s8(ord(buf, base + 22));
+            const maxExp = ord(buf, base + 25);
             const binCount = plen - hdr;
             if (noise < -140 || noise > -20 || freq1 < 4900 || freq1 > 6100 ||
                 (binCount !== 64 && binCount !== 128 && binCount !== 256)) {
@@ -349,9 +394,30 @@ export function parseFftTlvs(buf, maxSamples)
                 continue;
             }
             const tsf = be64(buf, base + 13);
-            const bins = [];
+            let datasqsum = 0;
+            const raw = [];
             for (let i = 0; i < binCount; i++) {
-                push(bins, ord(buf, base + hdr + i));
+                const data = ord(buf, base + hdr + i) << maxExp;
+                push(raw, data);
+                datasqsum += data * data;
+            }
+            const levels = [];
+            if (datasqsum > 0) {
+                const signalOffset = noise + rssi - 10 * log10safe(datasqsum);
+                for (let i = 0; i < binCount; i++) {
+                    const data = raw[i];
+                    if (data > 0) {
+                        push(levels, powerToLevel(signalOffset + 20 * log10safe(data)));
+                    }
+                    else {
+                        push(levels, 0);
+                    }
+                }
+            }
+            else {
+                for (let i = 0; i < binCount; i++) {
+                    push(levels, 0);
+                }
             }
             let width = ath10kChanWidthMhz(bw);
             push(samples, {
@@ -361,30 +427,49 @@ export function parseFftTlvs(buf, maxSamples)
                 f_stop: freq1 + width / 2.0,
                 noise: noise,
                 tsf: tsf,
-                bins: downsampleBins(bins, TARGET_BINS)
+                bins: downsampleBins(levels, TARGET_BINS)
             });
             pos += total;
         }
         else if (typ === ATH_FFT_SAMPLE_HT20) {
-            /* tlv + max_exp(1) + freq(2) + rssi(1) + noise(1) + max_mag(2) + max_index(1) + bitmap(1) + tsf(8) + data(56) = 3+73 */
+            /* tlv + max_exp(1) + freq(2) + rssi(1) + noise(1) + max_mag(2) + max_index(1) + bitmap(1) + tsf(8) + data(56) */
             if (total < 3 + 17 + 56 || plen !== 73) {
                 pos++;
                 continue;
             }
+            const maxExp = ord(buf, base);
             const freq = be16(buf, base + 1);
             if (freq < 2300 || freq > 6100) {
                 pos++;
                 continue;
             }
-            const noise = ord(buf, base + 4);
-            let noiseS = noise;
-            if (noiseS >= 128) {
-                noiseS -= 256;
-            }
-            const bins = [];
+            const rssi = s8(ord(buf, base + 3));
+            const noiseS = s8(ord(buf, base + 4));
             const dataOff = base + 17;
+            let datasqsum = 0;
+            const raw = [];
             for (let i = 0; i < 56; i++) {
-                push(bins, ord(buf, dataOff + i));
+                const data = ord(buf, dataOff + i) << maxExp;
+                const datasq = data * data;
+                push(raw, datasq);
+                datasqsum += datasq;
+            }
+            const levels = [];
+            if (datasqsum > 0) {
+                for (let i = 0; i < 56; i++) {
+                    const datasq = raw[i];
+                    if (datasq > 0) {
+                        push(levels, powerToLevel(noiseS + rssi + 10 * log10safe(datasq / datasqsum)));
+                    }
+                    else {
+                        push(levels, 0);
+                    }
+                }
+            }
+            else {
+                for (let i = 0; i < 56; i++) {
+                    push(levels, 0);
+                }
             }
             push(samples, {
                 type: "ht20",
@@ -392,7 +477,7 @@ export function parseFftTlvs(buf, maxSamples)
                 f_start: freq - 10,
                 f_stop: freq + 10,
                 noise: noiseS,
-                bins: downsampleBins(bins, TARGET_BINS)
+                bins: downsampleBins(levels, TARGET_BINS)
             });
             pos += total;
         }
@@ -401,20 +486,40 @@ export function parseFftTlvs(buf, maxSamples)
                 pos++;
                 continue;
             }
+            const maxExp = ord(buf, base);
             const freq = be16(buf, base + 1);
             if (freq < 2300 || freq > 6100) {
                 pos++;
                 continue;
             }
-            const noise = ord(buf, base + 4);
-            let noiseS = noise;
-            if (noiseS >= 128) {
-                noiseS -= 256;
-            }
-            const bins = [];
+            const rssi = s8(ord(buf, base + 3));
+            const noiseS = s8(ord(buf, base + 4));
             const dataOff = base + 17;
-            for (let i = 0; i < 128; i++) {
-                push(bins, ord(buf, dataOff + i));
+            let datasqsum = 0;
+            const raw = [];
+            const binCount = 128;
+            for (let i = 0; i < binCount; i++) {
+                const data = ord(buf, dataOff + i) << maxExp;
+                const datasq = data * data;
+                push(raw, datasq);
+                datasqsum += datasq;
+            }
+            const levels = [];
+            if (datasqsum > 0) {
+                for (let i = 0; i < binCount; i++) {
+                    const datasq = raw[i];
+                    if (datasq > 0) {
+                        push(levels, powerToLevel(noiseS + rssi + 10 * log10safe(datasq / datasqsum)));
+                    }
+                    else {
+                        push(levels, 0);
+                    }
+                }
+            }
+            else {
+                for (let i = 0; i < binCount; i++) {
+                    push(levels, 0);
+                }
             }
             push(samples, {
                 type: "ht40",
@@ -422,7 +527,7 @@ export function parseFftTlvs(buf, maxSamples)
                 f_start: freq - 20,
                 f_stop: freq + 20,
                 noise: noiseS,
-                bins: downsampleBins(bins, TARGET_BINS)
+                bins: downsampleBins(levels, TARGET_BINS)
             });
             pos += total;
         }
@@ -524,6 +629,87 @@ export function disableAllSpectral()
         writeCtl(`${DBG_BASE}/${phy}/ath9k/spectral_scan_ctl`, "disable");
         writeCtl(`${DBG_BASE}/${phy}/ath10k/spectral_scan_ctl`, "disable");
     }
+};
+
+/**
+ * Build thinned MHz list for iw scan freq (kn6plv waterfall-update style).
+ */
+function buildChanscanFreqList(plan)
+{
+    const hops = plan?.hop_channels || plan?.sections || [];
+    const f0 = plan?.f_start;
+    const f1 = plan?.f_stop;
+    const bw = plan?.scan_bandwidth != null ? plan.scan_bandwidth :
+        (plan?.plot_bandwidth != null ? plan.plot_bandwidth : 10);
+    let step = int(bw / 10);
+    if (step < 1) {
+        step = 1;
+    }
+    const freqs = [];
+    const n = length(hops);
+    for (let i = 0; i < n; i++) {
+        const h = hops[i];
+        if (h == null || h.frequency == null) {
+            continue;
+        }
+        const f = int(h.frequency);
+        if (f0 != null && f < f0) {
+            continue;
+        }
+        if (f1 != null && f > f1) {
+            continue;
+        }
+        if (i === 0 || i === n - 1 || (i % step) === 0) {
+            push(freqs, f);
+        }
+    }
+    return freqs;
+};
+
+/**
+ * Classic kn6plv ath9k full-band capture: chanscan + iw scan freq list + relay read.
+ * Temporarily interrupts mesh RF. Always disables ctl on exit.
+ */
+export function captureAth9kChanscan(iface, phy, freqList)
+{
+    if (!iface || !phy) {
+        return { ok: false, bytes: 0, error: "missing iface/phy" };
+    }
+    const paths = spectralPaths(phy, "ath9k");
+    if (!paths || !fs.access(paths.ctl) || !fs.access(paths.relay)) {
+        return { ok: false, bytes: 0, error: "ath9k spectral paths missing" };
+    }
+    const freqs = freqList || [];
+    if (!length(freqs)) {
+        return { ok: false, bytes: 0, error: "empty chanscan freq list" };
+    }
+    let freqArg = "";
+    for (let i = 0; i < length(freqs); i++) {
+        freqArg += ` ${int(freqs[i])}`;
+    }
+    try {
+        system(`dd if=${paths.relay} of=/dev/null bs=4096 count=16 2>/dev/null`);
+        writeSpectralCount(paths, SPECTRAL_COUNT_DEFAULT);
+        if (!writeCtl(paths.ctl, "chanscan")) {
+            disableAllSpectral();
+            return { ok: false, bytes: 0, error: "Cannot write chanscan to spectral_scan_ctl" };
+        }
+        system(`iw dev ${iface} scan freq${freqArg} passive >/dev/null 2>&1`);
+        writeCtl(paths.ctl, "disable");
+        system(`dd if=${paths.relay} of=${FFT_OUT} bs=4096 count=32 2>/dev/null`);
+    }
+    catch (e) {
+        disableAllSpectral();
+        return { ok: false, bytes: 0, error: `${e}` };
+    }
+    disableAllSpectral();
+    const st = fs.stat(FFT_OUT);
+    const bytes = st ? int(st.size) : 0;
+    return {
+        ok: bytes > 0,
+        bytes: bytes,
+        error: bytes > 0 ? null : "No FFT samples from chanscan+iw scan"
+    };
 };
 
 export function isAdminRequest(env)
@@ -1812,6 +1998,7 @@ export function captureSpectral(preferredIface)
     const relay = cap.paths.relay;
 
     system(`dd if=${relay} of=/dev/null bs=4096 count=16 2>/dev/null`);
+    writeSpectralCount(cap.paths, SPECTRAL_COUNT_DEFAULT);
     if (!writeCtl(ctl, "background")) {
         disableAllSpectral();
         return { ok: false, error: `Cannot write ${ctl}`, capability: cap };
@@ -1863,11 +2050,20 @@ export function runSession(preferredIface, durationSec, channelSel, bandwidthSel
     const sections = plan.ok ? planSections(plan) : [];
     const sectionCount = length(sections) > 0 ? length(sections) : 1;
     const scanBw = plan.ok && plan.scan_bandwidth != null ? plan.scan_bandwidth : 20;
-    const totalEst = estimateSessionSec(sectionCount, sectionDur);
+    const preferAth9kChanscan =
+        !!cap.ok &&
+        cap.chipset === "ath9k" &&
+        !!cap.fft_available &&
+        plan.ok &&
+        (plan.mode === "all" || plan.mode === "stitch" || sectionCount > 1);
+    const progressSections = preferAth9kChanscan ? 1 : sectionCount;
+    const totalEst = preferAth9kChanscan
+        ? (sectionDur + SECTION_RESTORE_SEC)
+        : estimateSessionSec(sectionCount, sectionDur);
     const started = nowSec();
     const startedFrac = nowFrac();
-    const ends = started + totalEst;
-    const endsFrac = startedFrac + totalEst;
+    let ends = started + totalEst;
+    let endsFrac = startedFrac + totalEst;
     const sweeps = [];
     const times = [];
     let mode = cap.capture_mode;
@@ -1876,6 +2072,7 @@ export function runSession(preferredIface, durationSec, channelSel, bandwidthSel
     let retuned = false;
     let scanNote = null;
     let sectionIndex = 0;
+    let usedAth9kChanscan = false;
 
     function publishSession(extra)
     {
@@ -1886,7 +2083,7 @@ export function runSession(preferredIface, durationSec, channelSel, bandwidthSel
             ends_at: ends,
             duration_sec: totalEst,
             section_duration_sec: sectionDur,
-            section_count: sectionCount,
+            section_count: preferAth9kChanscan ? progressSections : sectionCount,
             section_index: sectionIndex,
             section_ends_at: extra && extra.section_ends_at != null ? extra.section_ends_at : null,
             section_remaining_sec: null,
@@ -1955,13 +2152,14 @@ export function runSession(preferredIface, durationSec, channelSel, bandwidthSel
         push(times, t);
     }
 
-    function ingestFftBuffer(durationHint)
+    function ingestFftBuffer(durationHint, maxSamples)
     {
         const buf = readFftBuffer(FFT_OUT);
         if (!buf) {
             return 0;
         }
-        const rows = samplesToRows(parseFftTlvs(buf, 16));
+        const lim = maxSamples != null && maxSamples > 0 ? maxSamples : 16;
+        const rows = samplesToRows(parseFftTlvs(buf, lim));
         if (!length(rows)) {
             return 0;
         }
@@ -1984,6 +2182,46 @@ export function runSession(preferredIface, durationSec, channelSel, bandwidthSel
             pushRow(rows[i].bins, rows[i].f_start, rows[i].f_stop, t);
         }
         return length(rows);
+    }
+
+    /* kn6plv-style ath9k full-band: repeat chanscan+iw scan for the section duration. */
+    function runAth9kChanscanLoop()
+    {
+        const freqs = buildChanscanFreqList(plan);
+        if (!length(freqs)) {
+            return false;
+        }
+        mode = "fft";
+        const kind = plan.mode === "all" ? "Full-band" : "Wide-plot";
+        scanNote = `${kind} ath9k classic chanscan+iw scan (${length(freqs)} freqs); temporary mesh RF interrupt`;
+        sectionIndex = 1;
+        publishSession({ section_ends_at: nowSec() + sectionDur });
+        let rounds = 0;
+        let got = 0;
+        while (nowFrac() < startedFrac + sectionDur) {
+            if (fs.access(SESSION_STOP)) {
+                break;
+            }
+            if (length(sweeps) >= MAX_SWEEPS) {
+                break;
+            }
+            const pulse = captureAth9kChanscan(cap.iface, cap.phy, freqs);
+            rounds++;
+            if (pulse.ok) {
+                got += ingestFftBuffer(sectionDur, 96);
+            }
+            if (fs.access(SESSION_STOP)) {
+                break;
+            }
+        }
+        sectionIndex = 1;
+        publishSession({ section_ends_at: null });
+        if (got > 0) {
+            scanNote = `${kind} ath9k chanscan: ${got} FFT rows over ${rounds} scan rounds (${length(freqs)} freqs)`;
+            return true;
+        }
+        scanNote = `${kind} ath9k chanscan empty after ${rounds} rounds; falling back to section retune`;
+        return false;
     }
 
     function restoreRadio()
@@ -2144,11 +2382,25 @@ export function runSession(preferredIface, durationSec, channelSel, bandwidthSel
     }
     else if (plan.mode === "all" || plan.mode === "stitch" || sectionCount > 1) {
         try {
-            if (cap.fft_available || cap.survey_available) {
-                runSectionDwellLoop();
+            let usedClassic = false;
+            if (cap.chipset === "ath9k" && cap.fft_available) {
+                usedClassic = runAth9kChanscanLoop();
+                usedAth9kChanscan = usedClassic;
             }
-            else {
-                error = "Multi-section scan needs FFT or survey";
+            if (!usedClassic) {
+                if (preferAth9kChanscan) {
+                    /* Chanscan empty — restore full multi-section time budget. */
+                    const extra = estimateSessionSec(sectionCount, sectionDur);
+                    ends = nowSec() + extra;
+                    endsFrac = nowFrac() + extra;
+                    publishSession({ section_ends_at: null });
+                }
+                if (cap.fft_available || cap.survey_available) {
+                    runSectionDwellLoop();
+                }
+                else {
+                    error = "Multi-section scan needs FFT or survey";
+                }
             }
             if (!length(sweeps)) {
                 error = error || "No section sweeps captured";
@@ -2158,6 +2410,7 @@ export function runSession(preferredIface, durationSec, channelSel, bandwidthSel
             error = `${e}`;
         }
         restoreRadio();
+        disableAllSpectral();
     }
     else if (cap.chipset === "ath10k") {
         let useFft = !!cap.fft_available && !spectralCooldownActive();
@@ -2264,6 +2517,7 @@ export function runSession(preferredIface, durationSec, channelSel, bandwidthSel
                 if (fs.access(SESSION_STOP)) {
                     break;
                 }
+                writeSpectralCount(cap.paths, SPECTRAL_COUNT_DEFAULT);
                 if (!writeCtl(ctl, "background") && !writeCtl(ctl, "manual")) {
                     error = "Cannot enable spectral scan";
                     break;
@@ -2301,7 +2555,7 @@ export function runSession(preferredIface, durationSec, channelSel, bandwidthSel
 
     const ended = nowSec();
     let tStop = length(times) ? times[length(times) - 1] : (ended - started);
-    const listenTotal = sectionCount * sectionDur;
+    const listenTotal = usedAth9kChanscan ? sectionDur : (sectionCount * sectionDur);
     if (tStop < listenTotal) {
         tStop = listenTotal;
     }
@@ -2418,7 +2672,14 @@ export function startSessionAsync(preferredIface, durationSec, channelSel, bandw
     const sections = planSections(plan);
     const sectionCount = length(sections) > 0 ? length(sections) : 1;
     const scanBw = plan.scan_bandwidth != null ? plan.scan_bandwidth : 20;
-    const totalEst = estimateSessionSec(sectionCount, sectionDur);
+    const useAth9kChanscan =
+        cap.chipset === "ath9k" &&
+        cap.fft_available &&
+        (plan.mode === "all" || plan.mode === "stitch" || sectionCount > 1);
+    const progressSections = useAth9kChanscan ? 1 : sectionCount;
+    const totalEst = useAth9kChanscan
+        ? (sectionDur + SECTION_RESTORE_SEC)
+        : estimateSessionSec(sectionCount, sectionDur);
     const ifaceArg = preferredIface ? ` -i ${preferredIface}` : "";
     let chArg = "";
     let bwArg = "";
@@ -2436,7 +2697,7 @@ export function startSessionAsync(preferredIface, durationSec, channelSel, bandw
         ends_at: started + totalEst,
         duration_sec: totalEst,
         section_duration_sec: sectionDur,
-        section_count: sectionCount,
+        section_count: progressSections,
         section_index: 0,
         section_ends_at: null,
         iface: cap.iface,
@@ -2449,15 +2710,26 @@ export function startSessionAsync(preferredIface, durationSec, channelSel, bandw
         version: packageVersion()
     });
     system(`waterfall-session${ifaceArg} -d ${sectionDur}${chArg}${bwArg} >/tmp/waterfall-session.log 2>&1 &`);
-    const warn = plan.mode === "all"
-        ? `Full-band on ${cap.iface}: ${sectionCount} sections × ${sectionDur}s @ ${scanBw} MHz scan BW (~${totalEst}s incl. retune/restore).`
-        : (plan.mode === "stitch" || sectionCount > 1
-            ? `Stitched plot ${plan.plot_bandwidth} MHz on ${cap.iface}: ${sectionCount} sections × ${sectionDur}s @ ${scanBw} MHz listen (~${totalEst}s). No frequency stretch.`
-            : (plan.mode === "single"
-                ? `Scan ch ${plan.channel} (plot ${plan.plot_bandwidth} MHz, scan ${scanBw} MHz) for ${sectionDur}s + restore.`
-                : (cap.chipset === "ath10k"
-                    ? `ath10k isolated FFT on ${cap.iface} (${sectionDur}s section).`
-                    : `Spectral capture on ${cap.iface} for ${sectionDur}s.`)));
+    let warn;
+    if (useAth9kChanscan) {
+        const freqs = buildChanscanFreqList(plan);
+        warn = `ath9k classic chanscan+iw scan on ${cap.iface} (${length(freqs)} freqs, ${sectionDur}s). Temporary mesh RF interrupt — radio returns when scan ends.`;
+    }
+    else if (plan.mode === "all") {
+        warn = `Full-band on ${cap.iface}: ${sectionCount} sections × ${sectionDur}s @ ${scanBw} MHz scan BW (~${totalEst}s incl. retune/restore).`;
+    }
+    else if (plan.mode === "stitch" || sectionCount > 1) {
+        warn = `Stitched plot ${plan.plot_bandwidth} MHz on ${cap.iface}: ${sectionCount} sections × ${sectionDur}s @ ${scanBw} MHz listen (~${totalEst}s). No frequency stretch.`;
+    }
+    else if (plan.mode === "single") {
+        warn = `Scan ch ${plan.channel} (plot ${plan.plot_bandwidth} MHz, scan ${scanBw} MHz) for ${sectionDur}s + restore.`;
+    }
+    else if (cap.chipset === "ath10k") {
+        warn = `ath10k isolated FFT on ${cap.iface} (${sectionDur}s section).`;
+    }
+    else {
+        warn = `Spectral capture on ${cap.iface} for ${sectionDur}s.`;
+    }
     return {
         ok: true,
         started: true,
@@ -2465,7 +2737,7 @@ export function startSessionAsync(preferredIface, durationSec, channelSel, bandw
         ends_at: started + totalEst,
         duration_sec: totalEst,
         section_duration_sec: sectionDur,
-        section_count: sectionCount,
+        section_count: progressSections,
         iface: cap.iface,
         chipset: cap.chipset,
         capture_mode: cap.capture_mode,

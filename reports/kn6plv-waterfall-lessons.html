@@ -1,0 +1,306 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Stabilize waterfall from kn6plv lessons</title>
+  <style>
+    :root {
+      --bg: #0f1115;
+      --fg: #e6e8ec;
+      --muted: #9aa3b2;
+      --card: #181c24;
+      --line: #2a3140;
+      --warn: #c4a35a;
+      --ok: #6a9a6a;
+      --info: #6a8fbf;
+      --bad: #c07070;
+    }
+    body { margin: 0; font: 15px/1.45 system-ui, sans-serif; background: var(--bg); color: var(--fg); }
+    main { max-width: 980px; margin: 0 auto; padding: 28px 20px 48px; }
+    h1 { font-size: 1.6rem; margin: 0 0 6px; }
+    h2 { font-size: 1.15rem; margin: 28px 0 10px; }
+    h3 { font-size: 1rem; margin: 18px 0 8px; }
+    p, li { color: var(--fg); }
+    .muted { color: var(--muted); }
+    a { color: var(--info); }
+    .callout {
+      border: 1px solid var(--info);
+      background: #141a24;
+      padding: 12px 14px;
+      border-radius: 6px;
+      margin: 16px 0;
+    }
+    .callout.warn { border-color: var(--warn); background: #221c10; }
+    .stats { display: flex; gap: 12px; flex-wrap: wrap; margin: 14px 0; }
+    .stat {
+      background: var(--card);
+      border: 1px solid var(--line);
+      padding: 10px 14px;
+      border-radius: 6px;
+      min-width: 120px;
+    }
+    .stat b { display: block; font-size: 1.3rem; }
+    .stat span { color: var(--muted); font-size: 0.85rem; }
+    table { width: 100%; border-collapse: collapse; font-size: 0.9rem; margin: 10px 0 16px; }
+    th, td { border: 1px solid var(--line); padding: 8px 10px; vertical-align: top; text-align: left; }
+    th { background: var(--card); color: var(--muted); font-weight: 600; }
+    .card {
+      background: var(--card);
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      padding: 12px 14px;
+      margin: 10px 0;
+    }
+    .grid2 {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 12px;
+    }
+    @media (max-width: 720px) {
+      .grid2 { grid-template-columns: 1fr; }
+    }
+    .pill {
+      display: inline-block;
+      font-size: 0.75rem;
+      color: var(--muted);
+      border: 1px solid var(--line);
+      padding: 2px 8px;
+      border-radius: 999px;
+      margin-left: 8px;
+      vertical-align: middle;
+    }
+    .card h3 { margin: 0 0 8px; display: flex; align-items: center; flex-wrap: wrap; gap: 6px; }
+    .todo { list-style: none; padding: 0; margin: 0; }
+    .todo li {
+      border: 1px solid var(--line);
+      background: var(--card);
+      padding: 8px 12px;
+      margin: 6px 0;
+      border-radius: 6px;
+      display: flex;
+      gap: 10px;
+      align-items: flex-start;
+    }
+    .todo .status {
+      font-size: 0.75rem;
+      color: var(--muted);
+      min-width: 5.5rem;
+      text-transform: uppercase;
+      letter-spacing: 0.03em;
+    }
+    .todo .done { color: var(--ok); }
+    code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.88em; }
+    ol.steps { margin: 8px 0 0; padding-left: 1.25rem; }
+    ol.steps li { margin: 4px 0; }
+    .flow {
+      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+      font-size: 0.82rem;
+      line-height: 1.55;
+      color: var(--muted);
+      white-space: pre-wrap;
+      margin: 0;
+    }
+  </style>
+</head>
+<body>
+<main>
+  <h1>Stabilize waterfall from kn6plv lessons</h1>
+  <p class="muted">Plan twin · branch <code>waterfall-fromipk</code> · source kn6plv/waterfall 0.5.4 vs contrib/waterfall</p>
+
+  <div class="stats">
+    <div class="stat"><b>0.5.4</b><span>kn6plv IPK tip</span></div>
+    <div class="stat"><b>chanscan</b><span>Why ath9k worked</span></div>
+    <div class="stat"><b>QCA988x</b><span>Why AC failed</span></div>
+    <div class="stat"><b>fromipk</b><span>Target branch</span></div>
+  </div>
+
+  <div class="callout">
+    <strong>Verdict:</strong> Yes — there was a real older waterfall IPK at
+    <a href="https://github.com/kn6plv/waterfall">kn6plv/waterfall</a> (Tim KN6PLV / aanon4),
+    not an official package in <code>aredn/aredn</code>. Official firmware only briefly had a
+    spectral view on WiFi Scan (removed in
+    <a href="https://github.com/aredn/aredn/pull/441">PR #441</a>).
+    ath9k worked via <code>chanscan</code> + <code>iw scan freq</code>; AC/ath10k was firmware-fragile
+    on that same path. Our package already improves AC safety (isolated worker, never leave ctl enabled,
+    timeout+recover, survey fallback) but still lacks <code>chanscan</code> — the main reason the old
+    ath9k full-band looked solid.
+  </div>
+
+  <h2>0. Branch setup (blocking)</h2>
+  <div class="card">
+    <h3>waterfall → waterfall-fromipk</h3>
+    <p>Leave <code>waterfall</code> unchanged as the stable package line. Create
+      <code>waterfall-fromipk</code> from its tip, then relock this work area.</p>
+    <ol class="steps">
+      <li><code>git checkout -b waterfall-fromipk</code> (from <code>waterfall</code>)</li>
+      <li>Update <code>.cursor/rules/stay-on-ref.mdc</code> → Assigned git branch: <code>waterfall-fromipk</code></li>
+      <li>SetActiveBranch → <code>waterfall-fromipk</code></li>
+      <li>All plan commits stay on <code>waterfall-fromipk</code> until told otherwise</li>
+      <li>Do not rename/delete <code>waterfall</code>; do not merge back until asked</li>
+    </ol>
+  </div>
+
+  <h2>Capture paths compared</h2>
+  <div class="grid2">
+    <div class="card">
+      <h3>Old IPK <span class="pill">kn6plv 0.5.4</span></h3>
+      <pre class="flow">waterfall CGI → waterfall-update
+ath9k → chanscan
+ath10k → background + trigger
+both → iw scan freq list passive
+read spectral_scan0 → percentile buckets</pre>
+    </div>
+    <div class="card">
+      <h3>contrib/waterfall <span class="pill">ours today</span></h3>
+      <pre class="flow">waterfall-ui.js → runSession
+resolveScanPlan → IBSS retune sections
+ath9k → background + trigger
+ath10k → isolated pulse (+ survey)
+no chanscan · allowScan=false from ucode</pre>
+    </div>
+  </div>
+
+  <h2>Why the old IPK worked (ath9k)</h2>
+  <p class="muted">Core loop in Tim’s <code>waterfall-update</code>. Mesh disconnect was expected and warned.
+    UI polls forever; each sample is one full-band hop.</p>
+  <table>
+    <thead><tr><th>#</th><th>waterfall-update step</th></tr></thead>
+    <tbody>
+      <tr><td>1</td><td><code>spectral_count = 32</code></td></tr>
+      <tr><td>2</td><td>ath9k: write <code>chanscan</code> · ath10k: <code>background</code> then <code>trigger</code></td></tr>
+      <tr><td>3</td><td>Thinned channel freq list from <code>get_rfchannels</code> (step <code>bw/10</code>)</td></tr>
+      <tr><td>4</td><td><code>iw &lt;iface&gt; scan freq &lt;list&gt; passive</code> (RF hop + activity)</td></tr>
+      <tr><td>5</td><td><code>disable</code>, then read entire <code>spectral_scan0</code></td></tr>
+      <tr><td>6</td><td>Parse TLVs → full-band buckets (max / 95% / 50%)</td></tr>
+      <tr><td>7</td><td>Child process always disables on exit</td></tr>
+    </tbody>
+  </table>
+  <div class="card">
+    <strong>ath9k reliability factors</strong>
+    <ul>
+      <li><code>chanscan</code> is the ath9k debugfs mode designed for spectral-during-scan</li>
+      <li>Passive freq-list scan produces many HT20 FFT samples across the band in one shot</li>
+      <li>Absolute dBm conversion (<code>noise + rssi + 10*log10(bin²/sum)</code>) made SNR bars meaningful</li>
+      <li>Percentile stacking hid single-sample noise</li>
+    </ul>
+  </div>
+
+  <h2>Why AC often failed</h2>
+  <div class="callout warn">
+    <strong>Do not copy Tim’s ath10k primary path.</strong>
+    Tim’s ath10k branch still depended on <code>iw scan</code> while spectral was enabled.
+    On QCA988x IBSS/mesh that often returns an empty <code>spectral_scan0</code> or wedges the radio
+    if ctl is left enabled / scan runs too long. Keep our isolated worker, timeout+recover, and
+    survey fallback. Steal ath9k lessons only.
+  </div>
+  <table>
+    <thead><tr><th>Area</th><th>kn6plv</th><th>Ours today</th></tr></thead>
+    <tbody>
+      <tr><td>Timeout / recovery</td><td>none</td><td>hard timeout + <code>waterfall-spectral-recover</code> + cooldown</td></tr>
+      <tr><td>Leave ctl enabled</td><td>until scan ends</td><td>never (trap + disable)</td></tr>
+      <tr><td>Empty FFT</td><td>blank / fail</td><td>survey fallback</td></tr>
+      <tr><td>TLV types</td><td>ath9k type1; ath10k custom layout</td><td>HT20 / HT20_40 / ATH10K with resync</td></tr>
+      <tr><td>UI stack</td><td>old Lua CGI + httpd.conf auth</td><td>ucode <code>/e/</code> API + Tools modal</td></tr>
+      <tr><td>Full-band strategy</td><td><code>chanscan</code> + <code>iw scan freq</code> list</td><td>IBSS retune sections (no <code>chanscan</code> yet)</td></tr>
+    </tbody>
+  </table>
+
+  <h2>Gaps that hurt “stable and working”</h2>
+  <table>
+    <thead><tr><th>Gap</th><th>Detail</th></tr></thead>
+    <tbody>
+      <tr>
+        <td>No <code>chanscan</code> path</td>
+        <td>ALL uses multi-section IBSS retune + background/trigger. Fewer samples than Tim’s scan-driven FFT; retune failure → survey (misleading).</td>
+      </tr>
+      <tr>
+        <td>Bins are raw magnitudes</td>
+        <td><code>parseFftTlvs</code> / <code>samplesToSweep</code> skip <code>max_exp</code>, rssi, and <code>10*log10</code>. Scale inconsistent across chipsets (<code>water_scale</code> was 50 vs 15 in Tim’s UI).</td>
+      </tr>
+      <tr>
+        <td>ath9k one-shot is current-channel only</td>
+        <td>background+trigger without hop is fine for dwell, weak for “what’s on the band”.</td>
+      </tr>
+      <tr>
+        <td>ath10k <code>iw scan</code> never enabled from ucode</td>
+        <td><code>allowScan=false</code> is correct for mesh; empty FFT → survey is expected, not a Tim-style full FFT band map.</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <h2>Chosen approach</h2>
+  <table>
+    <thead><tr><th>Mode</th><th>Decision</th></tr></thead>
+    <tbody>
+      <tr>
+        <td>Current / single</td>
+        <td>Keep mesh-safe <code>background</code>+<code>trigger</code> (ath9k inline; ath10k isolated). Do not make <code>iw scan</code> the default.</td>
+      </tr>
+      <tr>
+        <td>ath9k ALL / wide stitch</td>
+        <td>Add classic Tim path — <code>chanscan</code> + thinned <code>iw … scan freq … passive</code> + full relay read + disable — as primary (ALL already accepts RF disruption).</td>
+      </tr>
+      <tr>
+        <td>ath10k</td>
+        <td>Keep isolated short pulses + survey. Do not promote Tim’s scan-while-spectral as primary.</td>
+      </tr>
+      <tr>
+        <td>Signal math</td>
+        <td>Port Tim’s absolute-dBm conversion into <code>parseFftTlvs</code>; keep honest <code>placeBinsOnBand</code> (no stretch).</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <h2>Implementation steps</h2>
+  <table>
+    <thead><tr><th>#</th><th>Workstream</th><th>Detail</th></tr></thead>
+    <tbody>
+      <tr><td>0</td><td>Branch + relock</td><td>Create <code>waterfall-fromipk</code> from <code>waterfall</code>; update stay-on-ref; SetActiveBranch</td></tr>
+      <tr><td>1</td><td>Analysis twin</td><td>Canvas + this HTML report</td></tr>
+      <tr><td>2</td><td>ath9k chanscan</td><td><code>captureAth9kChanscan</code>; wire into ALL/wide; retune fallback if empty</td></tr>
+      <tr><td>3</td><td>Calibrated bins</td><td><code>max_exp</code> / rssi / noise → dBm; adjust <code>waterfall-ui.js</code> scale</td></tr>
+      <tr><td>4</td><td>Hardening</td><td><code>spectral_count</code> defaults; always-disable; UI copy for ALL scan interrupt</td></tr>
+      <tr><td>5</td><td>Version / matrix</td><td>Bump <code>build.sh</code> + <code>packageVersion</code> + README; regen hardware report</td></tr>
+      <tr><td>6</td><td>Validate</td><td>ath9k Rocket/PBE M5 + ath10k hAP ac lite / PBE-5AC (SSH port 2222)</td></tr>
+    </tbody>
+  </table>
+
+  <h2>Validation targets</h2>
+  <div class="grid2">
+    <div class="card">
+      <h3>ath9k focus</h3>
+      <p class="muted">Rocket M5 / PowerBeam M5 · current-channel stable · ALL dense FFT via chanscan · ctl disabled after stop</p>
+    </div>
+    <div class="card">
+      <h3>ath10k focus</h3>
+      <p class="muted">hAP ac lite 5 GHz / PBE-5AC · short pulse safe · no wedge · survey if empty · must not regress to Tim’s scan-primary path</p>
+    </div>
+  </div>
+
+  <h2>Out of scope</h2>
+  <ul>
+    <li>Porting Tim’s Lua CGI / old UI / httpd.conf auth</li>
+    <li>Making ath10k <code>iw scan</code> the default capture path</li>
+    <li>mt76 / HaLow backends</li>
+  </ul>
+
+  <h2>Plan todos</h2>
+  <ul class="todo">
+    <li><span class="status">pending</span> Create <code>waterfall-fromipk</code> from <code>waterfall</code> and relock stay-on-ref</li>
+    <li><span class="status done">done</span> This HTML twin + canvas <code>kn6plv-waterfall-lessons</code></li>
+    <li><span class="status">pending</span> Add ath9k chanscan+iw-freq-scan for ALL/wide modes</li>
+    <li><span class="status">pending</span> Port Tim-style dBm conversion into <code>parseFftTlvs</code> + UI scale</li>
+    <li><span class="status">pending</span> spectral_count, disable guarantees, version bump, hardware report</li>
+    <li><span class="status">pending</span> Validate on ath9k and ath10k focus devices</li>
+  </ul>
+
+  <p class="muted" style="margin-top:28px">
+    Sources:
+    <a href="https://github.com/kn6plv/waterfall">kn6plv/waterfall</a> ·
+    <a href="https://github.com/aredn/aredn/pull/441">aredn/aredn#441</a> ·
+    <code>contrib/waterfall/src/usr/share/ucode/waterfall.uc</code>
+  </p>
+</main>
+</body>
+</html>

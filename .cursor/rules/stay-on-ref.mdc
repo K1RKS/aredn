@@ -7,8 +7,8 @@ alwaysApply: true
 
 This Cursor window is a dedicated AREDN work area.
 
-- Assigned git branch: `waterfall`
+- Assigned git branch: `waterfall-fromipk`
 - Do **not** checkout, create, rename, or switch branches/tags.
 - Do **not** modify or open sibling work areas under `~/ai_projects/AREDN/`.
-- All commits for this area must stay on `waterfall`.
+- All commits for this area must stay on `waterfall-fromipk`.
 - If work belongs on another branch/tag, stop and tell the user to use that work area's Cursor window instead.
