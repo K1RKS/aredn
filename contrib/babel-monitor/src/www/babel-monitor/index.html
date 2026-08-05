@@ -87,6 +87,11 @@
     cursor: pointer;
   }
   .tabs button.active { color: var(--fg); border-color: var(--accent); }
+  #syslogPauseBtn.active {
+    color: #fff;
+    background: var(--bad);
+    border-color: var(--bad);
+  }
   .chart-wrap { position: relative; }
   .syslog-wrap { margin-top: 0; }
   .syslog-box {
@@ -363,8 +368,9 @@
   function syncSyslogPauseBtn() {
     const b = $("syslogPauseBtn");
     if (!b) return;
-    b.textContent = syslogPaused ? "Auto" : "Pause";
-    b.classList.toggle("active", !syslogPaused);
+    b.textContent = "Pause";
+    b.classList.toggle("active", syslogPaused);
+    b.setAttribute("aria-pressed", syslogPaused ? "true" : "false");
   }
 
   function syncLogFilterButtons() {

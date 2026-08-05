@@ -416,12 +416,21 @@ function handleRequest(line)
 function serveClient(client)
 {
     let buf = "";
-    uloop.handle(client, (events) => {
+    let h = null;
+    h = uloop.handle(client, (events) => {
         if (!(events & uloop.ULOOP_READ)) {
             return;
         }
         const data = client.recv(8192);
         if (!data || length(data) === 0) {
+            if (h) {
+                try {
+                    h.delete();
+                }
+                catch (e) {
+                }
+                h = null;
+            }
             client.close();
             return;
         }
@@ -434,6 +443,14 @@ function serveClient(client)
             const line = substr(buf, 0, n);
             buf = substr(buf, n + 1);
             if (trim(line) === "quit") {
+                if (h) {
+                    try {
+                        h.delete();
+                    }
+                    catch (e) {
+                    }
+                    h = null;
+                }
                 client.close();
                 return;
             }

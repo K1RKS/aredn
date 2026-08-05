@@ -4,7 +4,7 @@ Side-loaded AREDN APK that keeps Babel / LQM / arednlink metrics in RAM, exposes
 stateless JSON pull API for external historians, a public status page, and a
 live-config CLI.
 
-- Package: `babel-monitor-0.1.41-r0.apk`
+- Package: `babel-monitor-0.1.43-r0.apk`
 - Daemon: `babel-monitord`
 - CLI: `babel-monitor`
 - Status UI: `/babel-monitor/`
@@ -18,7 +18,7 @@ cd contrib/babel-monitor
 ./build.sh
 ```
 
-APK lands in `dist/babel-monitor-0.1.41-r0.apk`.
+APK lands in `dist/babel-monitor-0.1.43-r0.apk`.
 
 ## Install on a node
 
@@ -31,7 +31,7 @@ From the work-area root (after configuring `install_package_remotely.conf`):
 Or copy the APK and:
 
 ```sh
-apk add --allow-untrusted /tmp/babel-monitor-0.1.41-r0.apk
+apk add --allow-untrusted /tmp/babel-monitor-0.1.43-r0.apk
 ```
 
 ## On-node storage
@@ -42,6 +42,7 @@ apk add --allow-untrusted /tmp/babel-monitor-0.1.41-r0.apk
 - Series expands at most **5 minutes** of samples per API call (UI stitches longer windows)
 - Expanded named objects are built only for the response — never retained on the store
 - Daemon runs ucode mark-and-sweep GC periodically and after each sample / API reply (refcount alone leaves temps)
+- API socket handlers are deleted on client close (avoids uloop handle leak while the status page polls)
 - `mem_total_kb` lives in meta only; flash/UCI holds **config only** — never metrics
 - Reboot / daemon restart clears history
 
