@@ -66,6 +66,77 @@ function countArednlinkHosts()
     return n;
 }
 
+/**
+ * WireGuard tunnel counts from /etc/config.mesh/wireguard + latest-handshakes.
+ * UCI type "client" = server tunnels on this node (wgc*); "server" = client tunnels (wgs*).
+ * total = config entries; active = enabled=1; live = handshake within 300s.
+ */
+function readWgTunnelStats()
+{
+    const out = {
+        server_tunnels: { live: 0, active: 0, total: 0 },
+        clients: { live: 0, active: 0, total: 0 }
+    };
+    let cm = null;
+    try {
+        cm = uci.cursor("/etc/config.mesh");
+    }
+    catch (e) {
+        return out;
+    }
+    if (!cm) {
+        return out;
+    }
+
+    const live_keys = [];
+    if (fs.access("/usr/bin/wg")) {
+        const w = fs.popen("/usr/bin/wg show all latest-handshakes 2>/dev/null");
+        if (w) {
+            const now = time();
+            for (let line = w.read("line"); length(line); line = w.read("line")) {
+                const v = split(trim(line), /\t/);
+                if (v && length(v) >= 3 && int(v[2]) + 300 > now) {
+                    push(live_keys, v[1]);
+                }
+            }
+            w.close();
+        }
+    }
+
+    function keyIsLive(key)
+    {
+        if (!key || key === "") {
+            return false;
+        }
+        for (let i = 0; i < length(live_keys); i++) {
+            if (index(key, live_keys[i]) >= 0) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    cm.foreach("wireguard", "client", function (s) {
+        out.server_tunnels.total++;
+        if (s.enabled === "1") {
+            out.server_tunnels.active++;
+        }
+        if (keyIsLive(s.key)) {
+            out.server_tunnels.live++;
+        }
+    });
+    cm.foreach("wireguard", "server", function (s) {
+        out.clients.total++;
+        if (s.enabled === "1") {
+            out.clients.active++;
+        }
+        if (keyIsLive(s.key)) {
+            out.clients.live++;
+        }
+    });
+    return out;
+}
+
 function resolveIdentity()
 {
     let node_id = "";
@@ -664,6 +735,8 @@ export function collectSample(store, cfg)
     store.last.babel_pid = pid;
 
     store.live_neighbors = live;
+
+    store.wg = readWgTunnelStats();
 
     const mean_lq = neighbor_count ? int(lq_sum / neighbor_count) : 0;
     const mean_cost = cost_n ? int(cost_sum / cost_n) : 0;

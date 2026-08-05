@@ -4,7 +4,7 @@ Side-loaded AREDN APK that keeps Babel / LQM / arednlink metrics in RAM, exposes
 stateless JSON pull API for external historians, a public status page, and a
 live-config CLI.
 
-- Package: `babel-monitor-0.1.37-r0.apk`
+- Package: `babel-monitor-0.1.39-r0.apk`
 - Daemon: `babel-monitord`
 - CLI: `babel-monitor`
 - Status UI: `/babel-monitor/`
@@ -18,7 +18,7 @@ cd contrib/babel-monitor
 ./build.sh
 ```
 
-APK lands in `dist/babel-monitor-0.1.37-r0.apk`.
+APK lands in `dist/babel-monitor-0.1.39-r0.apk`.
 
 ## Install on a node
 
@@ -31,7 +31,7 @@ From the work-area root (after configuring `install_package_remotely.conf`):
 Or copy the APK and:
 
 ```sh
-apk add --allow-untrusted /tmp/babel-monitor-0.1.37-r0.apk
+apk add --allow-untrusted /tmp/babel-monitor-0.1.39-r0.apk
 ```
 
 ## On-node storage
@@ -41,6 +41,7 @@ apk add --allow-untrusted /tmp/babel-monitor-0.1.37-r0.apk
 - RF/link **names** live in a shared label dictionary (cap 64); the buffer stores indices + values only
 - Series expands at most **5 minutes** of samples per API call (UI stitches longer windows)
 - Expanded named objects are built only for the response — never retained on the store
+- Daemon runs ucode mark-and-sweep GC periodically and after each sample / API reply (refcount alone leaves temps)
 - `mem_total_kb` lives in meta only; flash/UCI holds **config only** — never metrics
 - Reboot / daemon restart clears history
 
@@ -72,7 +73,7 @@ Base: `/cgi-bin/babel-monitor`
 | `?api=meta` (alias `hello`) | Identity + versions: `api_version` (wire contract), `schema_version` (sample layout), `package_version`, `node_id`, mac, hostname, boot_id, retention |
 | `?api=sync&since_seq=N&limit=M` | Samples with `seq > N` for current `boot_id` |
 | `?api=events&since_seq=N` | Event ring |
-| `?api=live` | Current neighbors + latest sample |
+| `?api=live` | Current neighbors + latest sample + optional `wg` tunnel counts |
 | `?api=series&seconds=S&end_age=A` | Samples in `[now-A-S, now-A]` (S capped at **300**/5m per request; UI fetches longer windows as slices) |
 | `?api=logs&source=S&filters=F&limit=N` | Log panel: `syslog` (optional filters: babel,lqm,arednlink,dnsmasq,netifd,auth), `dumps`, `lqm`, `dmesg` |
 | `?api=download&source=S` | Full raw download (no filters/tail): `syslog`, `lqm`, `dmesg`, `dumps` — streamed attachment named `{hostname}-{source}-yyyymmdd.ext` |
@@ -124,7 +125,7 @@ State/logs: `~/.babel-monitor/` (override with `BABEL_MONITOR_STATE`).
 
 ## Status page
 
-Open `http://<node>/babel-monitor/` — live neighbors, KPIs, and a history graph with metric tabs (LQ, Cost, Neighbors, Routes, Packets, Link I/O, Hosts, CPU, RAM, Self RSS, RF, Syslog, Top) and 5m / 30m / 1h / 4h ranges from RAM (ring retains ~4h @ 10s). Longer chart windows are fetched as 5m API slices. The X axis is fixed to the selected window. Hover for a crosshair and values. Viewing the UI does not write flash. No Tools menu entry.
+Open `http://<node>/babel-monitor/` — live neighbors, KPIs, and a history graph with metric tabs (LQ, Cost, Neighbors, Routes, Packets, Link I/O, Hosts, CPU, RAM, Self RSS, RF, Syslog, Top) and 5m / 30m / 1h / 4h ranges from RAM (ring retains ~4h @ 10s). Longer chart windows are fetched as 5m API slices. The X axis is fixed to the selected window. Hover for a crosshair and values. Optional **WG Server Tunnels** / **WG Server Clients** KPIs show `live/active/total` when the tunnel config has entries (live = handshake ≤300s, active = enabled, total = config list). Viewing the UI does not write flash. No Tools menu entry.
 
 ## Layout
 

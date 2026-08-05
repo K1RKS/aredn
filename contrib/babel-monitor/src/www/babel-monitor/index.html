@@ -734,6 +734,19 @@
         "Babel neighbor dump was readable for this sample",
         s.babel_ok ? "ok" : "warn"]
     ];
+    const wg = live.wg || {};
+    const wgTip =
+      "live = recent WireGuard handshake (≤300s) · active = tunnel enabled · total = entries in tunnel config";
+    function pushWg(label, st) {
+      if (!st || !(Number(st.total) > 0)) return;
+      items.push([
+        label,
+        (st.live ?? 0) + "/" + (st.active ?? 0) + "/" + (st.total ?? 0),
+        wgTip + " — shown as live/active/total"
+      ]);
+    }
+    pushWg("WG Server Tunnels", wg.server_tunnels);
+    pushWg("WG Server Clients", wg.clients);
     $("kpis").innerHTML = items.map(function (it) {
       const klass = it[3] ? " " + it[3] : "";
       return '<div class="kpi' + klass + '" title="' + escAttr(it[2]) +

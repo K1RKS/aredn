@@ -5,7 +5,7 @@ import * as math from "math";
 
 export function packageVersion()
 {
-    return "0.1.37-r0";
+    return "0.1.39-r0";
 };
 
 /**

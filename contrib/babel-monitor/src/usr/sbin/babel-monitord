@@ -272,6 +272,7 @@ function handleRequest(line)
             node_id: store.identity.node_id,
             neighbors: store.live_neighbors,
             latest: storelib.latestSample(store),
+            wg: store.wg,
             meta: metaObj()
         };
     }
@@ -438,6 +439,8 @@ function serveClient(client)
             }
             const resp = handleRequest(line);
             client.send(sprintf("%J\n", resp));
+            /* Series/sync expand many temps — reclaim after reply */
+            gc();
         }
     }, uloop.ULOOP_READ);
 }
@@ -445,6 +448,8 @@ function serveClient(client)
 function doSample()
 {
     samplelib.collectSample(store, cfg);
+    /* Sample path allocates boxed ints + babel/LQM temps each tick */
+    gc();
     if (sample_timer) {
         sample_timer.set(cfg.sample_interval * 1000);
     }
@@ -484,6 +489,10 @@ function main()
     }
 
     uloop.init();
+
+    /* Secondary mark-and-sweep GC (refcount alone cannot reclaim cycles/temps).
+     * Interval = object allocations between automatic sweeps. */
+    gc("start", 500);
 
     uloop.handle(listener, (events) => {
         if (!(events & uloop.ULOOP_READ)) {

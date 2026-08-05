@@ -61,6 +61,10 @@ export function createStore()
             mem_total_kb: null
         },
         live_neighbors: [],
+        wg: {
+            server_tunnels: { live: 0, active: 0, total: 0 },
+            clients: { live: 0, active: 0, total: 0 }
+        },
         identity: {
             node_id: "",
             mac: "",
