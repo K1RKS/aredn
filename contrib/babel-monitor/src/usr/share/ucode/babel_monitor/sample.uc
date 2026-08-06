@@ -459,6 +459,7 @@ export function collectSample(store, cfg)
                 devices[m[2]] = true;
             }
             const hn = host_by_ll[m[1]];
+            const stuck = (cost === common.STUCK_COST && lq >= common.STUCK_MIN_LQ);
             push(live, {
                 hostname: hn ? hn : "",
                 ipv6: m[1],
@@ -468,6 +469,7 @@ export function collectSample(store, cfg)
                 rxcost: int(m[4]),
                 txcost: int(m[5]),
                 cost: cost,
+                stuck: stuck,
                 tx_packets_delta: 0,
                 rx_packets_delta: 0
             });
@@ -720,9 +722,55 @@ export function collectSample(store, cfg)
     let babel_soft_delta = 0;
     const state_exists = fs.access("/etc/state/babel-state");
     const pid = babelPid();
+
+    /* Stuck = firmware hard-reset candidate: cost 65535 + LQ >= 50 (observe only). */
+    const stuck_now = {};
+    let stuck_count = 0;
+    let stuck_snapshot = "";
+    for (let i = 0; i < length(live); i++) {
+        const n = live[i];
+        if (!n.stuck) {
+            continue;
+        }
+        stuck_count++;
+        const key = sprintf("%s|%s", n.ipv6, n.iface || "");
+        const detail = sprintf("host=%s type=%s ipv6=%s lq=%d cost=%d",
+            n.hostname !== "" ? n.hostname : "?",
+            n.type || "?",
+            n.ipv6,
+            n.lq,
+            n.cost);
+        stuck_now[key] = detail;
+        if (stuck_snapshot !== "") {
+            stuck_snapshot += "; ";
+        }
+        stuck_snapshot += detail;
+    }
+    if (!store.last.stuck_keys) {
+        store.last.stuck_keys = {};
+    }
+    for (let k in stuck_now) {
+        if (!store.last.stuck_keys[k]) {
+            storelib.pushEvent(store, "babel_stuck", stuck_now[k]);
+        }
+    }
+    for (let k in store.last.stuck_keys) {
+        if (!stuck_now[k]) {
+            storelib.pushEvent(store, "babel_unstuck", store.last.stuck_keys[k]);
+        }
+    }
+
     if (store.last.babel_state_seen === true && !state_exists) {
         babel_hard_delta = 1;
-        storelib.pushEvent(store, "babel_hard", "babel-state removed");
+        let hard_detail = "babel-state removed";
+        const prior = store.last.stuck_snapshot || "";
+        if (prior !== "") {
+            hard_detail = sprintf("babel-state removed; prior_stuck=[%s]", prior);
+        }
+        else if (stuck_snapshot !== "") {
+            hard_detail = sprintf("babel-state removed; stuck=[%s]", stuck_snapshot);
+        }
+        storelib.pushEvent(store, "babel_hard", hard_detail);
     }
     if (store.last.babel_pid && pid && store.last.babel_pid !== pid && state_exists) {
         babel_soft_delta = 1;
@@ -734,8 +782,10 @@ export function collectSample(store, cfg)
     }
     store.last.babel_state_seen = state_exists ? true : false;
     store.last.babel_pid = pid;
+    store.last.stuck_keys = stuck_now;
+    store.last.stuck_snapshot = stuck_snapshot;
 
-    /* Live API: publish type, drop iface (not kept in the sample ring either) */
+    /* Live API: publish type + stuck, drop iface (not kept in the sample ring either) */
     const live_pub = [];
     for (let i = 0; i < length(live); i++) {
         const n = live[i];
@@ -747,6 +797,7 @@ export function collectSample(store, cfg)
             rxcost: n.rxcost,
             txcost: n.txcost,
             cost: n.cost,
+            stuck: n.stuck ? true : false,
             tx_packets_delta: n.tx_packets_delta,
             rx_packets_delta: n.rx_packets_delta
         });
@@ -803,6 +854,7 @@ export function collectSample(store, cfg)
         min_lq: neighbor_count ? lq_min : 0,
         mean_cost: mean_cost,
         bad_cost_count: bad_cost,
+        stuck_neighbor_count: stuck_count,
         neighbor_add: neighbor_add,
         neighbor_remove: neighbor_remove,
         tx_packets_delta: tx_packets_delta,
@@ -842,6 +894,40 @@ export function collectSample(store, cfg)
     }
     if (links_n) {
         sample.links = links;
+    }
+
+    /* Per-neighbor Babel cost history (hostname when known; capped). */
+    const cost_cands = [];
+    for (let i = 0; i < length(live); i++) {
+        const n = live[i];
+        const id = (n.hostname && n.hostname !== "") ? n.hostname : n.ipv6;
+        if (!id || id === "") {
+            continue;
+        }
+        push(cost_cands, { id: id, cost: int(n.cost), score: int(n.cost) });
+    }
+    for (let i = 0; i < length(cost_cands); i++) {
+        for (let j = i + 1; j < length(cost_cands); j++) {
+            if (cost_cands[j].score > cost_cands[i].score) {
+                const tmp = cost_cands[i];
+                cost_cands[i] = cost_cands[j];
+                cost_cands[j] = tmp;
+            }
+        }
+    }
+    const costs = {};
+    const cost_cap = common.COST_NEIGHBOR_CAP;
+    const cost_take = length(cost_cands) < cost_cap ? length(cost_cands) : cost_cap;
+    for (let i = 0; i < cost_take; i++) {
+        costs[cost_cands[i].id] = cost_cands[i].cost;
+    }
+    let costs_n = 0;
+    for (let _k in costs) {
+        costs_n++;
+        break;
+    }
+    if (costs_n) {
+        sample.costs = costs;
     }
 
     if (cfg.enabled) {

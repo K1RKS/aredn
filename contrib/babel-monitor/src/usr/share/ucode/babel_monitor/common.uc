@@ -5,7 +5,7 @@ import * as math from "math";
 
 export function packageVersion()
 {
-    return "0.1.44-r0";
+    return "0.1.52-r0";
 };
 
 /**
@@ -14,19 +14,24 @@ export function packageVersion()
  * that clients must adapt (independent of SCHEMA_VERSION / packageVersion).
  */
 export const API_VERSION = 1;
-export const SCHEMA_VERSION = 7;
+export const SCHEMA_VERSION = 9;
 export const SOCK_PATH = "/var/run/babel-monitor.sock";
 export const RUN_DIR = "/var/run/babel-monitor";
 export const SAMPLE_CAP = 1440;  /* 4h @ 10s */
 export const EVENT_CAP = 512;
 export const RF_NEIGHBOR_CAP = 12; /* per-sample RF pairs (RAM bound) */
 export const LINK_IO_CAP = 12; /* per-sample link triples (RAM bound) */
-export const LABEL_CAP = 64; /* shared name dictionary for rf/links */
+export const COST_NEIGHBOR_CAP = 12; /* per-sample neighbor cost pairs (RAM bound) */
+export const LABEL_CAP = 64; /* shared name dictionary for rf/links/costs */
 export const SERIES_SLICE_S = 300; /* max expand window per series request (5m) */
 export const RETENTION_S_AT_DEFAULT = SAMPLE_CAP * 10;
 
+/** Match firmware mgr/babel_monitor.uc hard-reset candidate thresholds (observe only). */
+export const STUCK_COST = 65535;
+export const STUCK_MIN_LQ = 50;
+
 /**
- * Dense sample vector layout (schema 7) — fixed width, mutated in place:
+ * Dense sample vector layout (schema 9) — fixed width, mutated in place:
  *  0 t, 1 seq,
  *  2 neighbor_count, 3 routable_count,
  *  4 route_count_20, 5 route_count_21, 6 route_count_22,
@@ -41,12 +46,16 @@ export const RETENTION_S_AT_DEFAULT = SAMPLE_CAP * 10;
  *  27 cpu_pct, 28 cpu_peak_pct,
  *  29 lqm_ok, 30 babel_ok,
  *  31 rx_packets_delta, 32 daemon_rss_kb,
- *  33 rf_count, 34 link_count,
+ *  33 rf_count, 34 link_count, 35 stuck_neighbor_count, 36 cost_count,
  *  then RF_NEIGHBOR_CAP pairs (label_idx, snr),
- *  then LINK_IO_CAP triples (label_idx, tx, rx).
+ *  then LINK_IO_CAP triples (label_idx, tx, rx),
+ *  then COST_NEIGHBOR_CAP pairs (label_idx, cost).
  */
-export const SAMPLE_HDR = 35;
-export const SAMPLE_WIDTH = SAMPLE_HDR + RF_NEIGHBOR_CAP * 2 + LINK_IO_CAP * 3;
+export const SAMPLE_HDR = 37;
+export const SAMPLE_WIDTH = SAMPLE_HDR
+    + RF_NEIGHBOR_CAP * 2
+    + LINK_IO_CAP * 3
+    + COST_NEIGHBOR_CAP * 2;
 
 /** Display label for babel/LQM ifaces (br0.N → XLink(N)). */
 export function formatIfaceLabel(iface)

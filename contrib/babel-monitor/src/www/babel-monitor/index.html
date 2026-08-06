@@ -49,6 +49,28 @@
   .kpi.ok .v { color: var(--ok); }
   .kpi.warn { border-color: var(--warn); }
   .kpi.warn .v { color: var(--warn); }
+  .kpi.bad { border-color: var(--bad); }
+  .kpi.bad .v { color: var(--bad); }
+  table tr.stuck td { color: var(--bad); }
+  table tr.stuck td:first-child::after {
+    content: " stuck";
+    font-size: 11px;
+    color: var(--bad);
+    font-weight: 600;
+  }
+  .events-box {
+    margin: 0;
+    padding: 10px 12px;
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    max-height: 180px;
+    overflow: auto;
+    font: 12px/1.4 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    white-space: pre-wrap;
+    word-break: break-word;
+  }
+  .events-empty { color: var(--muted); }
   section {
     background: var(--panel);
     border: 1px solid var(--line);
@@ -67,7 +89,8 @@
   .syslog-wrap[hidden],
   #logSourceTabs[hidden],
   #logControls[hidden],
-  #syslogFilters[hidden] {
+  #syslogFilters[hidden],
+  #logSourceMeta[hidden] {
     display: none !important;
   }
   .tabs.metric { margin-bottom: 10px; }
@@ -78,6 +101,16 @@
     align-items: center;
   }
   .tabs.log-filters { margin: 0; }
+  #logSourceMeta {
+    color: var(--muted);
+    font-size: 12px;
+    margin-left: 4px;
+    cursor: help;
+    user-select: text;
+  }
+  #logSourceMeta[hidden] {
+    display: none !important;
+  }
   .tabs button {
     background: transparent;
     color: var(--muted);
@@ -218,15 +251,20 @@
     <div class="tabs log-ctl" id="logControls" hidden>
       <div class="tabs log-filters" id="syslogFilters" role="group" aria-label="Syslog filters">
         <button type="button" data-filter="all" class="active">All</button>
-        <button type="button" data-filter="babel">Babel</button>
-        <button type="button" data-filter="lqm">LQM</button>
-        <button type="button" data-filter="arednlink">arednlink</button>
-        <button type="button" data-filter="dnsmasq">dnsmasq</button>
+        <button type="button" data-filter="babel-monitord">babel-monitord</button>
+        <button type="button" data-filter="babeld_wrapper">babeld_wrapper</button>
+        <button type="button" data-filter="babel_monitor">babel_monitor</button>
+        <button type="button" data-filter="uhttpd">uhttpd</button>
         <button type="button" data-filter="netifd">netifd</button>
-        <button type="button" data-filter="auth">Auth</button>
+        <button type="button" data-filter="dropbear" title="dropbear (Auth)">Auth</button>
+        <button type="button" data-filter="procd">procd</button>
+        <button type="button" data-filter="update-time">update-time</button>
+        <button type="button" data-filter="dnsmasq">dnsmasq</button>
+        <button type="button" data-filter="arednlink">arednlink</button>
       </div>
       <button type="button" id="syslogPauseBtn">Pause</button>
       <button type="button" id="logDownloadBtn" title="Download full source (no filters / no tail)">Download</button>
+      <span id="logSourceMeta" hidden></span>
     </div>
   </section>
   <section>
@@ -240,11 +278,18 @@
       </table>
     </div>
   </section>
+  <section>
+    <h2>Routing events</h2>
+    <pre class="events-box" id="eventsBox"><span class="events-empty">Loading…</span></pre>
+  </section>
 </main>
 <script>
 (function () {
   const API = "/cgi-bin/babel-monitor";
   const PALETTE = ["#5b9fd4", "#e0a458", "#6fbf73", "#d97b7b", "#b39ddb"];
+  /* Babel unreachable sentinel — excluded from Cost left-axis scale */
+  const COST_UNREACH = 65535;
+  const COST_SOFT_CAP = 20000;
 
   const METRICS = {
     lq: {
@@ -258,10 +303,9 @@
     },
     cost: {
       label: "Cost",
-      series: [
-        { key: "mean_cost", label: "mean cost", color: PALETTE[0] },
-        { key: "bad_cost_count", label: "bad cost #", color: PALETTE[3] }
-      ]
+      series: [],
+      minY: 0,
+      dynamic: "costs"
     },
     neighbors: {
       label: "Neighbors",
@@ -351,12 +395,16 @@
   let logSource = "syslog"; /* syslog | dumps | lqm | dmesg */
   let logFilterAll = true;
   const logFilterOn = {
-    babel: false,
-    lqm: false,
-    arednlink: false,
-    dnsmasq: false,
-    netifd: false,
-    auth: false
+    "babel-monitord": false,
+    "babeld_wrapper": false,
+    "babel_monitor": false,
+    "uhttpd": false,
+    "netifd": false,
+    "dropbear": false,
+    "procd": false,
+    "update-time": false,
+    "dnsmasq": false,
+    "arednlink": false
   };
 
   function $(id) { return document.getElementById(id); }
@@ -414,11 +462,46 @@
     $("logControls").hidden = !logs;
     $("syslogFilters").hidden = !(logs && logSource === "syslog");
     $("syslogPauseBtn").hidden = !(logs && logSource === "syslog");
+    if (!(logs && (logSource === "lqm" || logSource === "dumps"))) {
+      const meta = $("logSourceMeta");
+      if (meta) {
+        meta.hidden = true;
+        meta.textContent = "";
+        meta.removeAttribute("title");
+      }
+    }
     if (text) hideTip();
     if (logs && logSource === "syslog") {
       syncSyslogPauseBtn();
       syncLogFilterButtons();
     }
+  }
+
+  function fmtSourceMtime(sec) {
+    if (sec == null || sec === "") return "—";
+    const d = new Date(Number(sec) * 1000);
+    if (isNaN(d.getTime())) return "—";
+    function pad(v) { return v < 10 ? "0" + v : String(v); }
+    return d.getFullYear() + "-" + pad(d.getMonth() + 1) + "-" + pad(d.getDate()) +
+      " " + pad(d.getHours()) + ":" + pad(d.getMinutes()) + ":" + pad(d.getSeconds());
+  }
+
+  function renderLogSourceMeta(data) {
+    const el = $("logSourceMeta");
+    if (!el) return;
+    const show = logSource === "lqm" || logSource === "dumps";
+    if (!show) {
+      el.hidden = true;
+      el.textContent = "";
+      el.removeAttribute("title");
+      return;
+    }
+    const path = (data && data.source_path) || "";
+    const mtime = data ? data.source_mtime : null;
+    el.textContent = fmtSourceMtime(mtime);
+    if (path) el.title = path;
+    else el.removeAttribute("title");
+    el.hidden = false;
   }
 
   function renderTextPanel(lines, emptyMsg, stickBottom) {
@@ -442,13 +525,16 @@
       let url = API + "?api=logs&source=" + encodeURIComponent(logSource);
       if (logSource === "syslog") {
         const filters = selectedLogFilters();
-        url += "&limit=50&filters=" + encodeURIComponent(filters.length ? filters.join(",") : "all");
+        url += "&limit=50&filters=" + (filters.length
+          ? filters.map(encodeURIComponent).join(",")
+          : "all");
       } else if (logSource === "dmesg") {
         url += "&limit=80";
       }
       const data = await getJsonRetry(url);
       const stick = logSource === "syslog" && !syslogPaused;
       renderTextPanel(data.lines || [], "No output", stick);
+      renderLogSourceMeta(data);
     } finally {
       textBusy = false;
     }
@@ -483,6 +569,7 @@
 
   function formatVal(v) {
     if (v == null || v !== v) return "—";
+    if (v === COST_UNREACH) return "UNREACH";
     if (Math.abs(v - Math.round(v)) < 1e-6) return String(Math.round(v));
     return (Math.round(v * 10) / 10).toString();
   }
@@ -606,6 +693,44 @@
       }
       return { label: "Link I/O", series: out, minY: 0 };
     }
+    if (base.dynamic === "costs") {
+      const keys = {};
+      for (let i = 0; i < series.length; i++) {
+        const costs = series[i].costs;
+        if (!costs) continue;
+        for (const k in costs) {
+          if (Object.prototype.hasOwnProperty.call(costs, k)) keys[k] = true;
+        }
+      }
+      const names = Object.keys(keys).sort();
+      const out = [];
+      for (let i = 0; i < names.length; i++) {
+        out.push({
+          key: names[i],
+          label: names[i],
+          color: colorAt(i),
+          width: 1.5,
+          fromCosts: true
+        });
+      }
+      out.push({
+        key: "bad_cost_count",
+        label: "bad #",
+        color: PALETTE[3],
+        width: 1.6,
+        rightAxis: true,
+        dash: true
+      });
+      out.push({
+        key: "stuck_neighbor_count",
+        label: "stuck #",
+        color: PALETTE[1],
+        width: 1.6,
+        rightAxis: true,
+        dash: true
+      });
+      return { label: "Cost", series: out, minY: 0, dualAxis: true };
+    }
     return base;
   }
 
@@ -625,6 +750,11 @@
       }
       if (spec.linkIdx === 0) return pair.tx == null ? null : Number(pair.tx);
       return pair.rx == null ? null : Number(pair.rx);
+    }
+    if (spec.fromCosts) {
+      if (!row.costs) return null;
+      const v = row.costs[spec.key];
+      return v == null ? null : Number(v);
     }
     const v = row[spec.key];
     return v == null ? null : Number(v);
@@ -714,6 +844,9 @@
         "Average link quality across Babel neighbors (from reachability bits)"],
       ["Mean cost", s.mean_cost ?? "—",
         "Average Babel cost across neighbors (lower is better; 65535 = unreachable)"],
+      ["Stuck", s.stuck_neighbor_count ?? 0,
+        "Neighbors with cost 65535 and LQ ≥ 50 — same candidate rule as firmware babel hard-reset (this package only observes; it never restarts Babel)",
+        Number(s.stuck_neighbor_count) > 0 ? "bad" : "ok"],
       ["TX Δ", s.tx_packets_delta ?? "—",
         "Transmit packets counted since the previous sample (all mesh links)"],
       ["RX Δ", s.rx_packets_delta ?? "—",
@@ -775,31 +908,79 @@
       const typ = n.type || formatIface(n.iface) || "—";
       const rxd = n.rx_packets_delta != null ? n.rx_packets_delta : "—";
       const txd = n.tx_packets_delta != null ? n.tx_packets_delta : "—";
-      return "<tr><td>" + host + "</td><td>" + n.ipv6 + "</td><td>" + typ +
+      const rowClass = n.stuck ? ' class="stuck"' : "";
+      const title = n.stuck
+        ? ' title="Stuck: cost 65535 with LQ ≥ 50 (firmware hard-reset candidate)"'
+        : "";
+      return "<tr" + rowClass + title + "><td>" + host + "</td><td>" + n.ipv6 +
+        "</td><td>" + typ +
         "</td><td>" + n.lq + "%</td><td>" + n.cost + "</td><td>" + n.rxcost +
         "</td><td>" + n.txcost + "</td><td>" + rxd + "</td><td>" + txd + "</td></tr>";
     }).join("");
   }
 
+  function fmtEventTime(t) {
+    if (t == null) return "—";
+    const d = new Date(Number(t) * 1000);
+    if (isNaN(d.getTime())) return String(t);
+    function pad(v) { return v < 10 ? "0" + v : String(v); }
+    return d.getFullYear() + "-" + pad(d.getMonth() + 1) + "-" + pad(d.getDate()) +
+      " " + pad(d.getHours()) + ":" + pad(d.getMinutes()) + ":" + pad(d.getSeconds());
+  }
+
+  function renderEvents(list) {
+    const box = $("eventsBox");
+    if (!box) return;
+    const want = ["babel_stuck", "babel_unstuck", "babel_hard", "babel_soft", "neighbor_churn"];
+    const filtered = (list || []).filter(function (e) {
+      return want.indexOf(e.type) >= 0;
+    });
+    const tail = filtered.slice(-30);
+    if (!tail.length) {
+      box.textContent = "";
+      const span = document.createElement("span");
+      span.className = "events-empty";
+      span.textContent = "No routing events yet";
+      box.appendChild(span);
+      return;
+    }
+    box.textContent = tail.map(function (e) {
+      return fmtEventTime(e.t) + "  " + (e.type || "?") + "  " + (e.detail || "");
+    }).join("\n");
+    box.scrollTop = box.scrollHeight;
+  }
+
   function renderLegend(metric) {
-    $("legend").innerHTML = metric.series.map(function (s) {
+    let html = metric.series.map(function (s) {
       if (s.markers) {
         return '<span><i style="background:' + s.color +
           ';height:8px;width:8px;border-radius:50%"></i>' + s.label + "</span>";
       }
+      if (s.dash) {
+        return '<span><i style="background:transparent;border-top:2px dashed ' +
+          s.color + ';height:0;width:14px;margin-top:4px"></i>' + s.label + "</span>";
+      }
       return '<span><i style="background:' + s.color + '"></i>' + s.label + "</span>";
     }).join("");
+    if (metricId === "cost") {
+      html += '<span><i style="background:' + PALETTE[1] +
+        ';height:8px;width:8px;border-radius:50%"></i>UNREACH</span>';
+    }
+    $("legend").innerHTML = html;
   }
 
-  function yBounds(metric, lines) {
+  function yBounds(metric, lines, seriesSpecs) {
     let lo = metric.minY != null ? metric.minY : Infinity;
     let hi = metric.maxY != null ? metric.maxY : -Infinity;
     if (metric.minY == null || metric.maxY == null) {
       for (let li = 0; li < lines.length; li++) {
+        if (seriesSpecs && seriesSpecs[li] && seriesSpecs[li].rightAxis) continue;
         const vals = lines[li];
         for (let i = 0; i < vals.length; i++) {
           const v = vals[i];
           if (v == null || v !== v) continue;
+          /* Cost: exclude Babel unreachable sentinel from left-axis range */
+          if (metricId === "cost" && v === COST_UNREACH) continue;
           if (metric.minY == null && v < lo) lo = v;
           if (metric.maxY == null && v > hi) hi = v;
         }
@@ -809,6 +990,30 @@
     if (!isFinite(hi) || hi <= lo) hi = lo + 1;
     if (metric.minY != null) lo = metric.minY;
     if (metric.maxY != null) hi = Math.max(metric.maxY, hi);
+    /* Cost option 1+2: soft-cap finite max (keeps mid-range readable) */
+    if (metricId === "cost") {
+      lo = 0;
+      hi = Math.min(COST_SOFT_CAP, Math.max(hi * 1.15, 1));
+    }
+    return { lo: lo, hi: hi };
+  }
+
+  function yBoundsRight(lines, seriesSpecs) {
+    let lo = Infinity;
+    let hi = -Infinity;
+    for (let li = 0; li < lines.length; li++) {
+      if (!seriesSpecs[li] || !seriesSpecs[li].rightAxis) continue;
+      const vals = lines[li];
+      for (let i = 0; i < vals.length; i++) {
+        const v = vals[i];
+        if (v == null || v !== v) continue;
+        if (v < lo) lo = v;
+        if (v > hi) hi = v;
+      }
+    }
+    if (!isFinite(lo)) lo = 0;
+    if (!isFinite(hi) || hi <= lo) hi = lo + 1;
+    if (lo > 0) lo = 0;
     return { lo: lo, hi: hi };
   }
 
@@ -896,7 +1101,7 @@
     return best;
   }
 
-  function drawAxes(ctx, w, h, layout, bounds) {
+  function drawAxes(ctx, w, h, layout, bounds, rightBounds) {
     const { padL, padR, padT, padB, plotW } = layout;
     const axisY = h - padB;
     ctx.strokeStyle = "#3a424d";
@@ -905,6 +1110,10 @@
     ctx.moveTo(padL, padT);
     ctx.lineTo(padL, axisY);
     ctx.lineTo(w - padR, axisY);
+    if (rightBounds) {
+      ctx.moveTo(w - padR, padT);
+      ctx.lineTo(w - padR, axisY);
+    }
     ctx.stroke();
 
     ctx.fillStyle = "#9aa3ad";
@@ -912,6 +1121,13 @@
     ctx.textAlign = "left";
     ctx.fillText(String(bounds.hi), 4, padT + 8);
     ctx.fillText(String(bounds.lo), 4, axisY);
+
+    if (rightBounds) {
+      ctx.textAlign = "right";
+      ctx.fillText(String(rightBounds.hi), w - 4, padT + 8);
+      ctx.fillText(String(rightBounds.lo), w - 4, axisY);
+      ctx.textAlign = "left";
+    }
 
     const step = xTickStep(layout.windowSec);
     ctx.textAlign = "center";
@@ -951,7 +1167,8 @@
     const c = $("chart");
     const ctx = c.getContext("2d");
     const w = c.width, h = c.height;
-    const padL = 44, padR = 18, padT = 14, padB = 42;
+    const dual = !!metric.dualAxis;
+    const padL = 44, padR = dual ? 44 : 18, padT = 14, padB = 42;
     const plotW = w - padL - padR;
     const plotH = h - padT - padB;
     const t0 = seriesT0();
@@ -963,7 +1180,7 @@
 
     const emptyBounds = { lo: 0, hi: 1 };
     if (!series.length) {
-      drawAxes(ctx, w, h, chartLayout, emptyBounds);
+      drawAxes(ctx, w, h, chartLayout, emptyBounds, dual ? emptyBounds : null);
       ctx.fillStyle = "#9aa3ad";
       ctx.font = "11px ui-sans-serif, system-ui, sans-serif";
       ctx.fillText("No samples in window", padL + 10, padT + plotH / 2);
@@ -976,7 +1193,7 @@
         return (s.rf && Object.keys(s.rf).length) || (s.mean_snr != null && s.mean_snr > 0);
       });
       if (!anyRf) {
-        drawAxes(ctx, w, h, chartLayout, emptyBounds);
+        drawAxes(ctx, w, h, chartLayout, emptyBounds, null);
         ctx.fillStyle = "#9aa3ad";
         ctx.font = "11px ui-sans-serif, system-ui, sans-serif";
         ctx.fillText("No RF neighbors in window", padL + 10, padT + plotH / 2);
@@ -992,7 +1209,7 @@
           (s.rx_packets_delta != null && s.rx_packets_delta > 0);
       });
       if (!anyLinks) {
-        drawAxes(ctx, w, h, chartLayout, emptyBounds);
+        drawAxes(ctx, w, h, chartLayout, emptyBounds, null);
         ctx.fillStyle = "#9aa3ad";
         ctx.font = "11px ui-sans-serif, system-ui, sans-serif";
         ctx.fillText("No link I/O in window", padL + 10, padT + plotH / 2);
@@ -1001,19 +1218,50 @@
       }
     }
 
+    if (metricId === "cost") {
+      const anyCost = series.some(function (s) {
+        return (s.costs && Object.keys(s.costs).length) ||
+          (s.bad_cost_count != null) || (s.stuck_neighbor_count != null);
+      });
+      if (!anyCost) {
+        drawAxes(ctx, w, h, chartLayout, emptyBounds, emptyBounds);
+        ctx.fillStyle = "#9aa3ad";
+        ctx.font = "11px ui-sans-serif, system-ui, sans-serif";
+        ctx.fillText("No neighbor cost history in window yet", padL + 10, padT + plotH / 2);
+        hideTip();
+        return;
+      }
+    }
+
     const lines = metric.series.map(function (s) {
       return series.map(function (row) { return sampleValue(row, s); });
     });
-    const bounds = yBounds(metric, lines);
+    const bounds = yBounds(metric, lines, metric.series);
+    const rightBounds = dual ? yBoundsRight(lines, metric.series) : null;
     const span = bounds.hi - bounds.lo;
-    drawAxes(ctx, w, h, chartLayout, bounds);
+    const rightSpan = rightBounds ? (rightBounds.hi - rightBounds.lo) : 1;
+    drawAxes(ctx, w, h, chartLayout, bounds, rightBounds);
+
+    /* Cost: faint UNREACH band at top of left plot */
+    if (metricId === "cost") {
+      ctx.fillStyle = "rgba(217,123,123,0.10)";
+      ctx.fillRect(padL, padT, plotW, 12);
+      ctx.fillStyle = "#9aa3ad";
+      ctx.font = "10px ui-sans-serif, system-ui, sans-serif";
+      ctx.textAlign = "left";
+      ctx.fillText("UNREACH", padL + 4, padT + 9);
+    }
 
     const n = series.length;
     const axisY = h - padB;
     const markerPasses = [];
+    const unreachMarks = [];
     for (let si = 0; si < metric.series.length; si++) {
       const spec = metric.series[si];
       const vals = lines[si];
+      const useRight = !!spec.rightAxis && rightBounds;
+      const bLo = useRight ? rightBounds.lo : bounds.lo;
+      const bSpan = useRight ? rightSpan : span;
       ctx.strokeStyle = spec.color;
       ctx.lineWidth = spec.width || 1.5;
       if (spec.dash) ctx.setLineDash([5, 4]);
@@ -1037,8 +1285,14 @@
           started = false;
           continue;
         }
+        /* Cost: gap line on unreachable; mark in top band instead */
+        if (metricId === "cost" && spec.fromCosts && v === COST_UNREACH) {
+          started = false;
+          unreachMarks.push({ x: xForTime(ti, chartLayout), color: spec.color });
+          continue;
+        }
         const x = xForTime(ti, chartLayout);
-        const y = axisY - ((v - bounds.lo) / span) * plotH;
+        const y = axisY - ((v - bLo) / bSpan) * plotH;
         if (!started) { ctx.moveTo(x, y); started = true; }
         else ctx.lineTo(x, y);
         if (spec.markers) pts.push({ x: x, y: y });
@@ -1048,6 +1302,17 @@
       if (spec.markers && pts.length) {
         markerPasses.push({ color: spec.color, pts: pts });
       }
+    }
+
+    for (let ui = 0; ui < unreachMarks.length; ui++) {
+      const m = unreachMarks[ui];
+      ctx.beginPath();
+      ctx.arc(m.x, padT + 6, 3.2, 0, Math.PI * 2);
+      ctx.fillStyle = m.color;
+      ctx.fill();
+      ctx.strokeStyle = "#15181c";
+      ctx.lineWidth = 1;
+      ctx.stroke();
     }
 
     /* Markers after all strokes so underneath series stay visible when values match */
@@ -1093,8 +1358,17 @@
         for (let si = 0; si < metric.series.length; si++) {
           const v = lines[si][hoverIdx];
           if (v == null || v !== v) continue;
-          const y = axisY - ((v - bounds.lo) / span) * plotH;
-          ctx.fillStyle = metric.series[si].color;
+          const spec = metric.series[si];
+          const useRight = !!spec.rightAxis && rightBounds;
+          let y;
+          if (metricId === "cost" && spec.fromCosts && v === COST_UNREACH) {
+            y = padT + 6;
+          } else {
+            const bLo = useRight ? rightBounds.lo : bounds.lo;
+            const bSpan = useRight ? rightSpan : span;
+            y = axisY - ((v - bLo) / bSpan) * plotH;
+          }
+          ctx.fillStyle = spec.color;
           ctx.beginPath();
           ctx.arc(x, y, 3.5, 0, Math.PI * 2);
           ctx.fill();
@@ -1135,6 +1409,11 @@
     const live = await getJsonRetry(API + "?api=live");
     renderKpis(live);
     renderNeigh(live.neighbors || []);
+  }
+
+  async function refreshEvents() {
+    const data = await getJsonRetry(API + "?api=events&since_seq=0&limit=80");
+    renderEvents(data.events || []);
   }
 
   async function refreshSeries() {
@@ -1179,6 +1458,7 @@
     tickBusy = true;
     try {
       await refreshLive();
+      await refreshEvents();
       if (isLogs()) {
         if (logSource !== "syslog" || !syslogPaused) await refreshLogs();
       } else if (isTop()) {

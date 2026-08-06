@@ -2,9 +2,9 @@
  * In-RAM dense sample + event rings (no flash I/O).
  *
  * Samples live in one statically allocated flat int buffer:
- *   index i → offset i * SAMPLE_WIDTH (schema 7).
+ *   index i → offset i * SAMPLE_WIDTH (schema 9).
  * A rolling sample_head overwrites slots in place — never allocate/drop sample
- * vectors. RF/link labels live once in store.labels; the buffer stores indices.
+ * vectors. RF/link/cost labels live once in store.labels; the buffer stores indices.
  * Wire/API expands to named fields on demand (never cached on the store).
  */
 import * as common from "babel_monitor.common";
@@ -52,6 +52,8 @@ export function createStore()
             babel_pid: null,
             dns_mtime: null,
             neighbor_keys: {},
+            stuck_keys: {},
+            stuck_snapshot: "",
             uptime_s: null,
             cpu_total: null,
             cpu_idle: null,
@@ -161,6 +163,7 @@ export function writeSampleSlot(store, slot, s)
     b[o + 30] = int(s.babel_ok);
     b[o + 31] = int(s.rx_packets_delta);
     b[o + 32] = s.daemon_rss_kb != null ? int(s.daemon_rss_kb) : 0;
+    b[o + 35] = int(s.stuck_neighbor_count);
 
     let rf_n = 0;
     const rf_base = o + common.SAMPLE_HDR;
@@ -218,6 +221,30 @@ export function writeSampleSlot(store, slot, s)
         b[link_base + i * 3 + 1] = 0;
         b[link_base + i * 3 + 2] = 0;
     }
+
+    let cost_n = 0;
+    const cost_base = o + common.SAMPLE_HDR
+        + common.RF_NEIGHBOR_CAP * 2
+        + common.LINK_IO_CAP * 3;
+    if (s.costs) {
+        for (let name in s.costs) {
+            if (cost_n >= common.COST_NEIGHBOR_CAP) {
+                break;
+            }
+            const li = internLabel(store, name);
+            if (li < 0) {
+                continue;
+            }
+            b[cost_base + cost_n * 2] = li;
+            b[cost_base + cost_n * 2 + 1] = int(s.costs[name]);
+            cost_n++;
+        }
+    }
+    b[o + 36] = cost_n;
+    for (let i = cost_n; i < common.COST_NEIGHBOR_CAP; i++) {
+        b[cost_base + i * 2] = 0;
+        b[cost_base + i * 2 + 1] = 0;
+    }
 };
 
 /** Expand one ring slot to named wire fields (ephemeral). */
@@ -258,7 +285,8 @@ export function expandSampleAt(store, slot)
         lqm_ok: b[o + 29],
         babel_ok: b[o + 30],
         rx_packets_delta: b[o + 31],
-        daemon_rss_kb: b[o + 32]
+        daemon_rss_kb: b[o + 32],
+        stuck_neighbor_count: b[o + 35]
     };
 
     const rf_n = int(b[o + 33] || 0);
@@ -285,6 +313,21 @@ export function expandSampleAt(store, slot)
             }
         }
         obj.links = links;
+    }
+
+    const cost_n = int(b[o + 36] || 0);
+    if (cost_n > 0) {
+        const costs = {};
+        const cost_base = o + common.SAMPLE_HDR
+            + common.RF_NEIGHBOR_CAP * 2
+            + common.LINK_IO_CAP * 3;
+        for (let i = 0; i < cost_n && i < common.COST_NEIGHBOR_CAP; i++) {
+            const name = labelAt(store, b[cost_base + i * 2]);
+            if (name !== "") {
+                costs[name] = b[cost_base + i * 2 + 1];
+            }
+        }
+        obj.costs = costs;
     }
 
     return obj;

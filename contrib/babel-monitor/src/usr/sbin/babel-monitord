@@ -33,12 +33,44 @@ function readDaemonRssKb()
     return int(m[1]);
 }
 
-/** Last N syslog lines via logread (not stored in the sample ring). */
+/** Extract OpenWrt logread service name from `facility.prio name[pid]: …`. */
+function syslogServiceName(line)
+{
+    const m = match(`${line}`, /\S+\.\S+\s+([^:]+):/);
+    if (!m) {
+        return "";
+    }
+    let tag = trim(m[1]);
+    const bare = match(tag, /^(.+)\[\d+\]$/);
+    if (bare) {
+        tag = bare[1];
+    }
+    return lc(tag);
+}
+
+/** True if line's service tag matches a syslog filter id. */
+function syslogFilterHit(service, f)
+{
+    if (!service || !f) {
+        return false;
+    }
+    if (f === "auth" || f === "dropbear") {
+        return service === "dropbear";
+    }
+    if (f === "babel_monitor") {
+        return service === "manager.babel_monitor.uc";
+    }
+    return service === f;
+}
+
+/** Last N syslog lines via logread (not stored in the sample ring).
+ * limit applies to the returned set. With filters: scan a fixed pre-filter
+ * window (500 lines — cheap), match on service tag, then keep the last limit hits.
+ */
 function readSyslogLines(limit, filters)
 {
-    /* Pull extra when filtering so the returned set still has useful depth */
     const want = common.clampInt(limit, 1, 200, 50);
-    const pull = length(filters) ? common.clampInt(want * 4, want, 400, want * 4) : want;
+    const pull = length(filters) ? 500 : want;
     const raw = [];
     const p = fs.popen(sprintf("logread -l %d 2>/dev/null", pull));
     if (!p) {
@@ -61,46 +93,28 @@ function readSyslogLines(limit, filters)
         return out;
     }
 
-    const out = [];
+    /* Filter first, then tail want (limit is post-filter). */
+    const matched = [];
     for (let i = 0; i < length(raw); i++) {
         const line = raw[i];
-        const low = lc(line);
+        const service = syslogServiceName(line);
         let hit = false;
         for (let fi = 0; fi < length(filters); fi++) {
-            const f = filters[fi];
-            if (f === "babel" && index(low, "babel") >= 0) {
+            if (syslogFilterHit(service, filters[fi])) {
                 hit = true;
-            }
-            else if (f === "lqm" && index(low, "lqm") >= 0) {
-                hit = true;
-            }
-            else if (f === "arednlink" && index(low, "arednlink") >= 0) {
-                hit = true;
-            }
-            else if (f === "dnsmasq" && index(low, "dnsmasq") >= 0) {
-                hit = true;
-            }
-            else if (f === "netifd" && index(low, "netifd") >= 0) {
-                hit = true;
-            }
-            else if (f === "auth" && (index(low, "dropbear") >= 0 ||
-                index(low, "authpriv") >= 0 || index(low, "auth.") >= 0)) {
-                hit = true;
-            }
-            if (hit) {
                 break;
             }
         }
         if (hit) {
-            push(out, line);
+            push(matched, line);
         }
     }
-    if (length(out) <= want) {
-        return out;
+    if (length(matched) <= want) {
+        return matched;
     }
     const trimmed = [];
-    for (let i = length(out) - want; i < length(out); i++) {
-        push(trimmed, out[i]);
+    for (let i = length(matched) - want; i < length(matched); i++) {
+        push(trimmed, matched[i]);
     }
     return trimmed;
 }
@@ -111,12 +125,26 @@ function parseFilterList(raw)
     if (raw == null || raw === "" || lc(raw) === "all") {
         return filters;
     }
+    const known = {
+        "babel-monitord": true,
+        "babeld_wrapper": true,
+        "babel_monitor": true,
+        "uhttpd": true,
+        "netifd": true,
+        "dropbear": true,
+        "auth": true,
+        "procd": true,
+        "update-time": true,
+        "dnsmasq": true,
+        "arednlink": true,
+        "lqm": true,
+        "kernel": true
+    };
     const parts = split(raw, ",");
     for (let i = 0; i < length(parts); i++) {
         const f = lc(trim(parts[i]));
-        if (f === "babel" || f === "lqm" || f === "arednlink" ||
-            f === "dnsmasq" || f === "netifd" || f === "auth") {
-            push(filters, f);
+        if (known[f]) {
+            push(filters, f === "auth" ? "dropbear" : f);
         }
     }
     return filters;
@@ -161,6 +189,17 @@ function readLqmInfoLines()
     catch (e) {
     }
     return split(replace(`${raw}`, /\r$/, ""), "\n");
+}
+
+/** Path + mtime for Logs UI (LQM file / Babel control socket). */
+function fileSourceMeta(path)
+{
+    const meta = { path: path, mtime: null };
+    const st = fs.stat(path);
+    if (st && st.mtime != null) {
+        meta.mtime = int(st.mtime);
+    }
+    return meta;
 }
 
 function appendDumpSection(out, title, dump_lines, max_lines)
@@ -343,16 +382,22 @@ function handleRequest(line)
             };
         }
         if (source === "dumps") {
+            const src = fileSourceMeta("/var/run/babel.sock");
             return {
                 boot_id: store.boot_id,
                 source: "dumps",
+                source_path: src.path,
+                source_mtime: src.mtime,
                 lines: readBabelDumpLines()
             };
         }
         if (source === "lqm") {
+            const src = fileSourceMeta("/tmp/lqm.info");
             return {
                 boot_id: store.boot_id,
                 source: "lqm",
+                source_path: src.path,
+                source_mtime: src.mtime,
                 lines: readLqmInfoLines()
             };
         }

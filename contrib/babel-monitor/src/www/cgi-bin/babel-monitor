@@ -15,10 +15,22 @@ const q = getenv("QUERY_STRING") || "";
 const cfg = configlib.loadConfig();
 const BABEL_SOCK = { path: "/var/run/babel.sock" };
 
+/** Decode %XX and '+' in a QUERY_STRING value (uhttpd leaves these encoded). */
+function urldecode(s)
+{
+    if (s == null) {
+        return null;
+    }
+    s = replace(`${s}`, /\+/g, " ");
+    return replace(s, /%([0-9A-Fa-f]{2})/g, function (m) {
+        return chr(hex(m[1]));
+    });
+}
+
 function qparam(name)
 {
     const m = match(q, regexp(name + "=([^&]*)"));
-    return m ? m[1] : null;
+    return m ? urldecode(m[1]) : null;
 }
 
 function parseCompress(raw, dflt)

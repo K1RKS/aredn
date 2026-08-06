@@ -298,7 +298,7 @@
   <h3>Sample fields (schema 4)</h3>
   <ul>
     <li>Ring stores dense arrays; API expands to named JSON</li>
-    <li><code>t</code>, <code>seq</code>; neighbor/route counts; mean/min LQ; mean cost; bad_cost_count; add/remove deltas</li>
+    <li><code>t</code>, <code>seq</code>; neighbor/route counts; mean/min LQ; mean cost; bad_cost_count; stuck_neighbor_count; per-neighbor <code>costs</code> map (schema 9); add/remove deltas</li>
     <li>Link: tx_packets/retries/fail deltas; optional SNR/bitrate</li>
     <li>DNS/arednlink deltas; babel hard/soft reset deltas; <code>lqm_ok</code> / <code>babel_ok</code></li>
     <li>Host: <code>uptime_s</code>, <code>reboot_delta</code>; <code>mem_available_kb</code> / <code>mem_used_pct</code>; <code>cpu_pct</code> + <code>cpu_peak_pct</code></li>

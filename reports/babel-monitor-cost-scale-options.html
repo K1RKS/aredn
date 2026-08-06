@@ -1,0 +1,286 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Cost chart scale options — babel-monitor</title>
+<style>
+  :root {
+    --bg: #1a1d23;
+    --panel: #23282f;
+    --fg: #e6e8eb;
+    --muted: #9aa3ad;
+    --line: #3a424d;
+    --a: #5b9fd4;
+    --b: #6fbf73;
+    --c: #e0a458;
+    --bad: #d97b7b;
+    --stuck: #d4a84b;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font: 14px/1.45 ui-sans-serif, system-ui, sans-serif;
+    background: var(--bg);
+    color: var(--fg);
+  }
+  header {
+    padding: 18px 22px 8px;
+    border-bottom: 1px solid var(--line);
+  }
+  header h1 { margin: 0 0 6px; font-size: 1.2rem; font-weight: 600; }
+  header p { margin: 0; color: var(--muted); max-width: 72ch; }
+  main { padding: 16px 22px 36px; display: grid; gap: 18px; }
+  .card {
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    padding: 14px 16px 12px;
+  }
+  .card h2 { margin: 0 0 4px; font-size: 1rem; }
+  .card .sub { color: var(--muted); font-size: 12px; margin: 0 0 10px; }
+  canvas {
+    width: 100%;
+    max-width: 920px;
+    height: auto;
+    display: block;
+    background: #1a1d23;
+    border: 1px solid var(--line);
+    border-radius: 6px;
+  }
+  .legend {
+    display: flex; flex-wrap: wrap; gap: 10px 16px;
+    margin-top: 8px; font-size: 12px; color: var(--muted);
+  }
+  .legend span { display: inline-flex; align-items: center; gap: 6px; }
+  .legend i {
+    width: 14px; height: 3px; display: inline-block; border-radius: 1px;
+  }
+  .legend i.dot {
+    width: 8px; height: 8px; border-radius: 50%;
+  }
+  .pick {
+    margin-top: 10px;
+    color: var(--fg);
+    font-size: 13px;
+  }
+</style>
+</head>
+<body>
+<header>
+  <h1>Cost history — scale options</h1>
+  <p>
+    Same synthetic series (two DtD links ~96, one XLink that climbs then hits 65535).
+    Compare how readable the normal costs stay when unreachable appears.
+  </p>
+</header>
+<main>
+  <section class="card">
+    <h2>Today (current)</h2>
+    <p class="sub">Left axis auto-ranges including 65535 → normal costs flatten to the baseline.</p>
+    <canvas id="c0" width="900" height="220"></canvas>
+    <div class="legend" id="leg0"></div>
+  </section>
+  <section class="card">
+    <h2>Option 1 — exclude 65535 from left scale</h2>
+    <p class="sub">Axis ranges on finite costs only. Unreachable drawn as dots on a top band (not used for scale).</p>
+    <canvas id="c1" width="900" height="220"></canvas>
+    <div class="legend" id="leg1"></div>
+    <p class="pick">Best for “see the real costs, and still see when someone went UNREACH.”</p>
+  </section>
+  <section class="card">
+    <h2>Option 2 — soft cap only</h2>
+    <p class="sub">Left max = min(max(all costs), max(good)×1.15, 20000) then clamp. Here cap ≈ 18.4k so 65535 still collapses the mid-range somewhat unless we also exclude it.</p>
+    <canvas id="c2" width="900" height="220"></canvas>
+    <div class="legend" id="leg2"></div>
+    <p class="pick">Alone: weak when 65535 is present (still dwarfs 96). Useful as a ceiling when all links are “high but finite.”</p>
+  </section>
+  <section class="card">
+    <h2>Option 1 + 2 — exclude 65535, then soft-cap the rest</h2>
+    <p class="sub">Scale on finite costs, then also cap e.g. at max(good)×1.15 (or 20k). Same look as #1 here because max finite ≈ 16k; helps if one link is 50k-but-not-65535.</p>
+    <canvas id="c3" width="900" height="220"></canvas>
+    <div class="legend" id="leg3"></div>
+    <p class="pick">Recommended if you want both UNREACH markers and protection against a single huge-but-valid cost.</p>
+  </section>
+</main>
+<script>
+(function () {
+  const N = 48;
+  const colors = { dtdA: "#5b9fd4", dtdB: "#6fbf73", xlink: "#e0a458", bad: "#d97b7b", stuck: "#d4a84b", band: "#3a424d" };
+
+  /* Synthetic: DtD flat; XLink rises then UNREACH then recovers */
+  const t = [];
+  const dtdA = [], dtdB = [], xlink = [], bad = [], stuck = [];
+  for (let i = 0; i < N; i++) {
+    t.push(i);
+    dtdA.push(96);
+    dtdB.push(96 + (i % 5 === 0 ? 4 : 0));
+    let xc = 2050 + i * 280;
+    if (i >= 28 && i <= 36) xc = 65535;
+    else if (i > 36) xc = 12000 + (i - 36) * 40;
+    xlink.push(xc);
+    bad.push(xc === 65535 ? 1 : 0);
+    stuck.push(xc === 65535 ? 1 : 0);
+  }
+
+  function legend(el, items) {
+    el.innerHTML = items.map(function (it) {
+      const klass = it.dot ? "dot" : "";
+      const style = it.dash
+        ? "background:transparent;border-top:2px dashed " + it.color + ";height:0;margin-top:3px"
+        : "background:" + it.color;
+      return '<span><i class="' + klass + '" style="' + style + '"></i>' + it.label + "</span>";
+    }).join("");
+  }
+
+  function draw(canvasId, mode) {
+    const c = document.getElementById(canvasId);
+    const ctx = c.getContext("2d");
+    const w = c.width, h = c.height;
+    const padL = 52, padR = 44, padT = 16, padB = 36;
+    const plotW = w - padL - padR, plotH = h - padT - padB;
+    ctx.clearRect(0, 0, w, h);
+    ctx.fillStyle = "#1a1d23";
+    ctx.fillRect(0, 0, w, h);
+
+    const finite = [];
+    for (let i = 0; i < N; i++) {
+      [dtdA[i], dtdB[i], xlink[i]].forEach(function (v) {
+        if (v !== 65535) finite.push(v);
+      });
+    }
+    const maxAll = Math.max.apply(null, dtdA.concat(dtdB, xlink));
+    const maxGood = Math.max.apply(null, finite);
+    const soft = Math.min(20000, Math.max(maxGood * 1.15, 1));
+
+    let lo = 0, hi = 1;
+    if (mode === "current") {
+      hi = maxAll;
+    } else if (mode === "opt2") {
+      hi = soft;
+    } else if (mode === "opt1") {
+      hi = maxGood * 1.05;
+    } else if (mode === "opt1_2") {
+      hi = Math.min(soft, maxGood * 1.15);
+    }
+    if (hi <= lo) hi = lo + 1;
+
+    const rLo = 0, rHi = 2;
+    function yLeft(v) {
+      const clamped = Math.min(v, hi);
+      return padT + plotH - ((clamped - lo) / (hi - lo)) * plotH;
+    }
+    function yRight(v) {
+      return padT + plotH - ((v - rLo) / (rHi - rLo)) * plotH;
+    }
+    function xAt(i) {
+      return padL + (i / (N - 1)) * plotW;
+    }
+
+    /* axes */
+    ctx.strokeStyle = "#3a424d";
+    ctx.beginPath();
+    ctx.moveTo(padL, padT);
+    ctx.lineTo(padL, padT + plotH);
+    ctx.lineTo(padL + plotW, padT + plotH);
+    ctx.lineTo(padL + plotW, padT);
+    ctx.stroke();
+
+    ctx.fillStyle = "#9aa3ad";
+    ctx.font = "11px ui-sans-serif, system-ui, sans-serif";
+    ctx.textAlign = "left";
+    ctx.fillText(String(Math.round(hi)), 4, padT + 10);
+    ctx.fillText(String(Math.round(lo)), 4, padT + plotH);
+    ctx.textAlign = "right";
+    ctx.fillText(String(rHi), w - 4, padT + 10);
+    ctx.fillText(String(rLo), w - 4, padT + plotH);
+    ctx.textAlign = "center";
+    ctx.fillText("time →", padL + plotW / 2, h - 8);
+
+    if (mode === "opt1" || mode === "opt1_2") {
+      /* unreachable band */
+      ctx.fillStyle = "rgba(217,123,123,0.08)";
+      ctx.fillRect(padL, padT, plotW, 14);
+      ctx.fillStyle = "#9aa3ad";
+      ctx.textAlign = "left";
+      ctx.font = "10px ui-sans-serif, system-ui, sans-serif";
+      ctx.fillText("UNREACH band (65535)", padL + 6, padT + 10);
+    }
+
+    function strokeSeries(vals, color, width, dash) {
+      ctx.strokeStyle = color;
+      ctx.lineWidth = width;
+      ctx.setLineDash(dash || []);
+      ctx.beginPath();
+      let started = false;
+      for (let i = 0; i < N; i++) {
+        const v = vals[i];
+        if (mode === "opt1" || mode === "opt1_2") {
+          if (v === 65535) { started = false; continue; }
+        }
+        const y = yLeft(v);
+        const x = xAt(i);
+        if (!started) { ctx.moveTo(x, y); started = true; }
+        else ctx.lineTo(x, y);
+      }
+      ctx.stroke();
+      ctx.setLineDash([]);
+    }
+
+    strokeSeries(dtdA, colors.dtdA, 1.6);
+    strokeSeries(dtdB, colors.dtdB, 1.6);
+    strokeSeries(xlink, colors.xlink, 1.8);
+
+    /* UNREACH markers */
+    if (mode === "opt1" || mode === "opt1_2") {
+      for (let i = 0; i < N; i++) {
+        if (xlink[i] !== 65535) continue;
+        const x = xAt(i);
+        const y = padT + 7;
+        ctx.beginPath();
+        ctx.arc(x, y, 3.2, 0, Math.PI * 2);
+        ctx.fillStyle = colors.xlink;
+        ctx.fill();
+        ctx.strokeStyle = "#15181c";
+        ctx.lineWidth = 1;
+        ctx.stroke();
+      }
+    }
+
+    /* right axis: bad / stuck */
+    function strokeRight(vals, color) {
+      ctx.strokeStyle = color;
+      ctx.lineWidth = 1.5;
+      ctx.setLineDash([5, 4]);
+      ctx.beginPath();
+      let started = false;
+      for (let i = 0; i < N; i++) {
+        const x = xAt(i), y = yRight(vals[i]);
+        if (!started) { ctx.moveTo(x, y); started = true; }
+        else ctx.lineTo(x, y);
+      }
+      ctx.stroke();
+      ctx.setLineDash([]);
+    }
+    strokeRight(bad, colors.bad);
+    strokeRight(stuck, colors.stuck);
+  }
+
+  const items = [
+    { label: "DtD A", color: colors.dtdA },
+    { label: "DtD B", color: colors.dtdB },
+    { label: "XLink", color: colors.xlink },
+    { label: "UNREACH mark", color: colors.xlink, dot: true },
+    { label: "bad # (R)", color: colors.bad, dash: true },
+    { label: "stuck # (R)", color: colors.stuck, dash: true }
+  ];
+
+  draw("c0", "current");
+  draw("c1", "opt1");
+  draw("c2", "opt2");
+  draw("c3", "opt1_2");
+  ["leg0", "leg1", "leg2", "leg3"].forEach(function (id) { legend(document.getElementById(id), items); });
+})();
+</script>
+</body>
+</html>
