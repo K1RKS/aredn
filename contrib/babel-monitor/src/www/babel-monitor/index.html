@@ -1369,13 +1369,16 @@
           const left0 = x - groupW / 2;
           for (let bi = 0; bi < barSpecs.length; bi++) {
             const v = lines[barSpecs[bi].si][i];
-            if (v == null || v !== v || v <= 0) continue;
-            const bh = ((v - bounds.lo) / span) * p.plotH;
+            if (v == null || v !== v || v < 0) continue;
             const bx = left0 + bi * (barW + 1);
+            /* Zero: short stub so the series stays visible when counts are idle */
+            let bh;
+            if (v === 0) bh = 2;
+            else bh = Math.max(2, ((v - bounds.lo) / span) * p.plotH);
             const by = p.axisY - bh;
             ctx.fillStyle = barSpecs[bi].spec.color;
-            ctx.globalAlpha = 0.85;
-            ctx.fillRect(bx, by, barW, Math.max(1, bh));
+            ctx.globalAlpha = v === 0 ? 0.45 : 0.85;
+            ctx.fillRect(bx, by, barW, bh);
             ctx.globalAlpha = 1;
           }
         }
