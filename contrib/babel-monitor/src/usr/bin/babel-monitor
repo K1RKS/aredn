@@ -16,6 +16,7 @@ function usage()
     print("  -enabled <val>     Pause/resume sampling: 1|0|on|off\n");
     print("  -sync-limit <n>    Default sync page size (50–2000)\n");
     print("  -compress-min <n>  Skip gzip below this many bytes\n");
+    print("  -ring-size <size>  Sample ring: none|5m|30m|1h|4h|24h\n");
     print("\n");
     print("Settings apply immediately via the control socket and persist to UCI.\n");
     print(sprintf("Package %s\n", common.packageVersion()));
@@ -35,6 +36,7 @@ function printStatus(resp)
     print(sprintf("  compress           %s\n", s.compress));
     print(sprintf("  sync_limit         %s\n", s.sync_limit));
     print(sprintf("  compress_min_bytes %s\n", s.compress_min_bytes));
+    print(sprintf("  ring_size          %s\n", s.ring_size || st.ring_size || "4h"));
     print("\n");
     print("status:\n");
     print(sprintf("  package            %s\n", st.package_version || common.packageVersion()));
@@ -47,6 +49,7 @@ function printStatus(resp)
     print(sprintf("  samples            %s / %s\n", st.sample_count, st.sample_cap));
     print(sprintf("  newest_seq         %s\n", st.newest_seq || 0));
     print(sprintf("  retention_s        %s\n", st.retention_s || 0));
+    print(sprintf("  buffer_bytes       %s\n", st.buffer_bytes != null ? st.buffer_bytes : "—"));
     print(sprintf("  daemon_rss_kb      %s\n", st.daemon_rss_kb != null ? st.daemon_rss_kb : "—"));
     print(sprintf("  rss_estimate       %s bytes\n", st.rss_estimate_bytes || 0));
     return 0;
@@ -70,7 +73,11 @@ for (let i = 0; i < length(ARGV); i++) {
         "-sync-limit": "sync_limit",
         "--sync-limit": "sync_limit",
         "-compress-min": "compress_min_bytes",
-        "--compress-min": "compress_min_bytes"
+        "--compress-min": "compress_min_bytes",
+        "-ring-size": "ring_size",
+        "--ring-size": "ring_size",
+        "-ring": "ring_size",
+        "--ring": "ring_size"
     };
     if (flags[a]) {
         if (i + 1 >= length(ARGV)) {

@@ -10,10 +10,43 @@ import * as uci from "uci";
 import * as zlib from "zlib";
 import * as client from "babel_monitor.client";
 import * as configlib from "babel_monitor.config";
+import * as common from "babel_monitor.common";
 
 const q = getenv("QUERY_STRING") || "";
 const cfg = configlib.loadConfig();
 const BABEL_SOCK = { path: "/var/run/babel.sock" };
+
+/** True if request carries a valid AREDN authV1 admin cookie. */
+function isAdminRequest()
+{
+    const cookieheader = getenv("HTTP_COOKIE") || "";
+    if (cookieheader === "") {
+        return false;
+    }
+    let rootKey = null;
+    const f = fs.open("/etc/shadow", "r");
+    if (f) {
+        for (let l = f.read("line"); length(l); l = f.read("line")) {
+            if (index(l, "root:") === 0) {
+                rootKey = trim(l);
+                break;
+            }
+        }
+        f.close();
+    }
+    if (!rootKey) {
+        return false;
+    }
+    const ca = split(cookieheader, ";");
+    for (let i = 0; i < length(ca); i++) {
+        const cookie = trim(ca[i]);
+        if (index(cookie, "authV1=") === 0) {
+            const dec = b64dec(substr(cookie, 7));
+            return dec === rootKey;
+        }
+    }
+    return false;
+}
 
 /** Decode %XX and '+' in a QUERY_STRING value (uhttpd leaves these encoded). */
 function urldecode(s)
@@ -229,6 +262,23 @@ else if (api === "logs") {
 else if (api === "top") {
     cmd = "top";
 }
+else if (api === "ring") {
+    const setSize = qparam("set");
+    if (setSize != null && setSize !== "") {
+        if (!isAdminRequest()) {
+            print("Status: 401 Unauthorized\r\n");
+            print("Content-Type: application/json\r\n");
+            print("Cache-Control: no-store\r\n");
+            print("Access-Control-Allow-Origin: *\r\n\r\n");
+            print('{"error":"admin login required","ok":false}\n');
+            exit(0);
+        }
+        cmd = sprintf("set ring_size=%s", common.normalizeRingSize(setSize));
+    }
+    else {
+        cmd = "ring";
+    }
+}
 else {
     print("Status: 400 Bad Request\r\n");
     print("Content-Type: application/json\r\n");
@@ -248,7 +298,20 @@ if (!resp) {
     exit(0);
 }
 
-let body = sprintf("%.J", resp);
+/* Enrich ring views with admin flag for the Samples UI */
+let outObj = resp;
+if (api === "ring") {
+    if (resp.ring) {
+        outObj = resp.ring;
+        outObj.ok = resp.ok;
+        if (resp.error) {
+            outObj.error = resp.error;
+        }
+    }
+    outObj.is_admin = isAdminRequest();
+}
+
+let body = sprintf("%.J", outObj);
 const want = parseCompress(qparam("compress"), cfg.compress);
 const accept = getenv("HTTP_ACCEPT_ENCODING") || "";
 const client_gzip = index(accept, "gzip") >= 0;

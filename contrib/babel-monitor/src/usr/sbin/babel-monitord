@@ -12,9 +12,9 @@ import * as samplelib from "babel_monitor.sample";
 import * as configlib from "babel_monitor.config";
 
 fs.mkdir(common.RUN_DIR);
-const store = storelib.createStore();
-store.boot_id = common.bootIdNew();
 let cfg = configlib.loadConfig();
+const store = storelib.createStore(common.ringSlots(cfg.ring_size));
+store.boot_id = common.bootIdNew();
 samplelib.refreshIdentity(store);
 
 let sample_timer = null;
@@ -253,6 +253,53 @@ function readTopLines()
     return lines;
 }
 
+function readMemAvailableKb()
+{
+    const raw = fs.readfile("/proc/meminfo");
+    if (!raw) {
+        return 0;
+    }
+    const m = match(raw, /MemAvailable:\s+([0-9]+)/);
+    if (!m) {
+        return 0;
+    }
+    return int(m[1]);
+}
+
+function ringOptionsPayload()
+{
+    const avail_kb = readMemAvailableKb();
+    const cur = common.normalizeRingSize(cfg.ring_size);
+    const cur_bytes = common.ringBufferBytes(cur);
+    /* Free after reclaiming the live buffer (for 50% safety check) */
+    const effective_bytes = (avail_kb * 1024) + cur_bytes;
+    const options = [];
+    for (let i = 0; i < length(common.RING_SIZE_IDS); i++) {
+        const id = common.RING_SIZE_IDS[i];
+        const bytes = common.ringBufferBytes(id);
+        const over = bytes > (effective_bytes / 2);
+        push(options, {
+            id: id,
+            label: id,
+            seconds: common.ringSeconds(id),
+            slots: common.ringSlots(id),
+            buffer_bytes: bytes,
+            selected: id === cur,
+            allowed: !over || id === cur
+        });
+    }
+    return {
+        ring_size: cur,
+        retention_s: cfg.sample_interval * store.sample_cap,
+        sample_cap: store.sample_cap,
+        sample_count: store.sample_count,
+        mem_available_kb: avail_kb,
+        buffer_bytes: cur_bytes,
+        effective_free_bytes: effective_bytes,
+        options: options
+    };
+}
+
 function metaObj()
 {
     const oldest = storelib.peekOldest(store);
@@ -266,6 +313,7 @@ function metaObj()
         hostname: store.identity.hostname,
         boot_id: store.boot_id,
         sample_interval: cfg.sample_interval,
+        ring_size: common.normalizeRingSize(cfg.ring_size),
         retention_s: cfg.sample_interval * store.sample_cap,
         sample_count: store.sample_count,
         sample_cap: store.sample_cap,
@@ -275,11 +323,13 @@ function metaObj()
         newest_seq: newest ? newest.seq : 0,
         label_count: length(store.labels),
         mem_total_kb: store.last.mem_total_kb,
+        mem_available_kb: readMemAvailableKb(),
         compress_default: cfg.compress ? "on" : "off",
         enabled: cfg.enabled ? "on" : "off",
         sync_limit: cfg.sync_limit,
         compress_min_bytes: cfg.compress_min_bytes,
         rss_estimate_bytes: storelib.estimateBytes(store),
+        buffer_bytes: common.ringBufferBytes(cfg.ring_size),
         daemon_rss_kb: readDaemonRssKb()
     };
 }
@@ -349,13 +399,17 @@ function handleRequest(line)
     }
     if (cmd === "series") {
         const sec = common.clampInt(args.seconds || common.SERIES_SLICE_S, 1, common.SERIES_SLICE_S, common.SERIES_SLICE_S);
-        const end_age = common.clampInt(args.end_age || 0, 0, 14400, 0);
+        const end_age = common.clampInt(args.end_age || 0, 0, common.SERIES_END_AGE_MAX, 0);
         return {
             boot_id: store.boot_id,
             seconds: sec,
             end_age: end_age,
             samples: storelib.seriesWindow(store, sec, end_age)
         };
+    }
+    if (cmd === "ring") {
+        samplelib.refreshIdentity(store);
+        return ringOptionsPayload();
     }
     if (cmd === "syslog") {
         const limit = common.clampInt(args.limit || 50, 1, 200, 50);
@@ -424,7 +478,8 @@ function handleRequest(line)
                 sample_interval: cfg.sample_interval,
                 compress: cfg.compress ? "on" : "off",
                 sync_limit: cfg.sync_limit,
-                compress_min_bytes: cfg.compress_min_bytes
+                compress_min_bytes: cfg.compress_min_bytes,
+                ring_size: common.normalizeRingSize(cfg.ring_size)
             },
             status: metaObj()
         };
@@ -432,6 +487,7 @@ function handleRequest(line)
     if (cmd === "set") {
         let changed = false;
         const prev_interval = cfg.sample_interval;
+        const prev_ring = common.normalizeRingSize(cfg.ring_size);
         for (let k in args) {
             if (configlib.applySetting(cfg, k, args[k])) {
                 changed = true;
@@ -439,6 +495,23 @@ function handleRequest(line)
         }
         if (!changed) {
             return { ok: false, error: "no valid settings" };
+        }
+        const new_ring = common.normalizeRingSize(cfg.ring_size);
+        if (new_ring !== prev_ring) {
+            const avail_kb = readMemAvailableKb();
+            const cur_bytes = common.ringBufferBytes(prev_ring);
+            const effective_bytes = (avail_kb * 1024) + cur_bytes;
+            const need = common.ringBufferBytes(new_ring);
+            if (need > (effective_bytes / 2)) {
+                cfg.ring_size = prev_ring;
+                return {
+                    ok: false,
+                    error: "ring_size would use more than 50% of effective free RAM",
+                    ring: ringOptionsPayload()
+                };
+            }
+            storelib.resizeSampleRing(store, common.ringSlots(new_ring));
+            gc();
         }
         configlib.saveConfig(cfg);
         if (sample_timer && cfg.sample_interval !== prev_interval) {
@@ -451,8 +524,10 @@ function handleRequest(line)
                 sample_interval: cfg.sample_interval,
                 compress: cfg.compress ? "on" : "off",
                 sync_limit: cfg.sync_limit,
-                compress_min_bytes: cfg.compress_min_bytes
-            }
+                compress_min_bytes: cfg.compress_min_bytes,
+                ring_size: common.normalizeRingSize(cfg.ring_size)
+            },
+            ring: ringOptionsPayload()
         };
     }
     return { error: sprintf("unknown cmd: %s", cmd) };

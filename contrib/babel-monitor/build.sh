@@ -17,7 +17,7 @@ chmod +x \
   tools/babel-monitor-poller
 python3 tools/mkapk.py \
   -n babel-monitor \
-  -v 0.1.56 \
+  -v 0.1.61 \
   -r r0 \
   -a noarch \
   -d src \

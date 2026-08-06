@@ -28,11 +28,21 @@
     border-bottom: 1px solid var(--line);
     display: flex;
     flex-wrap: wrap;
-    gap: 10px 18px;
-    align-items: baseline;
+    gap: 10px 14px;
+    align-items: center;
   }
   header h1 { margin: 0; font-size: 1.15rem; font-weight: 600; }
-  header .meta { color: var(--muted); font-size: 12px; }
+  header .setup-btn {
+    background: transparent;
+    border: 1px solid var(--line);
+    color: var(--fg);
+    border-radius: 4px;
+    padding: 4px 10px;
+    font-size: 12px;
+    cursor: pointer;
+  }
+  header .setup-btn:hover { border-color: var(--accent); color: var(--accent); }
+  header .meta { color: var(--muted); font-size: 12px; flex: 1 1 auto; }
   main { padding: 14px 18px 28px; max-width: 1100px; }
   .row { display: flex; flex-wrap: wrap; gap: 12px; margin-bottom: 14px; }
   .kpi {
@@ -208,11 +218,102 @@
   th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--line); }
   th { color: var(--muted); font-weight: 600; font-size: 11px; }
   .err { color: var(--bad); padding: 12px 18px; }
+  .tabs button:disabled,
+  .tabs button.tab-disabled {
+    opacity: 0.35;
+    cursor: not-allowed;
+  }
+  .modal-back {
+    position: fixed;
+    inset: 0;
+    background: rgba(0,0,0,0.55);
+    z-index: 40;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 16px;
+  }
+  .modal-back[hidden] { display: none; }
+  .modal {
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    max-width: 520px;
+    width: 100%;
+    max-height: 90vh;
+    overflow: auto;
+    box-shadow: 0 12px 40px rgba(0,0,0,0.45);
+  }
+  .modal header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 12px 14px;
+    border-bottom: 1px solid var(--line);
+  }
+  .modal header h3 { margin: 0; font-size: 15px; font-weight: 600; }
+  .modal .body { padding: 12px 14px 16px; }
+  .modal .note { color: var(--muted); font-size: 12px; margin: 0 0 10px; }
+  .modal table { width: 100%; }
+  .modal tr.sel td { background: rgba(91,159,212,0.12); }
+  .modal tr.dis td { opacity: 0.4; }
+  .modal button.pick {
+    background: transparent;
+    border: 1px solid var(--line);
+    color: var(--fg);
+    border-radius: 4px;
+    padding: 4px 10px;
+    cursor: pointer;
+    font-size: 12px;
+  }
+  .modal button.pick:disabled {
+    cursor: not-allowed;
+    opacity: 0.4;
+  }
+  .modal .close-btn {
+    background: transparent;
+    border: 0;
+    color: var(--muted);
+    font-size: 18px;
+    cursor: pointer;
+    line-height: 1;
+  }
+  .modal .login-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    align-items: center;
+    margin-top: 8px;
+  }
+  .modal .login-row input {
+    flex: 1 1 160px;
+    background: #15181c;
+    border: 1px solid var(--line);
+    color: var(--fg);
+    border-radius: 4px;
+    padding: 6px 8px;
+    font-size: 13px;
+  }
+  .modal .login-err { color: var(--bad); font-size: 12px; min-height: 1.2em; margin-top: 6px; }
+  .modal .footer {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    justify-content: flex-end;
+    margin-top: 14px;
+    padding-top: 12px;
+    border-top: 1px solid var(--line);
+  }
+  .modal .footer .pick.primary {
+    border-color: var(--accent);
+    color: var(--accent);
+  }
 </style>
 </head>
 <body>
 <header>
   <h1>babel-monitor</h1>
+  <button type="button" class="setup-btn" id="setupBtn" title="Sample ring setup (admin)">Setup</button>
   <div class="meta" id="identity">connecting…</div>
 </header>
 <div class="err" id="err" hidden></div>
@@ -255,6 +356,7 @@
       <button type="button" data-sec="1800">30m</button>
       <button type="button" data-sec="3600">1h</button>
       <button type="button" data-sec="14400">4h</button>
+      <button type="button" data-sec="86400">24h</button>
     </div>
     <div class="tabs log-ctl" id="logControls" hidden>
       <div class="tabs log-filters" id="syslogFilters" role="group" aria-label="Syslog filters">
@@ -291,6 +393,44 @@
     <pre class="events-box" id="eventsBox"><span class="events-empty">Loading…</span></pre>
   </section>
 </main>
+<div class="modal-back" id="ringModal" hidden>
+  <div class="modal" role="dialog" aria-modal="true" aria-labelledby="ringModalTitle">
+    <header>
+      <h3 id="ringModalTitle">Sample ring size</h3>
+      <button type="button" class="close-btn" id="ringModalClose" aria-label="Close">×</button>
+    </header>
+    <div class="body">
+      <p class="note" id="ringModalNote"></p>
+      <table>
+        <thead>
+          <tr><th></th><th>Buffer</th><th>Est. RAM</th><th></th></tr>
+        </thead>
+        <tbody id="ringModalBody"></tbody>
+      </table>
+      <div class="footer" id="ringModalFooter" hidden>
+        <button type="button" class="pick" id="ringCancelBtn">Cancel</button>
+        <button type="button" class="pick primary" id="ringConfirmBtn" disabled>Confirm</button>
+      </div>
+      <div class="login-err" id="ringModalError"></div>
+    </div>
+  </div>
+</div>
+<div class="modal-back" id="loginModal" hidden>
+  <div class="modal" role="dialog" aria-modal="true" aria-labelledby="loginModalTitle">
+    <header>
+      <h3 id="loginModalTitle">Admin login</h3>
+      <button type="button" class="close-btn" id="loginModalClose" aria-label="Close">×</button>
+    </header>
+    <div class="body">
+      <p class="note">Enter the node admin password to change babel-monitor setup.</p>
+      <div class="login-row">
+        <input type="password" id="loginPassword" autocomplete="current-password" placeholder="Password" />
+        <button type="button" class="pick" id="loginSubmitBtn">Login</button>
+      </div>
+      <div class="login-err" id="loginError"></div>
+    </div>
+  </div>
+</div>
 <script>
 (function () {
   const API = "/cgi-bin/babel-monitor";
@@ -394,6 +534,11 @@
 
   let windowSec = 300;
   let metricId = "lq";
+  let retentionSec = 14400; /* from meta.retention_s */
+  let ringSize = "4h";
+  let ringInfo = null;
+  let isAdmin = false;
+  let pendingRingSize = null; /* staged choice in Setup modal */
   let series = [];
   let hoverIdx = -1;
   let chartLayout = null; /* { padL, padR, padT, padB, plotW, plotH, t0, windowSec, n } */
@@ -422,6 +567,12 @@
   function isLogs() { return metricId === "logs"; }
   function isTop() { return metricId === "top"; }
   function isTextPanel() { return isLogs() || isTop(); }
+  function isRingHistory() {
+    return !isLogs() && !isTop();
+  }
+  function skipsSeriesChart() {
+    return isLogs() || isTop() || retentionSec <= 0;
+  }
 
   function syncSyslogPauseBtn() {
     const b = $("syslogPauseBtn");
@@ -465,9 +616,10 @@
   function updateHistoryMode() {
     const text = isTextPanel();
     const logs = isLogs();
-    $("chartWrap").hidden = text;
+    const noRing = retentionSec <= 0;
+    $("chartWrap").hidden = text || (noRing && isRingHistory());
     $("textWrap").hidden = !text;
-    $("timeTabs").hidden = text;
+    $("timeTabs").hidden = text || noRing;
     $("logSourceTabs").hidden = !logs;
     $("logControls").hidden = !logs;
     $("syslogFilters").hidden = !(logs && logSource === "syslog");
@@ -485,6 +637,265 @@
       syncSyslogPauseBtn();
       syncLogFilterButtons();
     }
+    syncMetricTabEnable();
+    syncTimeTabEnable();
+  }
+
+  function formatBytes(n) {
+    n = Number(n) || 0;
+    if (n < 1024) return n + " B";
+    if (n < 1024 * 1024) return (Math.round(n / 102.4) / 10) + " KB";
+    return (Math.round(n / (1024 * 102.4)) / 10) + " MB";
+  }
+
+  function applyRingMeta(m) {
+    if (!m) return;
+    if (m.ring_size) ringSize = m.ring_size;
+    if (m.retention_s != null) retentionSec = Number(m.retention_s) || 0;
+    else if (m.sample_cap != null && m.sample_interval != null) {
+      retentionSec = Number(m.sample_cap) * Number(m.sample_interval);
+    }
+    syncMetricTabEnable();
+    syncTimeTabEnable();
+  }
+
+  function syncMetricTabEnable() {
+    const noRing = retentionSec <= 0;
+    [].forEach.call($("metricTabs").querySelectorAll("button"), function (b) {
+      const id = b.getAttribute("data-metric");
+      const needsRing = id !== "logs" && id !== "top";
+      const dis = noRing && needsRing;
+      b.disabled = dis;
+      b.classList.toggle("tab-disabled", dis);
+    });
+    if (noRing && isRingHistory()) {
+      metricId = "logs";
+      [].forEach.call($("metricTabs").querySelectorAll("button"), function (b) {
+        b.classList.toggle("active", b.getAttribute("data-metric") === "logs");
+      });
+      setTimeout(function () { updateHistoryMode(); refreshLogsSafe(); }, 0);
+    }
+  }
+
+  function syncTimeTabEnable() {
+    const tabs = $("timeTabs");
+    if (!tabs) return;
+    [].forEach.call(tabs.querySelectorAll("button"), function (b) {
+      const sec = parseInt(b.getAttribute("data-sec"), 10) || 0;
+      const dis = retentionSec <= 0 || sec > retentionSec;
+      b.disabled = dis;
+      b.classList.toggle("tab-disabled", dis);
+    });
+    if (retentionSec > 0 && windowSec > retentionSec) {
+      let pick = null;
+      [].forEach.call(tabs.querySelectorAll("button"), function (b) {
+        if (b.disabled) return;
+        const sec = parseInt(b.getAttribute("data-sec"), 10);
+        if (!pick || sec > parseInt(pick.getAttribute("data-sec"), 10)) pick = b;
+      });
+      if (pick) {
+        windowSec = parseInt(pick.getAttribute("data-sec"), 10);
+        [].forEach.call(tabs.querySelectorAll("button"), function (b) {
+          b.classList.toggle("active", b === pick);
+        });
+      }
+    }
+  }
+
+  function closeRingModal() {
+    const m = $("ringModal");
+    if (m) m.hidden = true;
+    pendingRingSize = null;
+    const err = $("ringModalError");
+    if (err) err.textContent = "";
+  }
+
+  function closeLoginModal() {
+    const m = $("loginModal");
+    if (m) m.hidden = true;
+    const err = $("loginError");
+    if (err) err.textContent = "";
+    const pw = $("loginPassword");
+    if (pw) pw.value = "";
+  }
+
+  function openLoginModal() {
+    closeRingModal();
+    const m = $("loginModal");
+    if (!m) return;
+    $("loginError").textContent = "";
+    $("loginPassword").value = "";
+    m.hidden = false;
+    setTimeout(function () { $("loginPassword").focus(); }, 0);
+  }
+
+  async function fetchRingInfo() {
+    const data = await getJsonRetry(API + "?api=ring");
+    ringInfo = data;
+    isAdmin = !!data.is_admin;
+    applyRingMeta(data);
+    return data;
+  }
+
+  async function openRingModal() {
+    const modal = $("ringModal");
+    if (!modal) return;
+    closeLoginModal();
+    pendingRingSize = null;
+    modal.hidden = false;
+    try {
+      const data = await fetchRingInfo();
+      pendingRingSize = data.ring_size || null;
+      renderRingModal(data);
+    } catch (e) {
+      $("ringModalNote").textContent = "Failed to load ring options: " + e.message;
+    }
+  }
+
+  async function ensureAdminThenSetup() {
+    try {
+      const data = await fetchRingInfo();
+      if (data.is_admin) {
+        await openRingModal();
+        return;
+      }
+    } catch (e) {
+      /* fall through to login */
+    }
+    openLoginModal();
+  }
+
+  async function loginAsAdmin() {
+    const pw = $("loginPassword").value;
+    const err = $("loginError");
+    err.textContent = "";
+    if (!pw) {
+      err.textContent = "Enter the admin password";
+      return;
+    }
+    const url = location.origin + "/a/authenticate?version=1&password=" +
+      encodeURIComponent(pw);
+    const resp = await fetch(url, { credentials: "same-origin" });
+    if (!resp.ok) {
+      err.textContent = "Login request failed (" + resp.status + ")";
+      return;
+    }
+    const json = await resp.json();
+    $("loginPassword").value = "";
+    if (!json.authenticated) {
+      err.textContent = "Incorrect password";
+      return;
+    }
+    isAdmin = true;
+    closeLoginModal();
+    await openRingModal();
+  }
+
+  function currentRingSize() {
+    return (ringInfo && ringInfo.ring_size) || ringSize || "4h";
+  }
+
+  function syncRingFooter() {
+    const footer = $("ringModalFooter");
+    const confirmBtn = $("ringConfirmBtn");
+    if (!footer || !confirmBtn) return;
+    footer.hidden = !isAdmin;
+    const cur = currentRingSize();
+    const dirty = isAdmin && pendingRingSize != null && pendingRingSize !== cur;
+    confirmBtn.disabled = !dirty;
+  }
+
+  function renderRingModal(data) {
+    const note = $("ringModalNote");
+    const body = $("ringModalBody");
+    const err = $("ringModalError");
+    if (err) err.textContent = "";
+    if (!body) return;
+    const avail = data.mem_available_kb != null
+      ? formatMemKb(data.mem_available_kb) : "—";
+    const cur = data.ring_size || currentRingSize();
+    if (pendingRingSize == null) pendingRingSize = cur;
+    note.textContent = isAdmin
+      ? ("Free RAM ~" + avail + ". Options over 50% of effective free RAM are disabled. Confirm applies the change and clears history.")
+      : ("Free RAM ~" + avail + ". Admin login required to change the ring size.");
+    const opts = data.options || [];
+    body.innerHTML = opts.map(function (o) {
+      const isPending = pendingRingSize === o.id;
+      const isLive = !!o.selected || o.id === cur;
+      const dis = !o.allowed;
+      const cls = (isPending ? "sel " : "") + (dis ? "dis" : "");
+      const mark = isPending ? "●" : "";
+      let action = "";
+      if (isAdmin) {
+        if (dis) {
+          action = "blocked";
+        } else if (isPending && isLive) {
+          action = "current";
+        } else if (isPending) {
+          action = "chosen";
+        } else {
+          action = '<button type="button" class="pick" data-size="' + o.id + '">Choose</button>';
+        }
+      } else {
+        action = isLive ? "current" : (dis ? "blocked" : "");
+      }
+      return '<tr class="' + cls + '"><td>' + mark + "</td><td>" + o.label +
+        (isLive && !isPending ? ' <span style="color:var(--muted)">(live)</span>' : "") +
+        "</td><td>" + formatBytes(o.buffer_bytes) + "</td><td>" + action + "</td></tr>";
+    }).join("");
+    syncRingFooter();
+  }
+
+  function stageRingSize(size) {
+    if (!ringInfo || !ringInfo.options) return;
+    let opt = null;
+    for (let i = 0; i < ringInfo.options.length; i++) {
+      if (ringInfo.options[i].id === size) {
+        opt = ringInfo.options[i];
+        break;
+      }
+    }
+    if (!opt || !opt.allowed) return;
+    pendingRingSize = size;
+    renderRingModal(ringInfo);
+  }
+
+  function cancelRingChanges() {
+    pendingRingSize = currentRingSize();
+    closeRingModal();
+  }
+
+  async function confirmRingChanges() {
+    const cur = currentRingSize();
+    const err = $("ringModalError");
+    if (err) err.textContent = "";
+    if (!pendingRingSize || pendingRingSize === cur) {
+      closeRingModal();
+      return;
+    }
+    const confirmBtn = $("ringConfirmBtn");
+    if (confirmBtn) confirmBtn.disabled = true;
+    try {
+      await setRingSize(pendingRingSize);
+      /* Full reload so Samples KPI, time tabs, and history match the new ring */
+      location.reload();
+    } catch (e) {
+      if (err) err.textContent = e.message || "Failed to apply";
+      syncRingFooter();
+    }
+  }
+
+  async function setRingSize(size) {
+    const data = await getJsonRetry(API + "?api=ring&set=" + encodeURIComponent(size));
+    if (data.ok === false || data.error) {
+      throw new Error(data.error || "set failed");
+    }
+    ringInfo = data;
+    isAdmin = !!data.is_admin;
+    pendingRingSize = data.ring_size || size;
+    applyRingMeta(data);
+    series = [];
+    if (isRingHistory()) drawChart();
   }
 
   function fmtSourceMtime(sec) {
@@ -836,6 +1247,7 @@
     if (m.mem_total_kb != null) {
       memTotalKb = Number(m.mem_total_kb);
     }
+    applyRingMeta(m);
     $("identity").textContent =
       (m.hostname || "?") + " · " + (m.node_id || "?") +
       " · boot " + (m.boot_id || "?") +
@@ -874,7 +1286,20 @@
       ["Hosts", s.host_count ?? "—",
         "Host entries published via arednlink on this node"],
       ["Samples", (m.sample_count ?? 0) + "/" + (m.sample_cap ?? 0),
-        "History ring fill: samples stored / maximum capacity"],
+        (function () {
+          const cap = Number(m.sample_cap) || 0;
+          const interval = Number(m.sample_interval) || 10;
+          const ret = m.retention_s != null
+            ? Number(m.retention_s)
+            : (cap * interval);
+          const sizeLabel = m.ring_size || ringSize || "—";
+          if (cap <= 0) {
+            return "History ring fill: samples stored / maximum capacity. Ring size none (no history buffer).";
+          }
+          return "History ring fill: samples stored / maximum capacity. " +
+            "Capacity " + cap + " slots ≈ " + formatAxisOffset(ret) +
+            " at " + interval + "s interval (ring_size " + sizeLabel + ").";
+        })()],
       ["LQM", s.lqm_ok ? "ok" : "not ok",
         "Link Quality Manager data was readable for this sample",
         s.lqm_ok ? "ok" : "warn"],
@@ -1199,7 +1624,7 @@
   }
 
   function drawChart() {
-    if (isTextPanel()) return;
+    if (skipsSeriesChart()) return;
     const metric = resolveMetric();
     renderLegend(metric);
     const stacked = metricId === "cost" && !!metric.stackedPanels;
@@ -1513,7 +1938,7 @@
   }
 
   function onChartMove(ev) {
-    if (isTextPanel()) return;
+    if (skipsSeriesChart()) return;
     const c = $("chart");
     const rect = c.getBoundingClientRect();
     const idx = indexFromCanvasX(ev.clientX - rect.left, rect.width);
@@ -1549,6 +1974,10 @@
   }
 
   async function refreshSeries() {
+    if (skipsSeriesChart()) {
+      series = [];
+      return;
+    }
     const slice = 300; /* match server SERIES_SLICE_S — one expand peak at a time */
     const want = windowSec;
     let all = [];
@@ -1595,7 +2024,7 @@
         if (logSource !== "syslog" || !syslogPaused) await refreshLogs();
       } else if (isTop()) {
         await refreshTop();
-      } else {
+      } else if (retentionSec > 0) {
         await refreshSeries();
       }
       failStreak = 0;
@@ -1613,7 +2042,7 @@
   function bindTabGroup(id, onPick) {
     $(id).addEventListener("click", function (ev) {
       const b = ev.target.closest("button");
-      if (!b || !$(id).contains(b)) return;
+      if (!b || !$(id).contains(b) || b.disabled) return;
       [].forEach.call($(id).querySelectorAll("button"), function (x) {
         x.classList.toggle("active", x === b);
       });
@@ -1652,7 +2081,7 @@
   });
 
   bindTabGroup("timeTabs", function (b) {
-    if (isTextPanel()) return;
+    if (skipsSeriesChart()) return;
     windowSec = parseInt(b.getAttribute("data-sec"), 10);
     hoverIdx = -1;
     hideTip();
@@ -1696,6 +2125,46 @@
     syslogPaused = !syslogPaused;
     syncSyslogPauseBtn();
     if (!syslogPaused) refreshLogsSafe();
+  });
+
+  $("setupBtn").addEventListener("click", function () {
+    ensureAdminThenSetup().catch(function (e) {
+      setErr("Setup: " + e.message);
+    });
+  });
+  $("ringModalClose").addEventListener("click", cancelRingChanges);
+  $("ringModal").addEventListener("click", function (ev) {
+    if (ev.target === $("ringModal")) cancelRingChanges();
+  });
+  $("ringModalBody").addEventListener("click", function (ev) {
+    const b = ev.target.closest("button.pick");
+    if (!b || b.disabled) return;
+    const size = b.getAttribute("data-size");
+    if (size) stageRingSize(size);
+  });
+  $("ringCancelBtn").addEventListener("click", cancelRingChanges);
+  $("ringConfirmBtn").addEventListener("click", function () {
+    confirmRingChanges().catch(function (e) {
+      $("ringModalError").textContent = e.message || "Failed to apply";
+      syncRingFooter();
+    });
+  });
+  $("loginModalClose").addEventListener("click", closeLoginModal);
+  $("loginModal").addEventListener("click", function (ev) {
+    if (ev.target === $("loginModal")) closeLoginModal();
+  });
+  $("loginSubmitBtn").addEventListener("click", function () {
+    loginAsAdmin().catch(function (e) {
+      $("loginError").textContent = e.message || "Login failed";
+    });
+  });
+  $("loginPassword").addEventListener("keydown", function (ev) {
+    if (ev.key === "Enter") {
+      ev.preventDefault();
+      loginAsAdmin().catch(function (e) {
+        $("loginError").textContent = e.message || "Login failed";
+      });
+    }
   });
 
   (function bindChartHover() {

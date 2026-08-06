@@ -1,8 +1,43 @@
 #!/bin/sh
 # Enable and start babel-monitord. App launcher icon in admin bar (above Tools).
+# Initialize ring_size from free RAM (MemAvailable) on first install.
 chmod 755 /usr/sbin/babel-monitord /usr/bin/babel-monitor /www/cgi-bin/babel-monitor /etc/init.d/babel-monitor 2>/dev/null || true
 chmod 755 /www/cgi-bin/apps/babel-monitor/user /www/cgi-bin/apps/babel-monitor/admin 2>/dev/null || true
 chmod 644 /etc/config/babel-monitor /www/apps/babel-monitor/icon.svg 2>/dev/null || true
+
+pick_ring_size() {
+	# uses outer avail_kb
+	if [ "$avail_kb" -lt 2048 ]; then
+		echo none
+	elif [ "$avail_kb" -le 4096 ]; then
+		echo 5m
+	elif [ "$avail_kb" -le 6144 ]; then
+		echo 1h
+	elif [ "$avail_kb" -le 30720 ]; then
+		echo 4h
+	else
+		echo 24h
+	fi
+}
+
+if [ -f /etc/config/babel-monitor ]; then
+	avail_kb=$(awk '/^MemAvailable:/ { print $2; exit }' /proc/meminfo 2>/dev/null)
+	[ -n "$avail_kb" ] || avail_kb=0
+	size=$(pick_ring_size)
+	if command -v uci >/dev/null 2>&1; then
+		uci -q set babel-monitor.main.ring_size="$size"
+		uci -q commit babel-monitor
+	else
+		# Fallback when uci is unavailable: rewrite option line
+		if grep -q "option ring_size" /etc/config/babel-monitor 2>/dev/null; then
+			sed -i "s/option ring_size .*/option ring_size '$size'/" /etc/config/babel-monitor
+		else
+			printf "\toption ring_size '%s'\n" "$size" >> /etc/config/babel-monitor
+		fi
+	fi
+	logger -t babel-monitor "post-install: MemAvailable=${avail_kb}kB → ring_size=$size"
+fi
+
 [ -x /etc/init.d/babel-monitor ] && /etc/init.d/babel-monitor enable 2>/dev/null || true
 [ -x /etc/init.d/babel-monitor ] && /etc/init.d/babel-monitor restart 2>/dev/null || true
 exit 0

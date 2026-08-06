@@ -4,7 +4,7 @@ Side-loaded AREDN APK that keeps Babel / LQM / arednlink metrics in RAM, exposes
 stateless JSON pull API for external historians, a public status page, and a
 live-config CLI.
 
-- Package: `babel-monitor-0.1.56-r0.apk`
+- Package: `babel-monitor-0.1.61-r0.apk`
 - Daemon: `babel-monitord`
 - CLI: `babel-monitor`
 - Status UI: `/babel-monitor/`
@@ -18,7 +18,7 @@ cd contrib/babel-monitor
 ./build.sh
 ```
 
-APK lands in `dist/babel-monitor-0.1.56-r0.apk`.
+APK lands in `dist/babel-monitor-0.1.61-r0.apk`.
 
 ## Install on a node
 
@@ -31,15 +31,17 @@ From the work-area root (after configuring `install_package_remotely.conf`):
 Or copy the APK and:
 
 ```sh
-apk add --allow-untrusted /tmp/babel-monitor-0.1.56-r0.apk
+apk add --allow-untrusted /tmp/babel-monitor-0.1.61-r0.apk
 ```
 
 ## On-node storage
 
-- Fixed in-RAM sample ring (`1440` slots ≈ **4h @ 10s**) + event ring (`512`)
-- Each sample slot is a slice of one **statically allocated flat int buffer** (schema 9), overwritten in place via a rolling head index (not allocate/drop)
+- Configurable in-RAM sample ring via UCI `ring_size`: `none` | `5m` | `30m` | `1h` | `4h` | `24h` (slots @ 10s: 0 / 30 / 180 / 360 / 1440 / 8640) + event ring (`512`)
+- `.post-install` picks `ring_size` from `MemAvailable`: `<2MB→none`, `≤4MB→5m`, `≤6MB→1h`, `≤30MB→4h`, else `24h` (30m is manual-only)
+- Each sample slot is a slice of one **flat int buffer** (schema 9), overwritten in place via a rolling head index; resizing clears history
+- `none` keeps live KPIs/neighbors but disables History metric tabs that need the ring (Logs / Top stay available)
 - RF/link **names** live in a shared label dictionary (cap 64); the buffer stores indices + values only
-- Series expands at most **5 minutes** of samples per API call (UI stitches longer windows)
+- Series expands at most **5 minutes** of samples per API call (UI stitches longer windows; time buttons above retention are disabled)
 - Expanded named objects are built only for the response — never retained on the store
 - Daemon runs ucode mark-and-sweep GC periodically and after each sample / API reply (refcount alone leaves temps)
 - API socket handlers are deleted on client close (avoids uloop handle leak while the status page polls)
@@ -53,6 +55,7 @@ babel-monitor                  # show live settings + status
 babel-monitor -h
 babel-monitor -interval 30 -compress off
 babel-monitor -enabled off     # pause sampling; API still serves RAM
+babel-monitor -ring-size 1h    # resize sample ring (clears history)
 ```
 
 | Flag | UCI | Default |
@@ -62,6 +65,7 @@ babel-monitor -enabled off     # pause sampling; API still serves RAM
 | `-enabled` | `enabled` | on |
 | `-sync-limit` | `sync_limit` | 500 |
 | `-compress-min` | `compress_min_bytes` | 1024 |
+| `-ring-size` | `ring_size` | set at install from free RAM (`none`/`5m`/`30m`/`1h`/`4h`/`24h`) |
 
 Changes apply via the control socket and persist to `/etc/config/babel-monitor` without restarting the daemon.
 
@@ -71,7 +75,8 @@ Base: `/cgi-bin/babel-monitor`
 
 | Query | Purpose |
 |-------|---------|
-| `?api=meta` (alias `hello`) | Identity + versions: `api_version` (wire contract), `schema_version` (sample layout), `package_version`, `node_id`, mac, hostname, boot_id, retention |
+| `?api=meta` (alias `hello`) | Identity + versions: `api_version` (wire contract), `schema_version` (sample layout), `package_version`, `node_id`, mac, hostname, boot_id, `ring_size`, retention |
+| `?api=ring` | Sample-ring options + estimates; `?api=ring&set=SIZE` requires admin `authV1` cookie |
 | `?api=sync&since_seq=N&limit=M` | Samples with `seq > N` for current `boot_id` |
 | `?api=events&since_seq=N` | Event ring |
 | `?api=live` | Current neighbors + latest sample + optional `wg` tunnel counts |
@@ -85,7 +90,7 @@ Optional `compress=1|0|on|off` (default from UCI; gzip level 1 when body ≥ `co
 
 Gap-tolerant: HTTP 200 when the daemon is up; responses include `truncated`, `gap_before`, `next_seq`, `complete`, `boot_id`. No per-poller state on the node.
 
-`api_version` is the stable pull-API contract for central servers (also on `live.meta` / CLI status). Bump it when clients must change how they talk to a node; do not conflate with `schema_version` (in-RAM sample layout) or `package_version` (APK). Current value: **1**.
+`api_version` is the stable pull-API contract for central servers (also on `live.meta` / CLI status). Bump it when clients must change how they talk to a node; do not conflate with `schema_version` (in-RAM sample layout) or `package_version` (APK). Current value: **2**.
 
 ### Sample host / RF / link fields (schema 9)
 
@@ -129,7 +134,7 @@ State/logs: `~/.babel-monitor/` (override with `BABEL_MONITOR_STATE`).
 
 ## Status page
 
-Open `http://<node>/babel-monitor/` — live neighbors, KPIs, routing events, and a history graph with metric tabs (LQ, Cost, Neighbors, Routes, Packets, Link I/O, Hosts, CPU, RAM, Self RSS, RF, Syslog, Top) and 5m / 30m / 1h / 4h ranges from RAM (ring retains ~4h @ 10s). Longer chart windows are fetched as 5m API slices. The X axis is fixed to the selected window. Hover for a crosshair and values. Optional **WG Server Tunnels** / **WG Server Clients** KPIs show `live/active/total` when the tunnel config has entries (live = handshake ≤300s, active = enabled, total = config list). Viewing the UI does not write flash. An **Activity monitor** icon appears in the left admin bar (above Tools) via the app launcher and opens this page.
+Open `http://<node>/babel-monitor/` — live neighbors, KPIs, routing events, and a history graph with metric tabs (LQ, Cost, Neighbors, Routes, Packets, Link I/O, Hosts, CPU, RAM, Self RSS, RF, Logs, Top). Time ranges are 5m / 30m / 1h / 4h / 24h, disabled when longer than the configured `ring_size`. Header **Setup** opens the ring-size picker (prompts for admin password if needed; estimates + 50% free-RAM guard). Longer chart windows are fetched as 5m API slices. Optional **WG Server Tunnels** / **WG Server Clients** KPIs show `live/active/total` when the tunnel config has entries. Viewing the UI does not write flash. An **Activity monitor** icon appears in the left admin bar (above Tools) via the app launcher and opens this page.
 
 ## Layout
 

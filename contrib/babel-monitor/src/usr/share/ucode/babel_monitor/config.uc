@@ -14,7 +14,8 @@ export function defaults()
         sample_interval: 10,
         compress: true,
         sync_limit: 500,
-        compress_min_bytes: 1024
+        compress_min_bytes: 1024,
+        ring_size: "4h"
     };
 };
 
@@ -28,6 +29,7 @@ export function loadConfig()
         const co = c.get("babel-monitor", "main", "compress");
         const sl = c.get("babel-monitor", "main", "sync_limit");
         const cm = c.get("babel-monitor", "main", "compress_min_bytes");
+        const rs = c.get("babel-monitor", "main", "ring_size");
         if (e !== null) {
             cfg.enabled = common.parseBool(e, cfg.enabled);
         }
@@ -42,6 +44,9 @@ export function loadConfig()
         }
         if (cm !== null) {
             cfg.compress_min_bytes = common.clampInt(cm, 0, 1048576, cfg.compress_min_bytes);
+        }
+        if (rs !== null && rs !== "") {
+            cfg.ring_size = common.normalizeRingSize(rs);
         }
     }
     catch (err) {
@@ -58,7 +63,8 @@ export function saveConfig(cfg)
         `\toption sample_interval '${cfg.sample_interval}'\n` +
         `\toption compress '${cfg.compress ? "on" : "off"}'\n` +
         `\toption sync_limit '${cfg.sync_limit}'\n` +
-        `\toption compress_min_bytes '${cfg.compress_min_bytes}'\n`;
+        `\toption compress_min_bytes '${cfg.compress_min_bytes}'\n` +
+        `\toption ring_size '${common.normalizeRingSize(cfg.ring_size)}'\n`;
     fs.writefile(UCI_PATH, body);
     try {
         uci.cursor().load("babel-monitor");
@@ -87,6 +93,10 @@ export function applySetting(cfg, key, val)
     case "compress_min_bytes":
     case "compress_min":
         cfg.compress_min_bytes = common.clampInt(val, 0, 1048576, cfg.compress_min_bytes);
+        return true;
+    case "ring_size":
+    case "ring":
+        cfg.ring_size = common.normalizeRingSize(val);
         return true;
     default:
         return false;

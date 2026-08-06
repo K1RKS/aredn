@@ -14,10 +14,20 @@ function newEventSlot()
     return { t: 0, seq: 0, type: "", detail: "" };
 }
 
-export function createStore()
+export function createStore(sample_cap)
 {
+    if (sample_cap == null) {
+        sample_cap = common.SAMPLE_CAP;
+    }
+    sample_cap = int(sample_cap);
+    if (sample_cap < 0) {
+        sample_cap = 0;
+    }
+    if (sample_cap > common.SAMPLE_CAP_MAX) {
+        sample_cap = common.SAMPLE_CAP_MAX;
+    }
     const buf = [];
-    const n = common.SAMPLE_CAP * common.SAMPLE_WIDTH;
+    const n = sample_cap * common.SAMPLE_WIDTH;
     for (let i = 0; i < n; i++) {
         push(buf, 0);
     }
@@ -31,7 +41,7 @@ export function createStore()
         events,
         labels: [],
         label_by_name: {},
-        sample_cap: common.SAMPLE_CAP,
+        sample_cap: sample_cap,
         event_cap: common.EVENT_CAP,
         sample_head: 0,
         sample_count: 0,
@@ -40,6 +50,7 @@ export function createStore()
         next_seq: 1,
         next_event_seq: 1,
         boot_id: null,
+        latest_obj: null,
         last: {
             tx_packets: null,
             tx_retries: null,
@@ -73,6 +84,29 @@ export function createStore()
             hostname: ""
         }
     };
+};
+
+/** Rebuild sample buffer to a new capacity; clears sample history. */
+export function resizeSampleRing(store, sample_cap)
+{
+    sample_cap = int(sample_cap);
+    if (sample_cap < 0) {
+        sample_cap = 0;
+    }
+    if (sample_cap > common.SAMPLE_CAP_MAX) {
+        sample_cap = common.SAMPLE_CAP_MAX;
+    }
+    const buf = [];
+    const n = sample_cap * common.SAMPLE_WIDTH;
+    for (let i = 0; i < n; i++) {
+        push(buf, 0);
+    }
+    store.buf = buf;
+    store.sample_cap = sample_cap;
+    store.sample_head = 0;
+    store.sample_count = 0;
+    store.latest_obj = null;
+    return store.sample_cap;
 };
 
 function slotOff(i)
@@ -337,6 +371,11 @@ export function pushSample(store, s)
 {
     s.seq = store.next_seq;
     store.next_seq++;
+    /* Keep a named latest for live KPIs even when ring_size=none */
+    store.latest_obj = s;
+    if (store.sample_cap < 1) {
+        return;
+    }
     writeSampleSlot(store, store.sample_head, s);
     store.sample_head = (store.sample_head + 1) % store.sample_cap;
     if (store.sample_count < store.sample_cap) {
@@ -471,8 +510,11 @@ export function seriesWindow(store, seconds, end_age)
 
 export function latestSample(store)
 {
+    if (store.sample_cap < 1) {
+        return store.latest_obj;
+    }
     if (store.sample_count < 1) {
-        return null;
+        return store.latest_obj;
     }
     return expandSampleAt(store, (store.sample_head - 1 + store.sample_cap) % store.sample_cap);
 };
@@ -493,7 +535,7 @@ export function estimateBytes(store)
     }
     /* One flat buf + event shells + labels */
     return 49152
-        + length(store.buf) * 12
+        + length(store.buf) * common.INT_ESTIMATE_BYTES
         + store.event_cap * 96
         + label_bytes;
 };
