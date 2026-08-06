@@ -1,19 +1,37 @@
 #!/bin/sh
-# Recover Wi-Fi after a wedged ath10k spectral scan (no power cycle).
-# Usage: waterfall-spectral-recover [iface] [phy]
-# Escalation: disable spectral → iface bounce → wifi reload
+# Recover after ath10k spectral issues.
+# Default: disable-only (safe on QCA9887 — no iface bounce / wifi reload).
+# Usage: waterfall-spectral-recover [iface] [phy] [--escalate]
 set -u
-IFACE="${1:-wlan0}"
-PHY="${2:-}"
+IFACE=""
+PHY=""
+ESCALATE=0
+for a in "$@"; do
+  case "$a" in
+    --escalate) ESCALATE=1 ;;
+    --safe|--disable-only) ESCALATE=0 ;;
+    *)
+      if [ -z "$IFACE" ] && [ "$a" != "--escalate" ] && [ "$a" != "--safe" ] && [ "$a" != "--disable-only" ]; then
+        IFACE="$a"
+      elif [ -z "$PHY" ] && [ "$a" != "--escalate" ]; then
+        PHY="$a"
+      fi
+      ;;
+  esac
+done
+IFACE="${IFACE:-wlan0}"
 DBG="/sys/kernel/debug/ieee80211"
-LOG="/tmp/waterfall-spectral-recover.log"
+LOG_TMP="/tmp/waterfall-spectral-recover.log"
+LOG_PERSIST="/etc/waterfall/session.log"
 FAILS="/tmp/waterfall-spectral.fails"
 COOL="/tmp/waterfall-spectral.cooldown"
 
 ts() { date +%s 2>/dev/null || echo 0; }
 
 log() {
-  echo "$(ts) $*" >> "$LOG" 2>/dev/null || true
+  echo "$(ts) $*" >> "$LOG_TMP" 2>/dev/null || true
+  mkdir -p /etc/waterfall 2>/dev/null || true
+  echo "$(ts) $*" >> "$LOG_PERSIST" 2>/dev/null || true
 }
 
 disable_spectral() {
@@ -51,7 +69,6 @@ wifi_reload() {
   return 1
 }
 
-# Backoff: 15s * 2^(fails-1), capped at 120s
 n=0
 [ -f "$FAILS" ] && n=$(cat "$FAILS" 2>/dev/null || echo 0)
 n=$((n + 1))
@@ -65,10 +82,15 @@ done
 [ "$cool" -gt 120 ] && cool=120
 echo $(($(ts) + cool)) > "$COOL" 2>/dev/null || true
 
-log "recover begin iface=$IFACE phy=$PHY fails=$n cool=${cool}s"
+log "recover begin iface=$IFACE phy=$PHY fails=$n cool=${cool}s escalate=$ESCALATE"
 disable_spectral
+log "recover disable-only done"
 
-# Stage 1: iface bounce (local; works even if mesh RF is wedged)
+if [ "$ESCALATE" -ne 1 ]; then
+  log "recover skipped escalate (safe mode — no iface bounce / wifi reload)"
+  exit 0
+fi
+
 if bounce_iface; then
   log "recover stage1 iface bounce ok"
   sleep 2
@@ -79,7 +101,6 @@ if bounce_iface; then
   fi
 fi
 
-# Stage 2: OpenWrt/AREDN wifi reload
 if wifi_reload; then
   log "recover stage2 wifi reload ok"
   sleep 3

@@ -41,7 +41,10 @@ const SESSION_MAX_SEC = 600;
 const MAX_SWEEPS = 400;
 const TARGET_BINS = 64;
 const ATH10K_FFT_HARD_TIMEOUT = 4;
+const ATH10K_FFT_MAX_SEC = 5; /* fragile QCA9887: short FFT only when opted in */
 const SPECTRAL_COOLDOWN = "/tmp/waterfall-spectral.cooldown";
+const SCAN_HOLD = "/tmp/waterfall-scan.active";
+const PERSIST_LOG = "/etc/waterfall/session.log";
 /* kn6plv-style absolute floor; bins stored as level = max(0, dBm - MIN_SIG). */
 const MIN_SIG_DBM = -125;
 const MAX_SIG_DBM = -35;
@@ -49,7 +52,24 @@ const SPECTRAL_COUNT_DEFAULT = 32;
 
 export function packageVersion()
 {
-    return "0.2.31-r0";
+    return "0.2.35-r0";
+};
+
+/**
+ * QCA988x on MikroTik (hAP ac lite 5 GHz, etc.): spectral FFT can hard-hang
+ * the SoC (DtD/Ethernet included). Default to survey; FFT is opt-in + short.
+ */
+export function isFragileAth10k(board, chipset)
+{
+    if (chipset !== "ath10k") {
+        return false;
+    }
+    const bid = lc(board || "");
+    if (match(bid, /mikrotik|952ui-5ac2nd|hap ac|qca9887|qca988x|rb952/)) {
+        return true;
+    }
+    /* Prefer survey whenever board string is empty but phy is ath10k on small RAM nodes. */
+    return true;
 };
 
 function isMeshMode(mode)
@@ -101,10 +121,13 @@ export function isCaptureSafe(chipset)
     return chipset === "ath9k" || chipset === "ath10k";
 };
 
-export function captureModeForChipset(chipset)
+export function captureModeForChipset(chipset, board)
 {
-    if (chipset === "ath9k" || chipset === "ath10k") {
+    if (chipset === "ath9k") {
         return "fft";
+    }
+    if (chipset === "ath10k") {
+        return isFragileAth10k(board, chipset) ? "survey" : "fft";
     }
     return null;
 };
@@ -113,9 +136,9 @@ function ath10kNote(board)
 {
     const bid = lc(board || "");
     if (match(bid, /952ui-5ac2nd|hap ac lite/)) {
-        return "hAP ac lite 5 GHz (ath10k QCA9887): isolated FFT worker (timeout+recovery); survey fallback if FFT empty/cooldown.";
+        return "hAP ac lite 5 GHz (QCA9887): default is survey (safe). Experimental FFT is opt-in, ≤5s, disable-only recover (no wifi reload).";
     }
-    return "ath10k: isolated FFT worker (timeout+local Wi-Fi recovery); survey fallback if FFT empty/cooldown.";
+    return "ath10k: default survey on fragile QCA988x; FFT opt-in with short pulses and disable-only recover.";
 }
 
 function focusNote(chipset, fftAvailable, board, captureSafe, mode)
@@ -130,6 +153,65 @@ function focusNote(chipset, fftAvailable, board, captureSafe, mode)
         return "Chipset not recognized for spectral capture.";
     }
     return `Chipset ${chipset} has no waterfall path in this package yet.`;
+}
+
+function persistLog(msg)
+{
+    try {
+        system("mkdir -p /etc/waterfall 2>/dev/null");
+        const line = `${int(clock()[0])} ${msg}\n`;
+        const f = fs.open(PERSIST_LOG, "a");
+        if (f) {
+            f.write(line);
+            f.close();
+        }
+    }
+    catch (_) {
+    }
+}
+
+function petHardwareWatchdog()
+{
+    /* Keep HW watchdog fed during long survey sessions so a busy node is not
+     * rebooted mid-run. Do not disable the watchdog. */
+    try {
+        if (!fs.access("/dev/watchdog")) {
+            return;
+        }
+        const f = fs.open("/dev/watchdog", "w");
+        if (f) {
+            f.write("\0");
+            f.close();
+        }
+    }
+    catch (_) {
+    }
+}
+
+function beginScanHold(meta)
+{
+    try {
+        const at = int(clock()[0]);
+        const body = sprintf("%.2J\n", meta || { active: true, at: at });
+        fs.writefile(SCAN_HOLD, body);
+        fs.writefile("/tmp/waterfall-hold-wireless_monitor", "1\n");
+        persistLog(`scan-hold begin ${meta?.iface || ""} mode=${meta?.mode || "?"}`);
+    }
+    catch (_) {
+    }
+    petHardwareWatchdog();
+}
+
+function endScanHold(reason)
+{
+    try {
+        fs.unlink(SCAN_HOLD);
+        fs.unlink("/tmp/waterfall-hold-wireless_monitor");
+        persistLog(`scan-hold end ${reason || ""}`);
+    }
+    catch (_) {
+    }
+    petHardwareWatchdog();
 }
 
 function radioHasFft(r)
@@ -188,7 +270,7 @@ export function runAth10kFftPulse(iface, phy, allowScan, durationSec)
         durArg = ` -d ${int(durationSec)}`;
         hard = int(durationSec) + 8;
     }
-    const rc = system(`/usr/bin/waterfall-ath10k-fft -i ${iface} -p ${phy} -o ${FFT_OUT} -t ${hard}${durArg}${scan} >/tmp/waterfall-ath10k-fft.log 2>&1`);
+    const rc = system(`/usr/bin/waterfall-ath10k-fft -i ${iface} -p ${phy} -o ${FFT_OUT} -t ${hard}${durArg}${scan} --safe-recover >/tmp/waterfall-ath10k-fft.log 2>&1`);
     let exitCode = rc;
     if (exitCode > 255) {
         exitCode = exitCode >> 8;
@@ -810,6 +892,7 @@ export function selectRadio(preferredIface)
 export function listRadios()
 {
     const config = radios.getActiveConfiguration() || [];
+    const board = hardware.getBoardModel()?.id || hardware.getBoardModel()?.model || "";
     const out = [];
     for (let i = 0; i < length(config); i++) {
         const r = config[i];
@@ -822,10 +905,11 @@ export function listRadios()
         const five = isFiveGhz(r.iface, channel);
         const paths = spectralPaths(phy, chipset);
         const pathsOk = !!(paths && fs.access(paths.ctl) && fs.access(paths.relay));
-        const mode = captureModeForChipset(chipset);
+        const fragile = isFragileAth10k(board, chipset);
         const fftAvailable = pathsOk && (chipset === "ath9k" || chipset === "ath10k");
         const surveyAvailable = chipset === "ath10k";
         const selectable = fftAvailable || surveyAvailable;
+        const captureMode = captureModeForChipset(chipset, board);
         push(out, {
             iface: r.iface,
             phy: phy,
@@ -836,7 +920,11 @@ export function listRadios()
             fft_paths: pathsOk,
             fft_available: fftAvailable,
             survey_available: surveyAvailable,
-            capture_mode: fftAvailable ? "fft" : (surveyAvailable ? "survey" : null),
+            capture_mode: captureMode || (fftAvailable ? "fft" : (surveyAvailable ? "survey" : null)),
+            prefer_survey: fragile && surveyAvailable,
+            fft_opt_in: fragile && fftAvailable,
+            fragile_ath10k: fragile,
+            max_fft_sec: fragile ? ATH10K_FFT_MAX_SEC : SESSION_DEFAULT_SEC,
             capture_safe: selectable,
             selectable: selectable
         });
@@ -929,11 +1017,12 @@ export function probeCapability(preferredIface)
     const hasCtl = paths ? !!fs.access(paths.ctl) : false;
     const hasRelay = paths ? !!fs.access(paths.relay) : false;
     const pathsOk = hasCtl && hasRelay;
-    const mode = captureModeForChipset(chipset);
+    const fragile = isFragileAth10k(board, chipset);
     const fftAvailable = pathsOk && (chipset === "ath9k" || chipset === "ath10k");
     const surveyAvailable = chipset === "ath10k";
     const captureSafe = fftAvailable || surveyAvailable;
-    const captureMode = fftAvailable ? "fft" : (surveyAvailable ? "survey" : null);
+    const captureMode = captureModeForChipset(chipset, board) ||
+        (fftAvailable ? "fft" : (surveyAvailable ? "survey" : null));
 
     const rmode = radio.mode?.mode || "unknown";
     const channel = radio.mode?.channel ?? -1;
@@ -958,6 +1047,10 @@ export function probeCapability(preferredIface)
         fft_available: fftAvailable,
         survey_available: surveyAvailable,
         capture_mode: captureMode,
+        prefer_survey: fragile && surveyAvailable,
+        fft_opt_in: fragile && fftAvailable,
+        fragile_ath10k: fragile,
+        max_fft_sec: fragile ? ATH10K_FFT_MAX_SEC : SESSION_MAX_SEC,
         fft_paths: pathsOk,
         capture_safe: captureSafe,
         spectral_ctl: hasCtl,
@@ -1666,13 +1759,19 @@ function paintBinAtFreq(bins, freq, value, bandF0, bandF1)
 /**
  * Band activity from survey: valid noise as a quiet floor, plus per-interval
  * busy-time deltas so repeated dumps are not identical copies.
+ * amplify (default true): stretch noise into a visible range and gain-boost
+ * tiny busy fractions (ath10k off-channel counters are often frozen).
  * Returns { bins, prev } where prev is the freq→counters map for the next sample.
  */
-function surveyActivityToBins(iface, prevByFreq, nOut, bandF0, bandF1)
+function surveyActivityToBins(iface, prevByFreq, nOut, bandF0, bandF1, amplify)
 {
     const rows = getSurveySummary(iface);
     const next = {};
     const bins = emptyBinRow(nOut);
+    const amp = amplify != false;
+    /* Quiet noise floor → 0..noiseMax; busy deltas can still exceed that. */
+    const noiseMax = amp ? 70 : 30;
+    const busyGain = amp ? 40 : 1;
     if (bandF0 == null || bandF1 == null || bandF1 <= bandF0) {
         return { bins: bins, prev: next };
     }
@@ -1689,13 +1788,12 @@ function surveyActivityToBins(iface, prevByFreq, nOut, bandF0, bandF1)
         };
         let v = 0;
         if (surveyNoiseValid(r.noise)) {
-            /* Map -120..-60 dBm into a quiet 0..30 floor (FFT/busy can exceed). */
-            v = int((r.noise + 120) * 30 / 60);
+            v = int((r.noise + 120) * noiseMax / 60);
             if (v < 0) {
                 v = 0;
             }
-            if (v > 30) {
-                v = 30;
+            if (v > noiseMax) {
+                v = noiseMax;
             }
         }
         if (prevByFreq) {
@@ -1704,9 +1802,13 @@ function surveyActivityToBins(iface, prevByFreq, nOut, bandF0, bandF1)
                 const dt = r.time - prev.time;
                 const db = r.time_busy - prev.time_busy;
                 if (dt > 0 && db >= 0) {
-                    let busyV = int((db * 100) / dt);
+                    let busyV = int((db * 100 * busyGain) / dt);
                     if (busyV > 100) {
                         busyV = 100;
+                    }
+                    /* Tiny mesh busy fractions often round to 0 without a floor. */
+                    if (amp && db > 0 && busyV < 10) {
+                        busyV = 10;
                     }
                     if (busyV > v) {
                         v = busyV;
@@ -1895,6 +1997,71 @@ export function writeCache(cache)
     fs.writefile(path, sprintf("%J", cache));
 };
 
+function isCacheFilename(name)
+{
+    return !!match(name, /^waterfall-cache(-[a-zA-Z0-9]+)?\.json$/);
+};
+
+export function listCacheFiles()
+{
+    const names = fs.lsdir("/tmp") || [];
+    const out = [];
+    for (let i = 0; i < length(names); i++) {
+        const name = names[i];
+        if (!isCacheFilename(name)) {
+            continue;
+        }
+        const path = `/tmp/${name}`;
+        const st = fs.stat(path);
+        push(out, {
+            name: name,
+            path: path,
+            bytes: st ? int(st.size) : 0
+        });
+    }
+    return out;
+};
+
+export function cacheDiskUsage()
+{
+    const files = listCacheFiles();
+    let bytes = 0;
+    for (let i = 0; i < length(files); i++) {
+        bytes += files[i].bytes;
+    }
+    return {
+        ok: true,
+        bytes: bytes,
+        files: length(files),
+        caches: files
+    };
+};
+
+export function clearAllCaches()
+{
+    const files = listCacheFiles();
+    let freed = 0;
+    let removed = 0;
+    for (let i = 0; i < length(files); i++) {
+        freed += files[i].bytes;
+        try {
+            fs.unlink(files[i].path);
+            removed++;
+        }
+        catch (_) {
+        }
+    }
+    persistLog(`cache clear removed=${removed} freed=${freed}`);
+    return {
+        ok: true,
+        freed_bytes: freed,
+        removed: removed,
+        have_cache: false,
+        cache_bytes: 0,
+        cache_files: 0
+    };
+};
+
 export function sessionIsRunning()
 {
     const st = readSessionState();
@@ -1915,9 +2082,10 @@ export function sessionIsRunning()
 };
 
 /**
- * One-shot capture. ath9k: inline FFT. ath10k: isolated FFT worker, survey fallback.
+ * One-shot capture. ath9k: inline FFT. ath10k: survey by default on fragile
+ * QCA988x; FFT only when allowFft is true.
  */
-export function captureSpectral(preferredIface)
+export function captureSpectral(preferredIface, allowFft)
 {
     const cap = probeCapability(preferredIface);
     if (!cap.ok) {
@@ -1932,45 +2100,57 @@ export function captureSpectral(preferredIface)
     }
 
     if (cap.chipset === "ath10k") {
+        const tryFft = !!allowFft && !!cap.fft_available && !spectralCooldownActive();
         let modeUsed = "fft";
         let sweep = null;
         let error = null;
         let bytes = 0;
         let recovered = false;
 
-        if (cap.fft_available && !spectralCooldownActive()) {
-            const pulse = runAth10kFftPulse(cap.iface, cap.phy, false);
-            bytes = pulse.bytes;
-            recovered = pulse.recovered;
-            if (pulse.ok) {
-                const buf = readFftBuffer(FFT_OUT);
-                if (buf) {
-                    sweep = samplesToSweep(parseFftTlvs(buf, 24));
+        beginScanHold({ iface: cap.iface, mode: tryFft ? "fft" : "survey", at: nowSec() });
+        try {
+            if (tryFft) {
+                const pulse = runAth10kFftPulse(cap.iface, cap.phy, false);
+                bytes = pulse.bytes;
+                recovered = pulse.recovered;
+                if (pulse.ok) {
+                    const buf = readFftBuffer(FFT_OUT);
+                    if (buf) {
+                        sweep = samplesToSweep(parseFftTlvs(buf, 24));
+                    }
+                    if (!sweep) {
+                        error = "FFT bytes present but TLV parse failed";
+                    }
                 }
-                if (!sweep) {
-                    error = "FFT bytes present but TLV parse failed";
+                else {
+                    error = pulse.error;
                 }
             }
-            else {
-                error = pulse.error;
+            else if (spectralCooldownActive() && allowFft) {
+                error = "spectral cooldown active after prior failure";
             }
-        }
-        else if (spectralCooldownActive()) {
-            error = "spectral cooldown active after prior failure";
-        }
 
-        if (!sweep && cap.survey_available) {
-            modeUsed = "survey";
-            sweep = surveyToSweep(cap.iface);
-            if (sweep) {
-                error = recovered
-                    ? "FFT timed out (Wi-Fi recovered); using survey fallback"
-                    : (error ? `${error}; using survey fallback` : null);
+            if (!sweep && cap.survey_available) {
+                modeUsed = "survey";
+                sweep = surveyToSweep(cap.iface);
+                if (sweep) {
+                    error = recovered
+                        ? "FFT timed out; using survey (disable-only recover)"
+                        : (allowFft && error ? `${error}; using survey` : null);
+                }
+                else if (!error) {
+                    error = "No survey samples (empty nl80211 survey dump)";
+                }
             }
-            else if (!error) {
-                error = "No survey samples (empty nl80211 survey dump)";
+            else if (!tryFft && !cap.survey_available) {
+                error = "Survey unavailable and FFT not enabled";
             }
         }
+        catch (e) {
+            error = `${e}`;
+        }
+        disableAllSpectral();
+        endScanHold("capture");
 
         return {
             ok: !!sweep,
@@ -2039,9 +2219,9 @@ export function captureSpectral(preferredIface)
  * GUI duration = listen time per section. Total wall time ≈ N×(section + retune) + restore.
  * ALL/multi = verified retune→listen section→next→restore.
  */
-export function runSession(preferredIface, durationSec, channelSel, bandwidthSel)
+export function runSession(preferredIface, durationSec, channelSel, bandwidthSel, allowFft, amplifySurvey)
 {
-    const sectionDur = clampDuration(durationSec);
+    let sectionDur = clampDuration(durationSec);
     const sleepSec = sectionDur >= 300 ? 1 : 0;
     fs.unlink(SESSION_STOP);
 
@@ -2050,29 +2230,53 @@ export function runSession(preferredIface, durationSec, channelSel, bandwidthSel
     const sections = plan.ok ? planSections(plan) : [];
     const sectionCount = length(sections) > 0 ? length(sections) : 1;
     const scanBw = plan.ok && plan.scan_bandwidth != null ? plan.scan_bandwidth : 20;
+    const fragile = !!cap.fragile_ath10k;
+    /* Survey contrast boost: default on; pass amplifySurvey=false / --no-amplify to disable. */
+    const amplify = amplifySurvey == null ? true : !!amplifySurvey;
+    const useSurveyDefault = fragile && !allowFft;
+    /* Opt-in FFT on fragile: current-channel only, short, no ALL/stitch hops. */
+    const useFragileFft = fragile && !!allowFft && !!cap.fft_available;
+    if (useFragileFft && sectionDur > ATH10K_FFT_MAX_SEC) {
+        sectionDur = ATH10K_FFT_MAX_SEC;
+    }
+    if (useSurveyDefault || (useFragileFft && plan.ok && (plan.mode === "all" || plan.mode === "stitch" || sectionCount > 1))) {
+        /* Wide scans on QCA9887: survey only (no IBSS retune, no spectral). */
+    }
     const preferAth9kChanscan =
         !!cap.ok &&
         cap.chipset === "ath9k" &&
         !!cap.fft_available &&
         plan.ok &&
         (plan.mode === "all" || plan.mode === "stitch" || sectionCount > 1);
-    const progressSections = preferAth9kChanscan ? 1 : sectionCount;
-    const totalEst = preferAth9kChanscan
-        ? (sectionDur + SECTION_RESTORE_SEC)
-        : estimateSessionSec(sectionCount, sectionDur);
+    const progressSections = (useSurveyDefault || useFragileFft) ? 1 :
+        (preferAth9kChanscan ? 1 : sectionCount);
+    const totalEst = (useSurveyDefault || useFragileFft)
+        ? (sectionDur + 3)
+        : (preferAth9kChanscan
+            ? (sectionDur + SECTION_RESTORE_SEC)
+            : estimateSessionSec(sectionCount, sectionDur));
     const started = nowSec();
     const startedFrac = nowFrac();
     let ends = started + totalEst;
     let endsFrac = startedFrac + totalEst;
     const sweeps = [];
     const times = [];
-    let mode = cap.capture_mode;
+    let mode = useSurveyDefault ? "survey" : (useFragileFft ? "fft" : cap.capture_mode);
     let usedSurveyFallback = false;
     let recovered = false;
     let retuned = false;
     let scanNote = null;
     let sectionIndex = 0;
     let usedAth9kChanscan = false;
+
+    beginScanHold({
+        iface: cap.iface,
+        mode: mode,
+        allow_fft: !!allowFft,
+        fragile: fragile,
+        at: started
+    });
+    petHardwareWatchdog();
 
     function publishSession(extra)
     {
@@ -2307,7 +2511,7 @@ export function runSession(preferredIface, durationSec, channelSel, bandwidthSel
             if (fs.access(SESSION_STOP)) {
                 break;
             }
-            const act = surveyActivityToBins(cap.iface, prevSurvey, nBins, bandF0, bandF1);
+            const act = surveyActivityToBins(cap.iface, prevSurvey, nBins, bandF0, bandF1, amplify);
             prevSurvey = act.prev;
             if (act.bins) {
                 pushRow(act.bins, bandF0, bandF1, null);
@@ -2315,6 +2519,7 @@ export function runSession(preferredIface, durationSec, channelSel, bandwidthSel
                     break;
                 }
             }
+            petHardwareWatchdog();
             system("sleep 1");
         }
     }
@@ -2379,6 +2584,94 @@ export function runSession(preferredIface, durationSec, channelSel, bandwidthSel
     }
     else if (!plan.ok) {
         error = plan.error || "Invalid channel/bandwidth selection";
+    }
+    else if (useSurveyDefault || (fragile && !allowFft)) {
+        /* QCA9887 default: survey-only — no spectral_scan_ctl, no wifi reload. */
+        try {
+            mode = "survey";
+            scanNote = "ath10k survey mode (safe default on QCA988x; no spectral FFT)";
+            sectionIndex = 1;
+            publishSession({ section_ends_at: nowSec() + sectionDur });
+            runSurveyLoop(nowFrac() + sectionDur);
+            if (!length(sweeps)) {
+                error = "No survey sweeps captured";
+            }
+        }
+        catch (e) {
+            error = `${e}`;
+        }
+    }
+    else if (useFragileFft) {
+        /* Opt-in FFT: current channel only, short, spaced pulses, disable-only recover. */
+        try {
+            if (plan.mode !== "current" && plan.mode !== "single") {
+                mode = "survey";
+                usedSurveyFallback = true;
+                scanNote = "ALL/wide refused on QCA988x FFT opt-in; using survey instead";
+                sectionIndex = 1;
+                publishSession({ section_ends_at: nowSec() + sectionDur });
+                runSurveyLoop(nowFrac() + sectionDur);
+            }
+            else {
+                mode = "fft";
+                scanNote = `Experimental ath10k FFT ≤${sectionDur}s (disable-only recover; no wifi reload)`;
+                if (plan.mode === "single") {
+                    const r = retuneVerified(
+                        plan.iface, plan.ssid, plan.channel, plan.frequency, scanBw,
+                        { reloadWait: 10 }
+                    );
+                    if (r.ok) {
+                        retuned = true;
+                    }
+                    else {
+                        error = r.error || "Could not verify retune";
+                    }
+                }
+                sectionIndex = 1;
+                publishSession({ section_ends_at: nowSec() + sectionDur });
+                let emptyStreak = 0;
+                while (!error && nowFrac() < startedFrac + sectionDur) {
+                    if (fs.access(SESSION_STOP)) {
+                        break;
+                    }
+                    petHardwareWatchdog();
+                    const pulse = runAth10kFftPulse(cap.iface, cap.phy, false, null);
+                    if (pulse.recovered) {
+                        recovered = true;
+                        usedSurveyFallback = true;
+                        mode = "survey";
+                        scanNote = "FFT timeout — disable-only recover; finishing with survey";
+                        break;
+                    }
+                    if (pulse.ok) {
+                        const n = ingestFftBuffer(sectionDur, 8);
+                        emptyStreak = n > 0 ? 0 : emptyStreak + 1;
+                    }
+                    else {
+                        emptyStreak++;
+                    }
+                    if (emptyStreak >= 3) {
+                        usedSurveyFallback = true;
+                        mode = "survey";
+                        break;
+                    }
+                    system("sleep 1");
+                }
+                if (!length(sweeps) && cap.survey_available) {
+                    usedSurveyFallback = true;
+                    mode = "survey";
+                    runSurveyLoop(nowFrac() + 3);
+                }
+                if (!length(sweeps) && !error) {
+                    error = "No FFT or survey sweeps (opt-in FFT)";
+                }
+            }
+        }
+        catch (e) {
+            error = `${e}`;
+        }
+        restoreRadio();
+        disableAllSpectral();
     }
     else if (plan.mode === "all" || plan.mode === "stitch" || sectionCount > 1) {
         try {
@@ -2550,6 +2843,7 @@ export function runSession(preferredIface, durationSec, channelSel, bandwidthSel
 
     disableAllSpectral();
     restoreRadio();
+    endScanHold(error ? `error:${error}` : "ok");
     fs.unlink(SESSION_STOP);
     fs.unlink(SESSION_PID);
 
@@ -2574,7 +2868,9 @@ export function runSession(preferredIface, durationSec, channelSel, bandwidthSel
             : "Full-band survey fallback complete.";
     }
     else if (mode === "survey") {
-        note = "Survey waterfall complete (nl80211 noise/busy).";
+        note = amplify
+            ? "Survey waterfall complete (nl80211 noise/busy, amplify on)."
+            : "Survey waterfall complete (nl80211 noise/busy, amplify off).";
     }
     if (fStart == null && plan.ok) {
         fStart = plan.f_start;
@@ -2593,6 +2889,7 @@ export function runSession(preferredIface, durationSec, channelSel, bandwidthSel
             chipset: cap.chipset,
             band: cap.band,
             capture_mode: mode,
+            amplify_survey: mode === "survey" ? amplify : false,
             survey_fallback: usedSurveyFallback,
             recovered: recovered,
             y_axis: "time",
@@ -2641,7 +2938,7 @@ export function runSession(preferredIface, durationSec, channelSel, bandwidthSel
 /**
  * Start background session worker (returns immediately). Admin must gate callers.
  */
-export function startSessionAsync(preferredIface, durationSec, channelSel, bandwidthSel)
+export function startSessionAsync(preferredIface, durationSec, channelSel, bandwidthSel, allowFft, amplifySurvey)
 {
     if (sessionIsRunning()) {
         const sess = readSessionState();
@@ -2668,29 +2965,48 @@ export function startSessionAsync(preferredIface, durationSec, channelSel, bandw
     if (!plan.ok) {
         return { ok: false, error: plan.error || "Invalid channel/bandwidth" };
     }
-    const sectionDur = clampDuration(durationSec);
+    let sectionDur = clampDuration(durationSec);
     const sections = planSections(plan);
     const sectionCount = length(sections) > 0 ? length(sections) : 1;
     const scanBw = plan.scan_bandwidth != null ? plan.scan_bandwidth : 20;
+    const fragile = !!cap.fragile_ath10k;
+    const amplify = amplifySurvey == null ? true : !!amplifySurvey;
+    const useSurvey = fragile && !allowFft;
+    const useFragileFft = fragile && !!allowFft;
+    if (useFragileFft && sectionDur > ATH10K_FFT_MAX_SEC) {
+        sectionDur = ATH10K_FFT_MAX_SEC;
+    }
     const useAth9kChanscan =
+        !fragile &&
         cap.chipset === "ath9k" &&
         cap.fft_available &&
         (plan.mode === "all" || plan.mode === "stitch" || sectionCount > 1);
-    const progressSections = useAth9kChanscan ? 1 : sectionCount;
-    const totalEst = useAth9kChanscan
-        ? (sectionDur + SECTION_RESTORE_SEC)
-        : estimateSessionSec(sectionCount, sectionDur);
+    const progressSections = (useSurvey || useFragileFft) ? 1 : (useAth9kChanscan ? 1 : sectionCount);
+    const totalEst = (useSurvey || useFragileFft)
+        ? (sectionDur + 3)
+        : (useAth9kChanscan
+            ? (sectionDur + SECTION_RESTORE_SEC)
+            : estimateSessionSec(sectionCount, sectionDur));
     const ifaceArg = preferredIface ? ` -i ${preferredIface}` : "";
     let chArg = "";
     let bwArg = "";
+    let fftArg = "";
+    let ampArg = "";
     if (channelSel != null && `${channelSel}` !== "") {
         chArg = ` -c ${channelSel}`;
     }
     if (bandwidthSel != null && `${bandwidthSel}` !== "") {
         bwArg = ` -b ${bandwidthSel}`;
     }
+    if (allowFft) {
+        fftArg = " -f";
+    }
+    if (!amplify) {
+        ampArg = " --no-amplify";
+    }
     fs.unlink(SESSION_STOP);
     const started = nowSec();
+    const startMode = useSurvey ? "survey" : (useFragileFft ? "fft" : cap.capture_mode);
     writeSessionState({
         running: true,
         started_at: started,
@@ -2702,16 +3018,25 @@ export function startSessionAsync(preferredIface, durationSec, channelSel, bandw
         section_ends_at: null,
         iface: cap.iface,
         chipset: cap.chipset,
-        capture_mode: cap.capture_mode,
+        capture_mode: startMode,
+        allow_fft: !!allowFft,
+        amplify_survey: startMode === "survey" ? amplify : false,
         scan_channel: plan.channel,
         scan_bandwidth: scanBw,
         plot_bandwidth: plan.plot_bandwidth,
         scan_mode: plan.mode,
         version: packageVersion()
     });
-    system(`waterfall-session${ifaceArg} -d ${sectionDur}${chArg}${bwArg} >/tmp/waterfall-session.log 2>&1 &`);
+    system(`waterfall-session${ifaceArg} -d ${sectionDur}${chArg}${bwArg}${fftArg}${ampArg} >/tmp/waterfall-session.log 2>&1 &`);
     let warn;
-    if (useAth9kChanscan) {
+    if (useSurvey) {
+        warn = `Survey waterfall on ${cap.iface} for ${sectionDur}s (QCA988x safe default — no spectral FFT)` +
+            (amplify ? "; amplify on" : "; amplify off") + ".";
+    }
+    else if (useFragileFft) {
+        warn = `Experimental FFT on ${cap.iface} ≤${sectionDur}s (disable-only recover). Prefer survey for daily use.`;
+    }
+    else if (useAth9kChanscan) {
         const freqs = buildChanscanFreqList(plan);
         warn = `ath9k classic chanscan+iw scan on ${cap.iface} (${length(freqs)} freqs, ${sectionDur}s). Temporary mesh RF interrupt — radio returns when scan ends.`;
     }
@@ -2725,7 +3050,7 @@ export function startSessionAsync(preferredIface, durationSec, channelSel, bandw
         warn = `Scan ch ${plan.channel} (plot ${plan.plot_bandwidth} MHz, scan ${scanBw} MHz) for ${sectionDur}s + restore.`;
     }
     else if (cap.chipset === "ath10k") {
-        warn = `ath10k isolated FFT on ${cap.iface} (${sectionDur}s section).`;
+        warn = `ath10k capture on ${cap.iface} (${sectionDur}s).`;
     }
     else {
         warn = `Spectral capture on ${cap.iface} for ${sectionDur}s.`;
@@ -2740,7 +3065,9 @@ export function startSessionAsync(preferredIface, durationSec, channelSel, bandw
         section_count: progressSections,
         iface: cap.iface,
         chipset: cap.chipset,
-        capture_mode: cap.capture_mode,
+        capture_mode: startMode,
+        allow_fft: !!allowFft,
+        amplify_survey: startMode === "survey" ? amplify : false,
         scan_channel: plan.channel,
         scan_bandwidth: scanBw,
         plot_bandwidth: plan.plot_bandwidth,
@@ -2754,9 +3081,9 @@ export function startSessionAsync(preferredIface, durationSec, channelSel, bandw
 export function stopSession()
 {
     fs.writefile(SESSION_STOP, "1\n");
-    /* Give worker a moment, then force-disable RF */
     system("sleep 1");
     disableAllSpectral();
+    endScanHold("stop");
     const st = readSessionState();
     st.running = false;
     st.stopped_at = nowSec();
@@ -2793,6 +3120,7 @@ export function sessionStatus(preferredIface)
     const sel = preferredIface || cap.iface || null;
     const cache = readCache(sel);
     const scan = getScanOptions(sel);
+    const usage = cacheDiskUsage();
     return {
         ok: true,
         version: packageVersion(),
@@ -2807,11 +3135,17 @@ export function sessionStatus(preferredIface)
         session: sess,
         have_cache: cache.have_cache,
         sweep_count: length(cache.sweeps || []),
+        cache_bytes: usage.bytes,
+        cache_files: usage.files,
         durations: allowedDurations(),
         default_duration: SESSION_DEFAULT_SEC,
         max_duration: SESSION_MAX_SEC,
         radios: rlist,
         selected_iface: sel,
+        prefer_survey: cap.prefer_survey,
+        fft_opt_in: cap.fft_opt_in,
+        fragile_ath10k: cap.fragile_ath10k,
+        max_fft_sec: cap.max_fft_sec,
         scan: scan,
         capability: {
             supported: cap.supported,
@@ -2826,6 +3160,10 @@ export function sessionStatus(preferredIface)
             fft_available: cap.fft_available,
             survey_available: cap.survey_available,
             capture_mode: cap.capture_mode,
+            prefer_survey: cap.prefer_survey,
+            fft_opt_in: cap.fft_opt_in,
+            fragile_ath10k: cap.fragile_ath10k,
+            max_fft_sec: cap.max_fft_sec,
             capture_safe: cap.capture_safe,
             board: cap.board,
             note: cap.note
@@ -2855,6 +3193,9 @@ export function formatProbeReport(cap)
     push(lines, `selected ${cap.iface}  phy ${cap.phy}  chipset ${cap.chipset}  band ${cap.band}`);
     push(lines, `mode ${cap.mode}  channel ${cap.channel}  freq ${cap.frequency_mhz} MHz`);
     push(lines, `fft_available ${cap.fft_available}  survey_available ${cap.survey_available}  capture_mode ${cap.capture_mode || "none"}  capture_safe ${cap.capture_safe}  ctl ${cap.spectral_ctl}  relay ${cap.spectral_relay}`);
+    if (cap.prefer_survey) {
+        push(lines, `prefer_survey true  fft_opt_in ${!!cap.fft_opt_in}  max_fft_sec ${cap.max_fft_sec || 5}`);
+    }
     if (cap.supported !== false) {
         push(lines, cap.note);
     }
@@ -2869,7 +3210,7 @@ export function formatProbeReport(cap)
     if (cap.supported === false) {
         return join("\n", lines) + "\n";
     }
-    push(lines, "RF note: ath9k FFT disrupts RF; ath10k uses isolated FFT worker (timeout+recovery) with survey fallback.");
+    push(lines, "RF note: ath9k FFT disrupts RF; QCA988x ath10k defaults to survey (FFT opt-in, disable-only recover).");
     const survey = getSurveySummary(cap.iface);
     if (length(survey)) {
         push(lines, "survey:");

@@ -1,17 +1,21 @@
 #!/bin/sh
 # Bound waterfall session wrapper: records PID, always exits after worker.
-# Invoked as: waterfall-session [-i iface] [-d secs] [-c channel|all] [-b bw|all]
+# Invoked as: waterfall-session [-i iface] [-d secs] [-c channel|all] [-b bw|all] [-f] [--no-amplify]
 set -e
 IFACE=""
 DUR=30
 CHANNEL=""
 BW=""
+FFT=""
+NOAMP=""
 while [ $# -gt 0 ]; do
   case "$1" in
     -i) IFACE="$2"; shift 2 ;;
     -d) DUR="$2"; shift 2 ;;
     -c) CHANNEL="$2"; shift 2 ;;
     -b) BW="$2"; shift 2 ;;
+    -f|--fft) FFT=1; shift ;;
+    --no-amplify) NOAMP=1; shift ;;
     *) shift ;;
   esac
 done
@@ -20,5 +24,7 @@ ARGS="session -d $DUR"
 [ -n "$IFACE" ] && ARGS="$ARGS -i $IFACE"
 [ -n "$CHANNEL" ] && ARGS="$ARGS -c $CHANNEL"
 [ -n "$BW" ] && ARGS="$ARGS -b $BW"
+[ -n "$FFT" ] && ARGS="$ARGS --fft"
+[ -n "$NOAMP" ] && ARGS="$ARGS --no-amplify"
 # shellcheck disable=SC2086
 exec /usr/bin/waterfall $ARGS

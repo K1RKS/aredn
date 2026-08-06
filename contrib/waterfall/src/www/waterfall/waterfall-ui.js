@@ -29,17 +29,21 @@
     return [255, 30, 30];
   }
 
-  function qs(action, iface, duration, channel, bandwidth) {
+  function qs(action, iface, duration, channel, bandwidth, allowFft, amplifySurvey) {
     let u = API + "?action=" + encodeURIComponent(action);
     if (iface) u += "&iface=" + encodeURIComponent(iface);
     if (duration != null && duration !== "") u += "&duration=" + encodeURIComponent(duration);
     if (channel != null && channel !== "") u += "&channel=" + encodeURIComponent(channel);
     if (bandwidth != null && bandwidth !== "") u += "&bandwidth=" + encodeURIComponent(bandwidth);
+    if (allowFft) u += "&allow_fft=1";
+    /* Default amplify on; only send 0 when explicitly off. */
+    if (amplifySurvey === false) u += "&amplify_survey=0";
+    else if (amplifySurvey === true) u += "&amplify_survey=1";
     return u;
   }
 
-  async function api(action, iface, duration, channel, bandwidth) {
-    const r = await fetch(qs(action, iface, duration, channel, bandwidth), { cache: "no-store", credentials: "same-origin" });
+  async function api(action, iface, duration, channel, bandwidth, allowFft, amplifySurvey) {
+    const r = await fetch(qs(action, iface, duration, channel, bandwidth, allowFft, amplifySurvey), { cache: "no-store", credentials: "same-origin" });
     const text = await r.text();
     let j = null;
     try {
@@ -64,11 +68,33 @@
     return sec + "s";
   }
 
+  function formatBytes(n) {
+    n = Math.max(0, Math.floor(Number(n) || 0));
+    if (n < 1024) return n + " B";
+    if (n < 1024 * 1024) {
+      const k = n / 1024;
+      return (k < 10 ? k.toFixed(1) : Math.round(k)) + " KiB";
+    }
+    const m = n / (1024 * 1024);
+    return (m < 10 ? m.toFixed(1) : Math.round(m)) + " MiB";
+  }
+
+  function clearCacheTitle(bytes, files) {
+    const b = Math.max(0, Math.floor(Number(bytes) || 0));
+    const f = Math.max(0, Math.floor(Number(files) || 0));
+    if (b <= 0 && f <= 0) return "No cache";
+    if (f <= 1) return "Frees " + formatBytes(b);
+    return "Frees " + formatBytes(b) + " · " + f + " files";
+  }
+
   function radioLabel(r) {
     const bits = [r.iface, r.band || "", r.chipset || "", "mode=" + (r.mode || "?")];
-    if (r.capture_mode === "fft" || r.fft_available) {
+    if (r.capture_mode === "survey" || r.prefer_survey) {
+      bits.push("survey (safe)");
+      if (r.fft_opt_in) bits.push("FFT opt-in");
+    } else if (r.capture_mode === "fft" || r.fft_available) {
       bits.push(r.chipset === "ath10k" ? "FFT+survey" : "spectral FFT");
-    } else if (r.capture_mode === "survey" || r.survey_available) {
+    } else if (r.survey_available) {
       bits.push("survey");
     } else {
       bits.push("no capture");
@@ -96,6 +122,7 @@
     else if (ch === "all" || ch === "ALL") parts.push("plot full band");
     if (scanBw != null && scanBw !== "" && scanBw !== "all") parts.push("scan " + scanBw + " MHz");
     if (meta.section_count != null) parts.push(meta.section_count + " section" + (meta.section_count === 1 ? "" : "s"));
+    if (meta.capture_mode === "survey" && meta.amplify_survey === false) parts.push("amplify off");
     const f0 = meta.f_start;
     const f1 = meta.f_stop;
     if (f0 != null && f1 != null && f1 > f0) {
@@ -125,6 +152,7 @@
     ctx.font = "13px sans-serif";
     ctx.textAlign = "center";
     let title = "Waterfall History";
+    if (meta.capture_mode === "fft") title += " · Experimental FFT";
     if (startedLabel) title += "  ·  " + startedLabel;
     ctx.fillText(title, W / 2, 14);
     if (selectionLabel) {
@@ -284,11 +312,14 @@
     const statusEl = root.querySelector(".wf-status");
     const startBtn = root.querySelector(".wf-start");
     const stopBtn = root.querySelector(".wf-stop");
+    const clearBtn = root.querySelector(".wf-clear-cache");
     const closeBtn = root.querySelector(".wf-close");
     const radioSel = root.querySelector(".wf-radio");
     const durSel = root.querySelector(".wf-duration");
     const channelSel = root.querySelector(".wf-channel");
     const bwSel = root.querySelector(".wf-bandwidth");
+    let fftOpt = root.querySelector(".wf-fft-opt");
+    let amplifyOpt = root.querySelector(".wf-amplify-opt");
     let progressWrap = root.querySelector(".wf-progress");
     let progressSections = null;
     let progressSectionsBar = null;
@@ -311,6 +342,9 @@
     let progressSectionEndsAtMs = null;
     let progressSectionDurSec = null;
     let progressScanMode = null;
+    /* idle | running | stopping — drives Start green / Stop red feedback */
+    let btnPhase = "idle";
+    let stopRequested = false;
 
     function prefKey(kind) {
       return "waterfall." + kind + "." + (getIface() || "default");
@@ -329,6 +363,84 @@
       try {
         sessionStorage.setItem(prefKey(kind), String(value));
       } catch (_) {}
+    }
+
+    function getAllowFft() {
+      return !!(fftOpt && fftOpt.checked);
+    }
+
+    function getAmplifySurvey() {
+      /* Default on when control missing (ath9k / older DOM). */
+      if (!amplifyOpt) return true;
+      return !!amplifyOpt.checked;
+    }
+
+    function syncSurveyOpts(status) {
+      const radios = (status && status.radios) || [];
+      const iface = getIface();
+      let r = null;
+      for (let i = 0; i < radios.length; i++) {
+        if (radios[i].iface === iface) { r = radios[i]; break; }
+      }
+      if (!r && status) {
+        r = {
+          prefer_survey: status.prefer_survey,
+          fft_opt_in: status.fft_opt_in,
+          fragile_ath10k: status.fragile_ath10k,
+          survey_available: status.survey_available,
+          max_fft_sec: status.max_fft_sec
+        };
+      }
+      const row = root.querySelector(".wf-radio-row");
+      const showSurvey = !!(r && (r.fft_opt_in || r.fragile_ath10k || r.prefer_survey || r.survey_available));
+
+      if (!amplifyOpt && row && showSurvey) {
+        const lab = document.createElement("label");
+        lab.style.cssText = "font-size:0.85em;display:inline-flex;gap:6px;align-items:center";
+        lab.title = "Boost survey noise/busy contrast so tiny channel activity shows over time. Off = raw levels.";
+        amplifyOpt = document.createElement("input");
+        amplifyOpt.type = "checkbox";
+        amplifyOpt.className = "wf-amplify-opt";
+        amplifyOpt.checked = loadPref("amplifySurvey", "1") !== "0";
+        lab.appendChild(amplifyOpt);
+        lab.appendChild(document.createTextNode("Amplify survey"));
+        row.appendChild(lab);
+        amplifyOpt.addEventListener("change", function () {
+          savePref("amplifySurvey", amplifyOpt.checked ? "1" : "0");
+        });
+      }
+      if (!fftOpt && row && showSurvey) {
+        const lab = document.createElement("label");
+        lab.style.cssText = "font-size:0.85em;display:inline-flex;gap:6px;align-items:center";
+        lab.title = "QCA988x: survey is default. FFT can hang the whole node — use only for short tests.";
+        fftOpt = document.createElement("input");
+        fftOpt.type = "checkbox";
+        fftOpt.className = "wf-fft-opt";
+        lab.appendChild(fftOpt);
+        lab.appendChild(document.createTextNode("Experimental FFT"));
+        row.appendChild(lab);
+        fftOpt.addEventListener("change", function () {
+          if (amplifyOpt && amplifyOpt.parentElement) {
+            amplifyOpt.parentElement.style.opacity = fftOpt.checked ? "0.45" : "1";
+            amplifyOpt.disabled = !!fftOpt.checked;
+          }
+        });
+      }
+      if (amplifyOpt && amplifyOpt.parentElement) {
+        amplifyOpt.parentElement.style.display = showSurvey ? "" : "none";
+        if (!showSurvey) amplifyOpt.checked = true;
+        const fftOn = !!(fftOpt && fftOpt.checked);
+        amplifyOpt.disabled = fftOn;
+        amplifyOpt.parentElement.style.opacity = fftOn ? "0.45" : "1";
+      }
+      if (fftOpt && fftOpt.parentElement) {
+        fftOpt.parentElement.style.display = showSurvey ? "" : "none";
+        if (!showSurvey) fftOpt.checked = false;
+      }
+    }
+
+    function syncFftOpt(status) {
+      syncSurveyOpts(status);
     }
 
     function getChannel() {
@@ -515,17 +627,16 @@
       }
     }
 
-    function clearStartHitStyle() {
-      if (!startBtn) return;
-      startBtn.style.backgroundColor = "";
-      startBtn.style.borderColor = "";
-      startBtn.style.color = "";
-      startBtn.style.opacity = "";
+    function clearBtnInline(btn) {
+      if (!btn) return;
+      btn.style.backgroundColor = "";
+      btn.style.borderColor = "";
+      btn.style.color = "";
+      btn.style.opacity = "";
     }
 
-    function markStartHit() {
+    function markStartActive() {
       if (!startBtn) return;
-      /* Immediate click feedback until the next status-driven applyRunningUi. */
       startBtn.disabled = true;
       startBtn.style.backgroundColor = "#2d6a3e";
       startBtn.style.borderColor = "#1f4d2c";
@@ -533,23 +644,104 @@
       startBtn.style.opacity = "1";
     }
 
+    function markStopHit() {
+      if (!stopBtn) return;
+      stopBtn.disabled = true;
+      stopBtn.style.backgroundColor = "#8b2e2e";
+      stopBtn.style.borderColor = "#5c1a1a";
+      stopBtn.style.color = "#fff";
+      stopBtn.style.opacity = "1";
+    }
+
+    function applyIdleButtons() {
+      btnPhase = "idle";
+      stopRequested = false;
+      clearBtnInline(startBtn);
+      clearBtnInline(stopBtn);
+      if (startBtn) {
+        startBtn.disabled = false;
+        startBtn.title = "";
+      }
+      if (stopBtn) {
+        stopBtn.disabled = true;
+        stopBtn.title = "";
+      }
+    }
+
+    function updateClearCacheTip(status) {
+      if (!clearBtn) return;
+      const bytes = status && status.cache_bytes != null ? status.cache_bytes : 0;
+      const files = status && status.cache_files != null ? status.cache_files : 0;
+      clearBtn.title = clearCacheTitle(bytes, files);
+      clearBtn.disabled = !!(status && status.running) || (bytes <= 0 && files <= 0);
+    }
+
     function applyRunningUi(status) {
       const running = !!(status && status.running);
-      clearStartHitStyle();
-      if (startBtn) {
-        startBtn.disabled = running;
-        startBtn.title = running
-          ? ("Scan already in progress on " + ((status.session && status.session.iface) || "?") +
-            (status.remaining_sec != null ? (" (~" + status.remaining_sec + "s left)") : ""))
-          : "";
+
+      if (btnPhase === "stopping") {
+        /* Keep Stop red until backend confirms idle and ready for Start. */
+        markStopHit();
+        clearBtnInline(startBtn);
+        if (startBtn) {
+          startBtn.disabled = true;
+          startBtn.title = "Stopping…";
+        }
+        if (durSel) durSel.disabled = true;
+        if (radioSel) radioSel.disabled = true;
+        if (channelSel) channelSel.disabled = true;
+        if (bwSel) bwSel.disabled = true;
+        if (fftOpt) fftOpt.disabled = true;
+        if (amplifyOpt) amplifyOpt.disabled = true;
+        if (clearBtn) clearBtn.disabled = true;
+        if (running) {
+          syncProgressFromStatus(status);
+          return;
+        }
+        applyIdleButtons();
+        if (durSel) durSel.disabled = false;
+        if (radioSel) radioSel.disabled = false;
+        if (channelSel) channelSel.disabled = false;
+        if (bwSel) bwSel.disabled = false;
+        if (fftOpt) fftOpt.disabled = false;
+        if (amplifyOpt) amplifyOpt.disabled = !!(fftOpt && fftOpt.checked);
+        updateClearCacheTip(status);
+        hideProgress();
+        return;
       }
-      if (stopBtn) stopBtn.disabled = !running;
-      if (durSel) durSel.disabled = running;
-      if (radioSel) radioSel.disabled = running;
-      if (channelSel) channelSel.disabled = running;
-      if (bwSel) bwSel.disabled = running;
-      if (running) syncProgressFromStatus(status);
-      else hideProgress();
+
+      if (running) {
+        btnPhase = "running";
+        markStartActive();
+        clearBtnInline(stopBtn);
+        if (startBtn) {
+          startBtn.title = ("Scan in progress on " + ((status.session && status.session.iface) || "?") +
+            (status.remaining_sec != null ? (" (~" + status.remaining_sec + "s left)") : ""));
+        }
+        if (stopBtn) {
+          stopBtn.disabled = false;
+          stopBtn.title = "Stop scan early";
+        }
+        if (durSel) durSel.disabled = true;
+        if (radioSel) radioSel.disabled = true;
+        if (channelSel) channelSel.disabled = true;
+        if (bwSel) bwSel.disabled = true;
+        if (fftOpt) fftOpt.disabled = true;
+        if (amplifyOpt) amplifyOpt.disabled = true;
+        if (clearBtn) clearBtn.disabled = true;
+        syncProgressFromStatus(status);
+        return;
+      }
+
+      applyIdleButtons();
+      if (durSel) durSel.disabled = false;
+      if (radioSel) radioSel.disabled = false;
+      if (channelSel) channelSel.disabled = false;
+      if (bwSel) bwSel.disabled = false;
+      if (fftOpt) fftOpt.disabled = false;
+      if (amplifyOpt) amplifyOpt.disabled = !!(fftOpt && fftOpt.checked);
+      updateClearCacheTip(status);
+      hideProgress();
     }
 
     function channelsForBw(scan, bw) {
@@ -716,6 +908,7 @@
       if (want) radioSel.value = want;
       selectedIface = radioSel.value || null;
       fillingRadios = false;
+      syncFftOpt(status);
       applyRunningUi(status);
     }
 
@@ -753,18 +946,36 @@
         fillRadios(s);
         fillDurations(s);
         fillScanControls(s);
+        const wasStopping = btnPhase === "stopping" || stopRequested;
         applyRunningUi(s);
+        updateClearCacheTip(s);
         if (s.running) {
           setStatus(runningMessage(s));
           try { await loadCache(); } catch (_) {}
         } else {
           stopPoll();
-          applyRunningUi(s);
           await loadCache();
-          setStatus((statusEl.textContent || "") + " · session idle (RF restored)");
+          if (wasStopping) {
+            setStatus("Stopped early · RF restored · ready for Start · showing cache for " +
+              (getIface() || "radio"));
+          } else {
+            setStatus((statusEl.textContent || "") + " · session idle (RF restored)");
+          }
         }
       } catch (e) {
-        setStatus(String(e.message || e));
+        /* Backend unreachable mid-scan: treat as abort, clear active colors. */
+        if (btnPhase === "running" || btnPhase === "stopping") {
+          stopPoll();
+          hideProgress();
+          applyIdleButtons();
+          if (durSel) durSel.disabled = false;
+          if (radioSel) radioSel.disabled = false;
+          if (channelSel) channelSel.disabled = false;
+          if (bwSel) bwSel.disabled = false;
+          setStatus("Scan aborted (node unreachable): " + String(e.message || e));
+        } else {
+          setStatus(String(e.message || e));
+        }
       }
     }
 
@@ -786,6 +997,7 @@
         selectedIface = radioSel.value || null;
         api("status", selectedIface).then((s) => {
           fillScanControls(s);
+          syncFftOpt(s);
           return loadCache();
         }).catch((e) => setStatus(String(e.message || e)));
       });
@@ -844,16 +1056,20 @@
     if (startBtn) {
       startBtn.addEventListener("click", async () => {
         try {
-          if (startBtn.disabled) return;
+          if (startBtn.disabled || btnPhase !== "idle") return;
           const iface = getIface();
           const dur = getDuration();
           const ch = getChannel() || undefined;
           const bw = getBandwidth() || undefined;
+          const allowFft = getAllowFft();
+          const amplifySurvey = getAmplifySurvey();
           if (!iface) {
             setStatus("Select a radio with spectral support first");
             return;
           }
-          markStartHit();
+          btnPhase = "running";
+          stopRequested = false;
+          markStartActive();
           /* Re-check before start in case another UI started a scan. */
           const cur = await api("status", iface);
           if (cur.running) {
@@ -863,8 +1079,9 @@
             return;
           }
           setStatus("Starting " + dur + "s/section on " + iface +
-            " (ch " + (ch || "current") + " / " + (bw || "current") + " MHz)…");
-          const r = await api("start", iface, dur, ch, bw);
+            " (ch " + (ch || "current") + " / " + (bw || "current") + " MHz" +
+            (allowFft ? ", FFT opt-in" : (amplifySurvey ? ", amplify on" : ", amplify off")) + ")…");
+          const r = await api("start", iface, dur, ch, bw, allowFft, amplifySurvey);
           if (!r.ok) {
             const st = await api("status", iface).catch(() => null);
             if (st && st.running) {
@@ -898,21 +1115,63 @@
           setStatus(r.warning || runningMessage(started));
           startPoll();
         } catch (e) {
-          applyRunningUi({ running: false });
+          applyIdleButtons();
+          if (durSel) durSel.disabled = false;
+          if (radioSel) radioSel.disabled = false;
+          if (channelSel) channelSel.disabled = false;
+          if (bwSel) bwSel.disabled = false;
+          hideProgress();
           setStatus(String(e.message || e));
         }
       });
     }
     if (stopBtn) {
       stopBtn.addEventListener("click", async () => {
+        if (btnPhase !== "running") return;
         try {
+          stopRequested = true;
+          btnPhase = "stopping";
+          markStopHit();
+          clearBtnInline(startBtn);
+          if (startBtn) {
+            startBtn.disabled = true;
+            startBtn.title = "Stopping…";
+          }
+          setStatus("Stopping… waiting for backend to confirm idle");
           await api("stop", getIface());
+          /* Keep polling until status.running is false, then clear red Stop. */
+          startPoll();
+          await refreshStatus();
+        } catch (e) {
           stopPoll();
-          applyRunningUi({ running: false });
-          await loadCache();
-          setStatus("Stopped early · RF restored · showing cache for " + (getIface() || "radio"));
+          hideProgress();
+          applyIdleButtons();
+          if (durSel) durSel.disabled = false;
+          if (radioSel) radioSel.disabled = false;
+          if (channelSel) channelSel.disabled = false;
+          if (bwSel) bwSel.disabled = false;
+          setStatus("Stop aborted (unreachable): " + String(e.message || e));
+        }
+      });
+    }
+    if (clearBtn) {
+      clearBtn.addEventListener("click", async () => {
+        if (clearBtn.disabled || btnPhase !== "idle") return;
+        try {
+          clearBtn.disabled = true;
+          const r = await api("clear_cache");
+          const freed = r && r.freed_bytes != null ? r.freed_bytes : 0;
+          const removed = r && r.removed != null ? r.removed : 0;
+          updateClearCacheTip({ cache_bytes: 0, cache_files: 0, running: false });
+          drawHeatmap(canvas, { sweeps: [], meta: { iface: getIface() } });
+          if (freed <= 0) setStatus("Cache empty");
+          else setStatus("Cleared " + removed + " · freed " + formatBytes(freed));
         } catch (e) {
           setStatus(String(e.message || e));
+          try {
+            const s = await api("status", getIface());
+            updateClearCacheTip(s);
+          } catch (_) {}
         }
       });
     }
@@ -945,7 +1204,9 @@
       fillRadios(s);
       fillDurations(s);
       fillScanControls(s);
+      syncFftOpt(s);
       applyRunningUi(s);
+      updateClearCacheTip(s);
       if (s.running) {
         setStatus(runningMessage(s));
         startPoll();

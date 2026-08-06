@@ -7,16 +7,18 @@ import * as wf from "waterfall";
 
 function usage()
 {
-    print("Usage: waterfall [-i iface] [-d secs] [-c channel|all] [-b bw|all] [status|capture|session|stop|cache]\n");
+    print("Usage: waterfall [-i iface] [-d secs] [-c channel|all] [-b bw|all] [--fft] [--no-amplify] [status|capture|session|stop|cache]\n");
     print("  status   Probe radio / spectral availability (default; no RF change)\n");
-    print("  capture  One-shot spectral dump (disrupts RF briefly; always disables)\n");
+    print("  capture  One-shot capture (ath10k: survey unless --fft)\n");
     print("  session  Bounded capture; caches sweeps per-radio in /tmp RAM\n");
     print("  stop     Request early session stop and force spectral disable\n");
     print("  cache    Print cached waterfall JSON meta for iface\n");
     print("  -i IFACE Prefer wifi interface\n");
-    print("  -d SECS  Session duration 5-600 (default 30)\n");
+    print("  -d SECS  Session duration 5-600 (default 30; FFT opt-in capped to 5 on QCA988x)\n");
     print("  -c CHAN  Channel number or 'all' (default: current radio channel)\n");
     print("  -b BW    Bandwidth MHz or 'all' (default: current radio BW)\n");
+    print("  --fft    Opt in to experimental ath10k FFT (default is survey on QCA988x)\n");
+    print("  --no-amplify  Survey only: disable noise/busy contrast boost (default: amplify on)\n");
 };
 
 let iface = null;
@@ -24,6 +26,8 @@ let cmd = "status";
 let duration = 30;
 let channel = null;
 let bandwidth = null;
+let allowFft = false;
+let amplifySurvey = true;
 for (let i = 0; i < length(ARGV); i++) {
     const a = ARGV[i];
     if (a === "-h" || a === "--help") {
@@ -50,6 +54,14 @@ for (let i = 0; i < length(ARGV); i++) {
         bandwidth = ARGV[i];
         continue;
     }
+    if (a === "-f" || a === "--fft") {
+        allowFft = true;
+        continue;
+    }
+    if (a === "--no-amplify") {
+        amplifySurvey = false;
+        continue;
+    }
     if (a === "status" || a === "probe" || a === "capture" || a === "session" || a === "stop" || a === "cache") {
         cmd = a === "probe" ? "status" : a;
         continue;
@@ -60,11 +72,11 @@ for (let i = 0; i < length(ARGV); i++) {
 }
 
 if (cmd === "capture") {
-    print(wf.formatCaptureReport(wf.captureSpectral(iface)));
+    print(wf.formatCaptureReport(wf.captureSpectral(iface, allowFft)));
     exit(0);
 }
 if (cmd === "session") {
-    const cache = wf.runSession(iface, duration, channel, bandwidth);
+    const cache = wf.runSession(iface, duration, channel, bandwidth, allowFft, amplifySurvey);
     print(sprintf("%J\n", { ok: cache.ok, sweeps: length(cache.sweeps || []), meta: cache.meta, error: cache.error }));
     exit(cache.ok ? 0 : 1);
 }

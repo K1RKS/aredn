@@ -18,9 +18,14 @@ const mCh = match(q, /channel=([a-zA-Z0-9_-]+)/);
 const channel = mCh ? mCh[1] : null;
 const mBw = match(q, /bandwidth=([a-zA-Z0-9_-]+)/);
 const bandwidth = mBw ? mBw[1] : null;
+const mFft = match(q, /allow_fft=([01])/);
+const allowFft = mFft && mFft[1] === "1";
+const mAmp = match(q, /amplify_survey=([01])/);
+const amplifySurvey = !(mAmp && mAmp[1] === "0");
 const mFmt = match(q, /format=([a-zA-Z0-9]+)/);
 const wantJson = (mFmt && mFmt[1] === "json") ||
     action === "start" || action === "stop" || action === "cache" ||
+    action === "clear_cache" ||
     action === "session_status" || match(q, /json=1/);
 
 function jsonOut(obj, code)
@@ -47,7 +52,7 @@ function htmlOut(text)
 const admin = wf.isAdminRequest();
 
 if (wantJson) {
-    if (action === "start" || action === "stop") {
+    if (action === "start" || action === "stop" || action === "clear_cache") {
         if (!admin) {
             jsonOut({ ok: false, error: "Admin authentication required" }, 401);
             exit(0);
@@ -60,10 +65,13 @@ if (wantJson) {
     }
 
     if (action === "start") {
-        jsonOut(wf.startSessionAsync(iface, duration, channel, bandwidth));
+        jsonOut(wf.startSessionAsync(iface, duration, channel, bandwidth, allowFft, amplifySurvey));
     }
     else if (action === "stop") {
         jsonOut(wf.stopSession());
+    }
+    else if (action === "clear_cache") {
+        jsonOut(wf.clearAllCaches());
     }
     else if (action === "cache") {
         jsonOut(wf.readCache(iface));
@@ -76,7 +84,7 @@ if (wantJson) {
             jsonOut({ ok: false, error: "Admin authentication required" }, 401);
             exit(0);
         }
-        jsonOut(wf.captureSpectral(iface));
+        jsonOut(wf.captureSpectral(iface, allowFft));
     }
     else {
         jsonOut({ ok: false, error: "Unknown action", version: wf.packageVersion() }, 400);
@@ -90,7 +98,7 @@ if (action === "capture") {
         htmlOut("Admin authentication required\n");
         exit(0);
     }
-    htmlOut(wf.formatCaptureReport(wf.captureSpectral(iface)));
+    htmlOut(wf.formatCaptureReport(wf.captureSpectral(iface, allowFft)));
 }
 else if (action === "status" || action === "probe") {
     htmlOut(wf.formatProbeReport(wf.probeCapability(iface)));

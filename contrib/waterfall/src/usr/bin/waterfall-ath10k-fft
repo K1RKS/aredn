@@ -15,6 +15,7 @@ OUT="/tmp/waterfall-fft.bin"
 HARD=""
 DUR=0
 ALLOW_SCAN=0
+SAFE_RECOVER=1
 
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -24,12 +25,14 @@ while [ $# -gt 0 ]; do
     -t) HARD="$2"; shift 2 ;;
     -d) DUR="$2"; shift 2 ;;
     --scan) ALLOW_SCAN=1; shift ;;
+    --safe-recover) SAFE_RECOVER=1; shift ;;
+    --escalate-recover) SAFE_RECOVER=0; shift ;;
     *) shift ;;
   esac
 done
 
 [ -n "$IFACE" ] && [ -n "$PHY" ] || {
-  echo "usage: waterfall-ath10k-fft -i iface -p phy [-o file] [-t secs] [-d stream_secs] [--scan]" >&2
+  echo "usage: waterfall-ath10k-fft -i iface -p phy [-o file] [-t secs] [-d stream_secs] [--scan] [--safe-recover]" >&2
   exit 5
 }
 
@@ -103,7 +106,7 @@ fi
   echo "waterfall-ath10k-fft watchdog fire after ${HARD}s" >&2
   disable_ctl
   kill "$SELF" 2>/dev/null || true
-  /usr/bin/waterfall-spectral-recover "$IFACE" "$PHY" >/dev/null 2>&1 || true
+  /usr/bin/waterfall-spectral-recover "$IFACE" "$PHY" $([ "$SAFE_RECOVER" -eq 1 ] && echo --safe || echo --escalate) >/dev/null 2>&1 || true
   exit 0
 ) &
 WD_PID=$!

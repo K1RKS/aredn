@@ -19,8 +19,8 @@ const unsupportedMsg = cap.unsupported_message || "Waterfall is not supported on
         </div>
         {% } else { %}
         <div style="margin:0 0 8px;font-size:0.9em;opacity:0.9">
-            ath9k uses spectral FFT (disrupts RF). ath10k uses an <b>isolated FFT worker</b>
-            (single-flight lock, hard timeout, local Wi-Fi recovery) with survey fallback if FFT is empty or recovers.
+            ath9k uses spectral FFT (disrupts RF). On QCA988x (hAP ac lite 5&nbsp;GHz) the default is
+            <b>survey</b> (safe). Experimental FFT is opt-in only (short, disable-only recover — no wifi reload).
             Each radio keeps its own RAM cache (<code>/tmp</code>).
         </div>
         {% } %}
@@ -55,6 +55,7 @@ const unsupportedMsg = cap.unsupported_message || "Waterfall is not supported on
                 {% if (supported) { %}
                 <button class="wf-start">Start</button>
                 <button class="wf-stop">Stop</button>
+                <button class="wf-clear-cache">Clear cache</button>
                 {% } %}
             </div>
             <div style="flex:1"></div>
