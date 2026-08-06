@@ -493,7 +493,7 @@ export function seriesWindow(store, seconds, end_age)
         return out;
     }
     const sec = common.clampInt(seconds, 1, common.SERIES_SLICE_S, common.SERIES_SLICE_S);
-    const age = common.clampInt(end_age || 0, 0, 14400, 0);
+    const age = common.clampInt(end_age || 0, 0, common.SERIES_END_AGE_MAX, 0);
     const now = common.nowUnix();
     const win_end = now - age;
     const win_start = win_end - sec;

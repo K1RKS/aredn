@@ -99,13 +99,64 @@
   .syslog-wrap[hidden],
   #logSourceTabs[hidden],
   #logControls[hidden],
+  #histToolbar[hidden],
   #syslogFilters[hidden],
   #logSourceMeta[hidden] {
     display: none !important;
   }
   .tabs.metric { margin-bottom: 10px; }
-  .tabs.time { margin-top: 10px; }
+  .hist-toolbar {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    align-items: center;
+    margin-top: 10px;
+  }
+  .hist-toolbar[hidden] {
+    display: none !important;
+  }
+  .tabs.time { margin-top: 0; }
+  .tabs.hist-ctl {
+    margin-top: 0;
+    margin-left: auto;
+  }
   .tabs.log-source { margin-bottom: 10px; }
+  .chart-row {
+    display: flex;
+    align-items: stretch;
+    gap: 6px;
+  }
+  .chart-main { flex: 1; min-width: 0; position: relative; }
+  .hist-nav {
+    flex-shrink: 0;
+    align-self: center;
+    width: 28px;
+    height: 36px;
+    padding: 0;
+    background: transparent;
+    color: var(--muted);
+    border: 1px solid var(--line);
+    border-radius: 4px;
+    font-size: 22px;
+    line-height: 1;
+    cursor: pointer;
+  }
+  .hist-nav:hover:not(:disabled) { color: var(--fg); border-color: var(--accent); }
+  .hist-nav:disabled { opacity: 0.35; cursor: default; }
+  .overview-bar {
+    display: block;
+    width: 100%;
+    height: 28px;
+    margin-top: 8px;
+    border-radius: 4px;
+    background: #1a1d23;
+    border: 1px solid var(--line);
+    cursor: pointer;
+    touch-action: none;
+  }
+  .chart-wrap[hidden] .overview-bar {
+    display: none !important;
+  }
   .tabs.log-ctl {
     margin-top: 10px;
     align-items: center;
@@ -344,19 +395,34 @@
     </div>
     <div class="chart-wrap" id="chartWrap">
       <div class="legend" id="legend"></div>
-      <canvas id="chart" width="1000" height="210"></canvas>
-      <div class="legend legend-below" id="legendBottom" hidden></div>
-      <div class="chart-tip" id="chartTip" hidden></div>
+      <div class="chart-row">
+        <button type="button" class="hist-nav" id="histOlderBtn" title="Scroll older" aria-label="Scroll older">‹</button>
+        <div class="chart-main">
+          <canvas id="chart" width="1000" height="210"></canvas>
+          <div class="legend legend-below" id="legendBottom" hidden></div>
+          <div class="chart-tip" id="chartTip" hidden></div>
+        </div>
+        <button type="button" class="hist-nav" id="histNewerBtn" title="Scroll newer" aria-label="Scroll newer">›</button>
+      </div>
+      <canvas class="overview-bar" id="overview" width="1000" height="28" aria-label="History overview"></canvas>
     </div>
     <div class="syslog-wrap" id="textWrap" hidden>
       <pre class="syslog-box" id="textBox"><span class="syslog-empty">Loading…</span></pre>
     </div>
-    <div class="tabs time" id="timeTabs" role="tablist" aria-label="Time range">
-      <button type="button" data-sec="300" class="active">5m</button>
-      <button type="button" data-sec="1800">30m</button>
-      <button type="button" data-sec="3600">1h</button>
-      <button type="button" data-sec="14400">4h</button>
-      <button type="button" data-sec="86400">24h</button>
+    <div class="hist-toolbar" id="histToolbar">
+      <div class="tabs time" id="timeTabs" role="tablist" aria-label="Time range">
+        <button type="button" data-sec="300">5m</button>
+        <button type="button" data-sec="1800">30m</button>
+        <button type="button" data-sec="3600">1h</button>
+        <button type="button" data-sec="14400">4h</button>
+        <button type="button" data-sec="86400">24h</button>
+      </div>
+      <div class="tabs hist-ctl" id="histControls" role="group" aria-label="History pan zoom">
+        <button type="button" id="histZoomOutBtn" title="Zoom out">Zoom−</button>
+        <button type="button" id="histZoomInBtn" title="Zoom in">Zoom+</button>
+        <button type="button" id="histOldestBtn" title="Jump to oldest samples">Oldest</button>
+        <button type="button" id="histLiveBtn" title="Jump to live edge" class="active">Live</button>
+      </div>
     </div>
     <div class="tabs log-ctl" id="logControls" hidden>
       <div class="tabs log-filters" id="syslogFilters" role="group" aria-label="Syslog filters">
@@ -532,7 +598,8 @@
     }
   };
 
-  let windowSec = 300;
+  let windowSec = 0; /* set from retention / browser zoom memory after meta */
+  let viewEndAgeSec = 0; /* 0 = live (docked to now); >0 = panned back */
   let metricId = "lq";
   let retentionSec = 14400; /* from meta.retention_s */
   let ringSize = "4h";
@@ -548,6 +615,10 @@
   let syslogPaused = false;
   let textBusy = false;
   let logSource = "syslog"; /* syslog | dumps | lqm | dmesg */
+  let overviewDrag = null; /* { startX, startAge, width, moved } */
+  let histZoomInited = false;
+  const ZOOM_STEPS = [60, 300, 900, 1800, 3600, 5400, 7200, 14400, 64800, 86400];
+  const ZOOM_LS_KEY = "babel-monitor-window-sec";
   let logFilterAll = true;
   const logFilterOn = {
     "babel-monitord": false,
@@ -617,9 +688,10 @@
     const text = isTextPanel();
     const logs = isLogs();
     const noRing = retentionSec <= 0;
+    const showHistNav = !text && !noRing && isRingHistory();
     $("chartWrap").hidden = text || (noRing && isRingHistory());
     $("textWrap").hidden = !text;
-    $("timeTabs").hidden = text || noRing;
+    $("histToolbar").hidden = text || noRing;
     $("logSourceTabs").hidden = !logs;
     $("logControls").hidden = !logs;
     $("syslogFilters").hidden = !(logs && logSource === "syslog");
@@ -639,6 +711,162 @@
     }
     syncMetricTabEnable();
     syncTimeTabEnable();
+    syncHistControls();
+  }
+
+  function maxViewEndAge() {
+    return Math.max(0, retentionSec - windowSec);
+  }
+
+  function isLiveView() {
+    return viewEndAgeSec < 1;
+  }
+
+  function clampViewEndAge(age) {
+    return Math.max(0, Math.min(maxViewEndAge(), Math.round(age)));
+  }
+
+  function allowedZoomSteps() {
+    return ZOOM_STEPS.filter(function (s) { return s <= retentionSec; });
+  }
+
+  function nearestZoomIndex(span) {
+    const steps = allowedZoomSteps();
+    if (!steps.length) return 0;
+    let best = 0;
+    let bestDist = Math.abs(steps[0] - span);
+    for (let i = 1; i < steps.length; i++) {
+      const d = Math.abs(steps[i] - span);
+      if (d < bestDist) {
+        best = i;
+        bestDist = d;
+      }
+    }
+    return best;
+  }
+
+  function endAgeAfterSpanChange(oldSpan, newSpan, endAge) {
+    if (endAge < 1) return 0;
+    const center = endAge + oldSpan / 2;
+    const maxEnd = Math.max(0, retentionSec - newSpan);
+    return Math.max(0, Math.min(maxEnd, center - newSpan / 2));
+  }
+
+  function loadSavedZoom() {
+    try {
+      const v = parseInt(localStorage.getItem(ZOOM_LS_KEY), 10);
+      return v > 0 ? v : null;
+    } catch (e) {
+      return null;
+    }
+  }
+
+  function persistWindowSec() {
+    if (!(windowSec > 0)) return;
+    try {
+      localStorage.setItem(ZOOM_LS_KEY, String(windowSec));
+    } catch (e) { /* ignore quota / private mode */ }
+  }
+
+  /** Pick initial / restored zoom: browser memory if valid, else full ring. */
+  function resolveWindowSecForRetention() {
+    if (retentionSec <= 0) return 0;
+    const saved = loadSavedZoom();
+    let want = saved != null ? Math.min(saved, retentionSec) : retentionSec;
+    const steps = allowedZoomSteps();
+    if (steps.length) {
+      /* Prefer exact retention when that is the default/saved target */
+      if (want >= retentionSec) return retentionSec;
+      want = steps[nearestZoomIndex(want)];
+      if (want > retentionSec) want = retentionSec;
+    }
+    return want;
+  }
+
+  function initOrClampWindowSec() {
+    if (retentionSec <= 0) {
+      windowSec = 0;
+      return;
+    }
+    if (!histZoomInited || !(windowSec > 0)) {
+      windowSec = resolveWindowSecForRetention();
+      histZoomInited = true;
+    } else if (windowSec > retentionSec) {
+      windowSec = retentionSec;
+    }
+    viewEndAgeSec = clampViewEndAge(viewEndAgeSec);
+    persistWindowSec();
+  }
+
+  function applyShortcut(sec) {
+    windowSec = Math.min(sec, retentionSec || sec);
+    viewEndAgeSec = 0;
+    persistWindowSec();
+    syncTimeTabEnable();
+    syncHistControls();
+  }
+
+  function applyZoomStep(delta) {
+    const steps = allowedZoomSteps();
+    if (!steps.length) return;
+    const idx = nearestZoomIndex(windowSec);
+    const next = idx + delta;
+    if (next < 0 || next >= steps.length) return;
+    const newSpan = steps[next];
+    viewEndAgeSec = clampViewEndAge(endAgeAfterSpanChange(windowSec, newSpan, viewEndAgeSec));
+    windowSec = newSpan;
+    persistWindowSec();
+    syncTimeTabEnable();
+    syncHistControls();
+  }
+
+  function goOldest() {
+    viewEndAgeSec = maxViewEndAge();
+    syncHistControls();
+  }
+
+  function goLive() {
+    viewEndAgeSec = 0;
+    syncHistControls();
+  }
+
+  function nudgeHistory(dir) {
+    /* dir > 0 = older */
+    const step = Math.max(10, Math.round(windowSec / 10));
+    viewEndAgeSec = clampViewEndAge(viewEndAgeSec + dir * step);
+    syncHistControls();
+  }
+
+  function syncHistControls() {
+    const live = isLiveView();
+    const atOldest = viewEndAgeSec >= maxViewEndAge() - 0.5;
+    const steps = allowedZoomSteps();
+    const zIdx = nearestZoomIndex(windowSec);
+    const zin = $("histZoomInBtn");
+    const zout = $("histZoomOutBtn");
+    const oldest = $("histOldestBtn");
+    const liveBtn = $("histLiveBtn");
+    const older = $("histOlderBtn");
+    const newer = $("histNewerBtn");
+    if (zin) zin.disabled = zIdx <= 0 || retentionSec <= 0;
+    if (zout) zout.disabled = zIdx >= steps.length - 1 || retentionSec <= 0;
+    if (oldest) oldest.disabled = atOldest || retentionSec <= 0;
+    if (liveBtn) {
+      liveBtn.disabled = live || retentionSec <= 0;
+      liveBtn.classList.toggle("active", live);
+    }
+    if (older) older.disabled = atOldest || retentionSec <= 0;
+    if (newer) newer.disabled = live || retentionSec <= 0;
+    /* Shortcut pills only look active when docked to live at that span */
+    const tabs = $("timeTabs");
+    if (tabs) {
+      [].forEach.call(tabs.querySelectorAll("button[data-sec]"), function (b) {
+        const sec = parseInt(b.getAttribute("data-sec"), 10) || 0;
+        const dis = retentionSec <= 0 || sec > retentionSec;
+        b.classList.toggle("active", !dis && live && sec === windowSec);
+      });
+    }
+    drawOverview();
   }
 
   function formatBytes(n) {
@@ -655,8 +883,10 @@
     else if (m.sample_cap != null && m.sample_interval != null) {
       retentionSec = Number(m.sample_cap) * Number(m.sample_interval);
     }
+    initOrClampWindowSec();
     syncMetricTabEnable();
     syncTimeTabEnable();
+    syncHistControls();
   }
 
   function syncMetricTabEnable() {
@@ -680,26 +910,19 @@
   function syncTimeTabEnable() {
     const tabs = $("timeTabs");
     if (!tabs) return;
-    [].forEach.call(tabs.querySelectorAll("button"), function (b) {
+    const live = isLiveView();
+    if (retentionSec > 0 && windowSec > retentionSec) {
+      windowSec = retentionSec;
+      persistWindowSec();
+    }
+    [].forEach.call(tabs.querySelectorAll("button[data-sec]"), function (b) {
       const sec = parseInt(b.getAttribute("data-sec"), 10) || 0;
       const dis = retentionSec <= 0 || sec > retentionSec;
       b.disabled = dis;
       b.classList.toggle("tab-disabled", dis);
+      b.classList.toggle("active", !dis && live && sec === windowSec);
     });
-    if (retentionSec > 0 && windowSec > retentionSec) {
-      let pick = null;
-      [].forEach.call(tabs.querySelectorAll("button"), function (b) {
-        if (b.disabled) return;
-        const sec = parseInt(b.getAttribute("data-sec"), 10);
-        if (!pick || sec > parseInt(pick.getAttribute("data-sec"), 10)) pick = b;
-      });
-      if (pick) {
-        windowSec = parseInt(pick.getAttribute("data-sec"), 10);
-        [].forEach.call(tabs.querySelectorAll("button"), function (b) {
-          b.classList.toggle("active", b === pick);
-        });
-      }
-    }
+    viewEndAgeSec = clampViewEndAge(viewEndAgeSec);
   }
 
   function closeRingModal() {
@@ -1976,17 +2199,27 @@
   async function refreshSeries() {
     if (skipsSeriesChart()) {
       series = [];
+      drawOverview();
       return;
     }
+    if (!(windowSec > 0)) {
+      series = [];
+      drawOverview();
+      return;
+    }
+    viewEndAgeSec = clampViewEndAge(viewEndAgeSec);
     const slice = 300; /* match server SERIES_SLICE_S — one expand peak at a time */
     const want = windowSec;
+    const baseEnd = viewEndAgeSec;
     let all = [];
     if (want <= slice) {
-      const data = await getJsonRetry(API + "?api=series&seconds=" + want + "&end_age=0");
+      const data = await getJsonRetry(
+        API + "?api=series&seconds=" + want + "&end_age=" + baseEnd
+      );
       all = data.samples || [];
     } else {
-      for (let endAge = want - slice; endAge >= 0; endAge -= slice) {
-        const sec = Math.min(slice, want - endAge);
+      for (let endAge = baseEnd + want - slice; endAge >= baseEnd; endAge -= slice) {
+        const sec = Math.min(slice, baseEnd + want - endAge);
         const data = await getJsonRetry(
           API + "?api=series&seconds=" + sec + "&end_age=" + endAge
         );
@@ -2012,6 +2245,56 @@
       if (hoverIdx < 0) hideTip();
     }
     drawChart();
+    drawOverview();
+    syncHistControls();
+  }
+
+  function drawOverview() {
+    const c = $("overview");
+    if (!c || skipsSeriesChart() || retentionSec <= 0) return;
+    const wrap = $("chartWrap");
+    if (wrap && wrap.hidden) return;
+    const cssW = Math.max(200, Math.floor(c.getBoundingClientRect().width || c.parentElement.clientWidth || 1000));
+    const dpr = window.devicePixelRatio || 1;
+    const w = Math.round(cssW * dpr);
+    const h = Math.round(28 * dpr);
+    if (c.width !== w || c.height !== h) {
+      c.width = w;
+      c.height = h;
+    }
+    const ctx = c.getContext("2d");
+    ctx.clearRect(0, 0, w, h);
+    ctx.fillStyle = "#1a1d23";
+    ctx.fillRect(0, 0, w, h);
+    ctx.strokeStyle = "#3a424d";
+    ctx.strokeRect(0.5 * dpr, 0.5 * dpr, w - dpr, h - dpr);
+    const maxEnd = maxViewEndAge();
+    const age = clampViewEndAge(viewEndAgeSec);
+    const winFrac = Math.min(1, windowSec / retentionSec);
+    const winW = Math.max(3 * dpr, winFrac * w);
+    const rightFrac = age / retentionSec;
+    const winRight = w - rightFrac * w;
+    const winLeft = winRight - winW;
+    ctx.fillStyle = "rgba(91, 159, 212, 0.35)";
+    ctx.fillRect(winLeft, dpr, winW, h - 2 * dpr);
+    ctx.strokeStyle = "#5b9fd4";
+    ctx.lineWidth = dpr;
+    ctx.strokeRect(winLeft + 0.5 * dpr, dpr + 0.5 * dpr, winW - dpr, h - 3 * dpr);
+  }
+
+  function overviewEndAgeFromClientX(clientX) {
+    const c = $("overview");
+    const rect = c.getBoundingClientRect();
+    const frac = Math.max(0, Math.min(1, (clientX - rect.left) / rect.width));
+    const ageAtClick = (1 - frac) * retentionSec;
+    return clampViewEndAge(ageAtClick - windowSec / 2);
+  }
+
+  function refreshSeriesSafe() {
+    refreshSeries().catch(function (e) {
+      failStreak++;
+      if (failStreak >= 2) setErr(e.message);
+    });
   }
 
   async function tick() {
@@ -2082,13 +2365,89 @@
 
   bindTabGroup("timeTabs", function (b) {
     if (skipsSeriesChart()) return;
-    windowSec = parseInt(b.getAttribute("data-sec"), 10);
+    applyShortcut(parseInt(b.getAttribute("data-sec"), 10));
     hoverIdx = -1;
     hideTip();
-    refreshSeries().catch(function (e) {
-      failStreak++;
-      if (failStreak >= 2) setErr(e.message);
+    refreshSeriesSafe();
+  });
+
+  function afterPanZoom() {
+    hoverIdx = -1;
+    hideTip();
+    syncHistControls();
+    refreshSeriesSafe();
+  }
+
+  $("histZoomOutBtn").addEventListener("click", function () {
+    if (skipsSeriesChart()) return;
+    applyZoomStep(1);
+    afterPanZoom();
+  });
+  $("histZoomInBtn").addEventListener("click", function () {
+    if (skipsSeriesChart()) return;
+    applyZoomStep(-1);
+    afterPanZoom();
+  });
+  $("histOldestBtn").addEventListener("click", function () {
+    if (skipsSeriesChart()) return;
+    goOldest();
+    afterPanZoom();
+  });
+  $("histLiveBtn").addEventListener("click", function () {
+    if (skipsSeriesChart()) return;
+    goLive();
+    afterPanZoom();
+  });
+  $("histOlderBtn").addEventListener("click", function () {
+    if (skipsSeriesChart()) return;
+    nudgeHistory(1);
+    afterPanZoom();
+  });
+  $("histNewerBtn").addEventListener("click", function () {
+    if (skipsSeriesChart()) return;
+    nudgeHistory(-1);
+    afterPanZoom();
+  });
+
+  (function bindOverview() {
+    const c = $("overview");
+    if (!c) return;
+    c.addEventListener("pointerdown", function (ev) {
+      if (skipsSeriesChart()) return;
+      c.setPointerCapture(ev.pointerId);
+      const rect = c.getBoundingClientRect();
+      overviewDrag = {
+        startX: ev.clientX,
+        startAge: viewEndAgeSec,
+        width: rect.width,
+        moved: false
+      };
     });
+    c.addEventListener("pointermove", function (ev) {
+      if (!overviewDrag || skipsSeriesChart()) return;
+      const dx = ev.clientX - overviewDrag.startX;
+      if (!overviewDrag.moved && Math.abs(dx) < 4) return;
+      overviewDrag.moved = true;
+      const dAge = -(dx / overviewDrag.width) * retentionSec;
+      viewEndAgeSec = clampViewEndAge(overviewDrag.startAge + dAge);
+      syncHistControls();
+    });
+    c.addEventListener("pointerup", function (ev) {
+      if (!overviewDrag) return;
+      const wasDrag = overviewDrag.moved;
+      overviewDrag = null;
+      if (!wasDrag) {
+        viewEndAgeSec = overviewEndAgeFromClientX(ev.clientX);
+      }
+      afterPanZoom();
+    });
+    c.addEventListener("pointercancel", function () {
+      overviewDrag = null;
+    });
+  })();
+
+  window.addEventListener("resize", function () {
+    drawOverview();
   });
 
   $("syslogFilters").addEventListener("click", function (ev) {
