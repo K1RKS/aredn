@@ -1249,6 +1249,14 @@
     return m + "m" + (s < 10 ? "0" : "") + s + "s";
   }
 
+  /** Wall-clock label for history X axis (no date — windows are ≤24h). */
+  function formatAxisClock(unixSec) {
+    const d = new Date(Number(unixSec) * 1000);
+    if (isNaN(d.getTime())) return "";
+    const p = function (n) { return (n < 10 ? "0" : "") + n; };
+    return p(d.getHours()) + ":" + p(d.getMinutes());
+  }
+
   function xTickStep(spanSec) {
     if (spanSec <= 300) return 60;
     if (spanSec <= 1800) return 300;
@@ -1256,6 +1264,21 @@
     if (spanSec <= 14400) return 3600;
     if (spanSec <= 86400) return 14400;
     return Math.max(1, Math.round(spanSec / 6));
+  }
+
+  /** Nice wall-clock tick unix times within [t0, t0+spanSec]. */
+  function axisClockTicks(t0, spanSec) {
+    const step = xTickStep(spanSec);
+    const tEnd = t0 + spanSec;
+    const out = [];
+    let t = Math.ceil(t0 / step) * step;
+    if (t - t0 < step * 0.2) t += step;
+    for (; t < tEnd - step * 0.15; t += step) {
+      out.push(t);
+    }
+    if (!out.length || out[0] - t0 > step * 0.35) out.unshift(t0);
+    if (!out.length || tEnd - out[out.length - 1] > step * 0.2) out.push(tEnd);
+    return out;
   }
 
   function seriesT0() {
@@ -1802,28 +1825,34 @@
     }
 
     if (drawTime) {
-      const step = xTickStep(layout.windowSec);
+      const t0 = Number(layout.t0) || 0;
+      const span = layout.windowSec;
       ctx.textAlign = "center";
-      for (let off = 0; off <= layout.windowSec + 0.5; off += step) {
-        const frac = Math.min(1, off / layout.windowSec);
-        const x = padL + frac * plotW;
-        ctx.strokeStyle = "#3a424d";
-        ctx.beginPath();
-        ctx.moveTo(x, axisY);
-        ctx.lineTo(x, axisY + 5);
-        ctx.stroke();
-        ctx.fillStyle = "#9aa3ad";
-        ctx.fillText(formatAxisOffset(off), x, axisY + 16);
-      }
-      if (layout.windowSec % step !== 0) {
-        const x = padL + plotW;
-        ctx.strokeStyle = "#3a424d";
-        ctx.beginPath();
-        ctx.moveTo(x, axisY);
-        ctx.lineTo(x, axisY + 5);
-        ctx.stroke();
-        ctx.fillStyle = "#9aa3ad";
-        ctx.fillText(formatAxisOffset(layout.windowSec), x, axisY + 16);
+      if (t0 > 0 && span > 0) {
+        const ticks = axisClockTicks(t0, span);
+        for (let i = 0; i < ticks.length; i++) {
+          const tu = ticks[i];
+          const frac = Math.max(0, Math.min(1, (tu - t0) / span));
+          const x = padL + frac * plotW;
+          ctx.strokeStyle = "#3a424d";
+          ctx.beginPath();
+          ctx.moveTo(x, axisY);
+          ctx.lineTo(x, axisY + 5);
+          ctx.stroke();
+          ctx.fillStyle = "#9aa3ad";
+          const label = formatAxisClock(tu);
+          if (i === 0) {
+            ctx.textAlign = "left";
+            ctx.fillText(label, x, axisY + 16);
+            ctx.textAlign = "center";
+          } else if (i === ticks.length - 1) {
+            ctx.textAlign = "end";
+            ctx.fillText(label, x, axisY + 16);
+            ctx.textAlign = "center";
+          } else {
+            ctx.fillText(label, x, axisY + 16);
+          }
+        }
       }
       ctx.fillStyle = "#9aa3ad";
       ctx.font = "11px ui-sans-serif, system-ui, sans-serif";
@@ -1912,7 +1941,7 @@
       drawAxes(ctx, w, h, {
         padL: panels[0].padL, padR: panels[0].padR, padT: panels[0].padT,
         padB: panels[0].padB, plotW: panels[0].plotW, plotH: panels[0].plotH,
-        windowSec: windowSec
+        windowSec: windowSec, t0: t0
       }, emptyBounds, { drawTime: true });
       ctx.fillStyle = "#9aa3ad";
       ctx.font = "11px ui-sans-serif, system-ui, sans-serif";
@@ -1978,7 +2007,7 @@
       const span = bounds.hi - bounds.lo;
       drawAxes(ctx, w, h, {
         padL: p.padL, padR: p.padR, padT: p.padT, padB: p.padB,
-        plotW: p.plotW, plotH: p.plotH, windowSec: windowSec
+        plotW: p.plotW, plotH: p.plotH, windowSec: windowSec, t0: t0
       }, bounds, {
         drawTime: p.drawTime,
         roundY: metricId === "cost" || p.id === "bottom"
