@@ -148,6 +148,7 @@
     font-size: 11px;
     color: var(--muted);
   }
+  .legend.legend-below { margin: 8px 0 0; }
   .legend span { display: inline-flex; align-items: center; gap: 6px; }
   .legend i {
     display: inline-block;
@@ -155,7 +156,13 @@
     height: 3px;
     border-radius: 1px;
   }
+  .legend i.bar {
+    width: 8px;
+    height: 10px;
+    border-radius: 1px;
+  }
   canvas { width: 100%; height: 210px; display: block; background: #15181c; border-radius: 4px; cursor: crosshair; }
+  canvas.cost-stack { height: 340px; }
   .chart-tip {
     position: absolute;
     z-index: 2;
@@ -237,6 +244,7 @@
     <div class="chart-wrap" id="chartWrap">
       <div class="legend" id="legend"></div>
       <canvas id="chart" width="1000" height="210"></canvas>
+      <div class="legend legend-below" id="legendBottom" hidden></div>
       <div class="chart-tip" id="chartTip" hidden></div>
     </div>
     <div class="syslog-wrap" id="textWrap" hidden>
@@ -289,7 +297,9 @@
   const PALETTE = ["#5b9fd4", "#e0a458", "#6fbf73", "#d97b7b", "#b39ddb"];
   /* Babel unreachable sentinel — excluded from Cost left-axis scale */
   const COST_UNREACH = 65535;
-  const COST_SOFT_CAP = 20000;
+  const COST_SOFT_CAP = 50000;
+  /* Nice Y maxima for Cost top panel (integers only) */
+  const COST_Y_CAPS = [10, 100, 1000, 10000, 25000, 50000];
 
   const METRICS = {
     lq: {
@@ -717,19 +727,17 @@
         key: "bad_cost_count",
         label: "bad #",
         color: PALETTE[3],
-        width: 1.6,
-        rightAxis: true,
-        dash: true
+        panel: "bottom",
+        bars: true
       });
       out.push({
         key: "stuck_neighbor_count",
         label: "stuck #",
         color: PALETTE[1],
-        width: 1.6,
-        rightAxis: true,
-        dash: true
+        panel: "bottom",
+        bars: true
       });
-      return { label: "Cost", series: out, minY: 0, dualAxis: true };
+      return { label: "Cost", series: out, minY: 0, stackedPanels: true };
     }
     return base;
   }
@@ -950,37 +958,63 @@
     box.scrollTop = box.scrollHeight;
   }
 
+  function legendItemHtml(s) {
+    if (s.markers) {
+      return '<span><i style="background:' + s.color +
+        ';height:8px;width:8px;border-radius:50%"></i>' + s.label + "</span>";
+    }
+    if (s.bars) {
+      return '<span><i class="bar" style="background:' + s.color + '"></i>' +
+        s.label + "</span>";
+    }
+    if (s.dash) {
+      return '<span><i style="background:transparent;border-top:2px dashed ' +
+        s.color + ';height:0;width:14px;margin-top:4px"></i>' + s.label + "</span>";
+    }
+    return '<span><i style="background:' + s.color + '"></i>' + s.label + "</span>";
+  }
+
   function renderLegend(metric) {
-    let html = metric.series.map(function (s) {
-      if (s.markers) {
-        return '<span><i style="background:' + s.color +
-          ';height:8px;width:8px;border-radius:50%"></i>' + s.label + "</span>";
-      }
-      if (s.dash) {
-        return '<span><i style="background:transparent;border-top:2px dashed ' +
-          s.color + ';height:0;width:14px;margin-top:4px"></i>' + s.label + "</span>";
-      }
-      return '<span><i style="background:' + s.color + '"></i>' + s.label + "</span>";
-    }).join("");
+    const top = [];
+    const bottom = [];
+    for (let i = 0; i < metric.series.length; i++) {
+      const s = metric.series[i];
+      if (s.panel === "bottom") bottom.push(s);
+      else top.push(s);
+    }
+    let html = top.map(legendItemHtml).join("");
     if (metricId === "cost") {
       html += '<span><i style="background:' + PALETTE[1] +
         ';height:8px;width:8px;border-radius:50%"></i>UNREACH</span>';
     }
     $("legend").innerHTML = html;
+
+    const bot = $("legendBottom");
+    if (bot) {
+      if (bottom.length) {
+        bot.innerHTML = bottom.map(legendItemHtml).join("");
+        bot.hidden = false;
+      } else {
+        bot.innerHTML = "";
+        bot.hidden = true;
+      }
+    }
   }
 
-  function yBounds(metric, lines, seriesSpecs) {
+  function yBounds(metric, lines, seriesSpecs, panel) {
     let lo = metric.minY != null ? metric.minY : Infinity;
     let hi = metric.maxY != null ? metric.maxY : -Infinity;
     if (metric.minY == null || metric.maxY == null) {
       for (let li = 0; li < lines.length; li++) {
-        if (seriesSpecs && seriesSpecs[li] && seriesSpecs[li].rightAxis) continue;
+        const spec = seriesSpecs && seriesSpecs[li];
+        const specPanel = (spec && spec.panel) || "top";
+        if (panel && specPanel !== panel) continue;
         const vals = lines[li];
         for (let i = 0; i < vals.length; i++) {
           const v = vals[i];
           if (v == null || v !== v) continue;
-          /* Cost: exclude Babel unreachable sentinel from left-axis range */
-          if (metricId === "cost" && v === COST_UNREACH) continue;
+          /* Cost top: exclude Babel unreachable sentinel from scale */
+          if (metricId === "cost" && panel === "top" && v === COST_UNREACH) continue;
           if (metric.minY == null && v < lo) lo = v;
           if (metric.maxY == null && v > hi) hi = v;
         }
@@ -990,30 +1024,23 @@
     if (!isFinite(hi) || hi <= lo) hi = lo + 1;
     if (metric.minY != null) lo = metric.minY;
     if (metric.maxY != null) hi = Math.max(metric.maxY, hi);
-    /* Cost option 1+2: soft-cap finite max (keeps mid-range readable) */
-    if (metricId === "cost") {
+    /* Cost top: exclude UNREACH from scale; snap hi to nice integer caps */
+    if (metricId === "cost" && panel === "top") {
       lo = 0;
-      hi = Math.min(COST_SOFT_CAP, Math.max(hi * 1.15, 1));
-    }
-    return { lo: lo, hi: hi };
-  }
-
-  function yBoundsRight(lines, seriesSpecs) {
-    let lo = Infinity;
-    let hi = -Infinity;
-    for (let li = 0; li < lines.length; li++) {
-      if (!seriesSpecs[li] || !seriesSpecs[li].rightAxis) continue;
-      const vals = lines[li];
-      for (let i = 0; i < vals.length; i++) {
-        const v = vals[i];
-        if (v == null || v !== v) continue;
-        if (v < lo) lo = v;
-        if (v > hi) hi = v;
+      let need = Math.max(hi * 1.15, 1);
+      if (need > COST_SOFT_CAP) need = COST_SOFT_CAP;
+      hi = COST_Y_CAPS[COST_Y_CAPS.length - 1];
+      for (let ci = 0; ci < COST_Y_CAPS.length; ci++) {
+        if (need <= COST_Y_CAPS[ci]) {
+          hi = COST_Y_CAPS[ci];
+          break;
+        }
       }
     }
-    if (!isFinite(lo)) lo = 0;
-    if (!isFinite(hi) || hi <= lo) hi = lo + 1;
-    if (lo > 0) lo = 0;
+    if (metricId === "cost" && panel === "bottom") {
+      lo = 0;
+      hi = Math.max(1, Math.ceil(hi));
+    }
     return { lo: lo, hi: hi };
   }
 
@@ -1101,90 +1128,152 @@
     return best;
   }
 
-  function drawAxes(ctx, w, h, layout, bounds, rightBounds) {
-    const { padL, padR, padT, padB, plotW } = layout;
-    const axisY = h - padB;
+  function drawAxes(ctx, w, h, layout, bounds, opts) {
+    opts = opts || {};
+    const { padL, padR, padT, padB, plotW, plotH } = layout;
+    const axisY = padT + plotH;
+    const drawTime = opts.drawTime !== false;
+    const labelHi = opts.roundY ? String(Math.round(bounds.hi)) : String(bounds.hi);
+    const labelLo = opts.roundY ? String(Math.round(bounds.lo)) : String(bounds.lo);
+
     ctx.strokeStyle = "#3a424d";
     ctx.lineWidth = 1;
     ctx.beginPath();
     ctx.moveTo(padL, padT);
     ctx.lineTo(padL, axisY);
     ctx.lineTo(w - padR, axisY);
-    if (rightBounds) {
-      ctx.moveTo(w - padR, padT);
-      ctx.lineTo(w - padR, axisY);
-    }
     ctx.stroke();
 
     ctx.fillStyle = "#9aa3ad";
     ctx.font = "11px ui-sans-serif, system-ui, sans-serif";
     ctx.textAlign = "left";
-    ctx.fillText(String(bounds.hi), 4, padT + 8);
-    ctx.fillText(String(bounds.lo), 4, axisY);
+    ctx.fillText(labelHi, 4, padT + 8);
+    ctx.fillText(labelLo, 4, axisY);
+    if (opts.title) {
+      ctx.fillText(opts.title, padL + 4, padT + 9);
+    }
 
-    if (rightBounds) {
-      ctx.textAlign = "right";
-      ctx.fillText(String(rightBounds.hi), w - 4, padT + 8);
-      ctx.fillText(String(rightBounds.lo), w - 4, axisY);
+    if (drawTime) {
+      const step = xTickStep(layout.windowSec);
+      ctx.textAlign = "center";
+      for (let off = 0; off <= layout.windowSec + 0.5; off += step) {
+        const frac = Math.min(1, off / layout.windowSec);
+        const x = padL + frac * plotW;
+        ctx.strokeStyle = "#3a424d";
+        ctx.beginPath();
+        ctx.moveTo(x, axisY);
+        ctx.lineTo(x, axisY + 5);
+        ctx.stroke();
+        ctx.fillStyle = "#9aa3ad";
+        ctx.fillText(formatAxisOffset(off), x, axisY + 16);
+      }
+      if (layout.windowSec % step !== 0) {
+        const x = padL + plotW;
+        ctx.strokeStyle = "#3a424d";
+        ctx.beginPath();
+        ctx.moveTo(x, axisY);
+        ctx.lineTo(x, axisY + 5);
+        ctx.stroke();
+        ctx.fillStyle = "#9aa3ad";
+        ctx.fillText(formatAxisOffset(layout.windowSec), x, axisY + 16);
+      }
+      ctx.fillStyle = "#9aa3ad";
+      ctx.font = "11px ui-sans-serif, system-ui, sans-serif";
+      ctx.textAlign = "center";
+      ctx.fillText("Time", padL + plotW / 2, h - 6);
       ctx.textAlign = "left";
     }
+  }
 
-    const step = xTickStep(layout.windowSec);
-    ctx.textAlign = "center";
-    for (let off = 0; off <= layout.windowSec + 0.5; off += step) {
-      const frac = Math.min(1, off / layout.windowSec);
-      const x = padL + frac * plotW;
-      ctx.strokeStyle = "#3a424d";
-      ctx.beginPath();
-      ctx.moveTo(x, axisY);
-      ctx.lineTo(x, axisY + 5);
-      ctx.stroke();
-      ctx.fillStyle = "#9aa3ad";
-      ctx.fillText(formatAxisOffset(off), x, axisY + 16);
+  function syncChartCanvasSize(stacked) {
+    const c = $("chart");
+    if (stacked) {
+      c.width = 1000;
+      c.height = 340;
+      c.classList.add("cost-stack");
+    } else {
+      c.width = 1000;
+      c.height = 210;
+      c.classList.remove("cost-stack");
     }
-    if (layout.windowSec % step !== 0) {
-      const x = padL + plotW;
-      ctx.strokeStyle = "#3a424d";
-      ctx.beginPath();
-      ctx.moveTo(x, axisY);
-      ctx.lineTo(x, axisY + 5);
-      ctx.stroke();
-      ctx.fillStyle = "#9aa3ad";
-      ctx.fillText(formatAxisOffset(layout.windowSec), x, axisY + 16);
-    }
-
-    ctx.fillStyle = "#9aa3ad";
-    ctx.font = "11px ui-sans-serif, system-ui, sans-serif";
-    ctx.textAlign = "center";
-    ctx.fillText("Time", padL + plotW / 2, h - 6);
-    ctx.textAlign = "left";
   }
 
   function drawChart() {
     if (isTextPanel()) return;
     const metric = resolveMetric();
     renderLegend(metric);
+    const stacked = metricId === "cost" && !!metric.stackedPanels;
+    syncChartCanvasSize(stacked);
     const c = $("chart");
     const ctx = c.getContext("2d");
     const w = c.width, h = c.height;
-    const dual = !!metric.dualAxis;
-    const padL = 44, padR = dual ? 44 : 18, padT = 14, padB = 42;
-    const plotW = w - padL - padR;
-    const plotH = h - padT - padB;
+    const padL = 44, padR = 18;
     const t0 = seriesT0();
+
+    let panels;
+    if (stacked) {
+      /* Top: neighbor costs; bottom: bad/stuck — shared time axis on bottom only */
+      const topPadT = 16, topPlotH = 168, gap = 14, botPadT = 12, botPlotH = 72, botPadB = 42;
+      const topPadB = gap;
+      panels = [
+        {
+          id: "top",
+          padL: padL, padR: padR, padT: topPadT, padB: topPadB,
+          plotW: w - padL - padR, plotH: topPlotH,
+          axisY: topPadT + topPlotH,
+          drawTime: false,
+          unreachBand: true,
+          title: null
+        },
+        {
+          id: "bottom",
+          padL: padL, padR: padR,
+          padT: topPadT + topPlotH + gap + botPadT,
+          padB: botPadB,
+          plotW: w - padL - padR, plotH: botPlotH,
+          axisY: topPadT + topPlotH + gap + botPadT + botPlotH,
+          drawTime: true,
+          unreachBand: false,
+          title: null
+        }
+      ];
+    } else {
+      const padT = 14, padB = 42;
+      const plotH = h - padT - padB;
+      panels = [{
+        id: "top",
+        padL: padL, padR: padR, padT: padT, padB: padB,
+        plotW: w - padL - padR, plotH: plotH,
+        axisY: h - padB,
+        drawTime: true,
+        unreachBand: false,
+        title: null
+      }];
+    }
+
     chartLayout = {
-      padL: padL, padR: padR, padT: padT, padB: padB,
-      plotW: plotW, plotH: plotH, t0: t0, windowSec: windowSec, n: series.length
+      padL: padL, padR: padR, padT: panels[0].padT, padB: panels[panels.length - 1].padB,
+      plotW: panels[0].plotW, plotH: panels[0].plotH,
+      t0: t0, windowSec: windowSec, n: series.length,
+      stacked: stacked, panels: panels
     };
     ctx.clearRect(0, 0, w, h);
 
     const emptyBounds = { lo: 0, hi: 1 };
-    if (!series.length) {
-      drawAxes(ctx, w, h, chartLayout, emptyBounds, dual ? emptyBounds : null);
+    function drawEmpty(msg) {
+      drawAxes(ctx, w, h, {
+        padL: panels[0].padL, padR: panels[0].padR, padT: panels[0].padT,
+        padB: panels[0].padB, plotW: panels[0].plotW, plotH: panels[0].plotH,
+        windowSec: windowSec
+      }, emptyBounds, { drawTime: true });
       ctx.fillStyle = "#9aa3ad";
       ctx.font = "11px ui-sans-serif, system-ui, sans-serif";
-      ctx.fillText("No samples in window", padL + 10, padT + plotH / 2);
+      ctx.fillText(msg, padL + 10, panels[0].padT + panels[0].plotH / 2);
       hideTip();
+    }
+
+    if (!series.length) {
+      drawEmpty("No samples in window");
       return;
     }
 
@@ -1193,11 +1282,7 @@
         return (s.rf && Object.keys(s.rf).length) || (s.mean_snr != null && s.mean_snr > 0);
       });
       if (!anyRf) {
-        drawAxes(ctx, w, h, chartLayout, emptyBounds, null);
-        ctx.fillStyle = "#9aa3ad";
-        ctx.font = "11px ui-sans-serif, system-ui, sans-serif";
-        ctx.fillText("No RF neighbors in window", padL + 10, padT + plotH / 2);
-        hideTip();
+        drawEmpty("No RF neighbors in window");
         return;
       }
     }
@@ -1209,11 +1294,7 @@
           (s.rx_packets_delta != null && s.rx_packets_delta > 0);
       });
       if (!anyLinks) {
-        drawAxes(ctx, w, h, chartLayout, emptyBounds, null);
-        ctx.fillStyle = "#9aa3ad";
-        ctx.font = "11px ui-sans-serif, system-ui, sans-serif";
-        ctx.fillText("No link I/O in window", padL + 10, padT + plotH / 2);
-        hideTip();
+        drawEmpty("No link I/O in window");
         return;
       }
     }
@@ -1224,11 +1305,7 @@
           (s.bad_cost_count != null) || (s.stuck_neighbor_count != null);
       });
       if (!anyCost) {
-        drawAxes(ctx, w, h, chartLayout, emptyBounds, emptyBounds);
-        ctx.fillStyle = "#9aa3ad";
-        ctx.font = "11px ui-sans-serif, system-ui, sans-serif";
-        ctx.fillText("No neighbor cost history in window yet", padL + 10, padT + plotH / 2);
-        hideTip();
+        drawEmpty("No neighbor cost history in window yet");
         return;
       }
     }
@@ -1236,78 +1313,128 @@
     const lines = metric.series.map(function (s) {
       return series.map(function (row) { return sampleValue(row, s); });
     });
-    const bounds = yBounds(metric, lines, metric.series);
-    const rightBounds = dual ? yBoundsRight(lines, metric.series) : null;
-    const span = bounds.hi - bounds.lo;
-    const rightSpan = rightBounds ? (rightBounds.hi - rightBounds.lo) : 1;
-    drawAxes(ctx, w, h, chartLayout, bounds, rightBounds);
 
-    /* Cost: faint UNREACH band at top of left plot */
-    if (metricId === "cost") {
-      ctx.fillStyle = "rgba(217,123,123,0.10)";
-      ctx.fillRect(padL, padT, plotW, 12);
-      ctx.fillStyle = "#9aa3ad";
-      ctx.font = "10px ui-sans-serif, system-ui, sans-serif";
-      ctx.textAlign = "left";
-      ctx.fillText("UNREACH", padL + 4, padT + 9);
+    const panelBounds = {};
+    for (let pi = 0; pi < panels.length; pi++) {
+      const p = panels[pi];
+      panelBounds[p.id] = yBounds(metric, lines, metric.series, stacked ? p.id : "top");
     }
 
     const n = series.length;
-    const axisY = h - padB;
     const markerPasses = [];
     const unreachMarks = [];
-    for (let si = 0; si < metric.series.length; si++) {
-      const spec = metric.series[si];
-      const vals = lines[si];
-      const useRight = !!spec.rightAxis && rightBounds;
-      const bLo = useRight ? rightBounds.lo : bounds.lo;
-      const bSpan = useRight ? rightSpan : span;
-      ctx.strokeStyle = spec.color;
-      ctx.lineWidth = spec.width || 1.5;
-      if (spec.dash) ctx.setLineDash([5, 4]);
-      else ctx.setLineDash([]);
-      ctx.beginPath();
-      let started = false;
-      const pts = [];
-      for (let i = 0; i < n; i++) {
-        const v = vals[i];
-        if (v == null || v !== v) {
-          started = false;
-          continue;
-        }
-        const ti = Number(series[i].t);
-        if (ti !== ti) {
-          started = false;
-          continue;
-        }
-        const dt = ti - t0;
-        if (dt < 0 || dt > windowSec) {
-          started = false;
-          continue;
-        }
-        /* Cost: gap line on unreachable; mark in top band instead */
-        if (metricId === "cost" && spec.fromCosts && v === COST_UNREACH) {
-          started = false;
-          unreachMarks.push({ x: xForTime(ti, chartLayout), color: spec.color });
-          continue;
-        }
-        const x = xForTime(ti, chartLayout);
-        const y = axisY - ((v - bLo) / bSpan) * plotH;
-        if (!started) { ctx.moveTo(x, y); started = true; }
-        else ctx.lineTo(x, y);
-        if (spec.markers) pts.push({ x: x, y: y });
+
+    for (let pi = 0; pi < panels.length; pi++) {
+      const p = panels[pi];
+      const bounds = panelBounds[p.id];
+      const span = bounds.hi - bounds.lo;
+      drawAxes(ctx, w, h, {
+        padL: p.padL, padR: p.padR, padT: p.padT, padB: p.padB,
+        plotW: p.plotW, plotH: p.plotH, windowSec: windowSec
+      }, bounds, {
+        drawTime: p.drawTime,
+        roundY: metricId === "cost" || p.id === "bottom"
+      });
+
+      if (p.unreachBand) {
+        ctx.fillStyle = "rgba(217,123,123,0.10)";
+        ctx.fillRect(p.padL, p.padT, p.plotW, 12);
+        ctx.fillStyle = "#9aa3ad";
+        ctx.font = "10px ui-sans-serif, system-ui, sans-serif";
+        ctx.textAlign = "right";
+        ctx.fillText("UNREACH", w - p.padR - 4, p.padT + 9);
+        ctx.textAlign = "left";
       }
-      ctx.stroke();
-      ctx.setLineDash([]);
-      if (spec.markers && pts.length) {
-        markerPasses.push({ color: spec.color, pts: pts });
+
+      /* Collect bar series for grouped bars on this panel */
+      const barSpecs = [];
+      for (let si = 0; si < metric.series.length; si++) {
+        const spec = metric.series[si];
+        const specPanel = spec.panel || "top";
+        if (stacked && specPanel !== p.id) continue;
+        if (!stacked && spec.panel === "bottom") continue;
+        if (spec.bars) barSpecs.push({ si: si, spec: spec });
+      }
+
+      if (barSpecs.length) {
+        const slot = n > 1 ? (p.plotW / Math.max(1, n - 1)) : p.plotW / 20;
+        const barW = Math.max(2, Math.min(10, slot * 0.32));
+        const groupW = barSpecs.length * barW + Math.max(0, barSpecs.length - 1);
+        for (let i = 0; i < n; i++) {
+          const ti = Number(series[i].t);
+          if (ti !== ti) continue;
+          const dt = ti - t0;
+          if (dt < 0 || dt > windowSec) continue;
+          const x = xForTime(ti, chartLayout);
+          const left0 = x - groupW / 2;
+          for (let bi = 0; bi < barSpecs.length; bi++) {
+            const v = lines[barSpecs[bi].si][i];
+            if (v == null || v !== v || v <= 0) continue;
+            const bh = ((v - bounds.lo) / span) * p.plotH;
+            const bx = left0 + bi * (barW + 1);
+            const by = p.axisY - bh;
+            ctx.fillStyle = barSpecs[bi].spec.color;
+            ctx.globalAlpha = 0.85;
+            ctx.fillRect(bx, by, barW, Math.max(1, bh));
+            ctx.globalAlpha = 1;
+          }
+        }
+      }
+
+      for (let si = 0; si < metric.series.length; si++) {
+        const spec = metric.series[si];
+        const specPanel = spec.panel || "top";
+        if (stacked && specPanel !== p.id) continue;
+        if (!stacked && spec.panel === "bottom") continue;
+        if (spec.bars) continue;
+
+        const vals = lines[si];
+        ctx.strokeStyle = spec.color;
+        ctx.lineWidth = spec.width || 1.5;
+        if (spec.dash) ctx.setLineDash([5, 4]);
+        else ctx.setLineDash([]);
+        ctx.beginPath();
+        let started = false;
+        const pts = [];
+        for (let i = 0; i < n; i++) {
+          const v = vals[i];
+          if (v == null || v !== v) {
+            started = false;
+            continue;
+          }
+          const ti = Number(series[i].t);
+          if (ti !== ti) {
+            started = false;
+            continue;
+          }
+          const dt = ti - t0;
+          if (dt < 0 || dt > windowSec) {
+            started = false;
+            continue;
+          }
+          if (metricId === "cost" && spec.fromCosts && v === COST_UNREACH) {
+            started = false;
+            unreachMarks.push({ x: xForTime(ti, chartLayout), color: spec.color, y: p.padT + 6 });
+            continue;
+          }
+          const x = xForTime(ti, chartLayout);
+          const y = p.axisY - ((v - bounds.lo) / span) * p.plotH;
+          if (!started) { ctx.moveTo(x, y); started = true; }
+          else ctx.lineTo(x, y);
+          if (spec.markers) pts.push({ x: x, y: y });
+        }
+        ctx.stroke();
+        ctx.setLineDash([]);
+        if (spec.markers && pts.length) {
+          markerPasses.push({ color: spec.color, pts: pts });
+        }
       }
     }
 
     for (let ui = 0; ui < unreachMarks.length; ui++) {
       const m = unreachMarks[ui];
       ctx.beginPath();
-      ctx.arc(m.x, padT + 6, 3.2, 0, Math.PI * 2);
+      ctx.arc(m.x, m.y, 3.2, 0, Math.PI * 2);
       ctx.fillStyle = m.color;
       ctx.fill();
       ctx.strokeStyle = "#15181c";
@@ -1315,7 +1442,6 @@
       ctx.stroke();
     }
 
-    /* Markers after all strokes so underneath series stay visible when values match */
     function drawMark(x, y, color) {
       ctx.beginPath();
       ctx.arc(x, y, 4, 0, Math.PI * 2);
@@ -1337,8 +1463,8 @@
         drawMark(pts[pi].x, pts[pi].y, pass.color);
       }
       if ((pts.length - 1) % step !== 0) {
-        const p = pts[pts.length - 1];
-        drawMark(p.x, p.y, pass.color);
+        const pt = pts[pts.length - 1];
+        drawMark(pt.x, pt.y, pass.color);
       }
     }
 
@@ -1350,8 +1476,8 @@
         ctx.lineWidth = 1;
         ctx.setLineDash([4, 3]);
         ctx.beginPath();
-        ctx.moveTo(x, padT);
-        ctx.lineTo(x, axisY);
+        ctx.moveTo(x, panels[0].padT);
+        ctx.lineTo(x, panels[panels.length - 1].axisY);
         ctx.stroke();
         ctx.setLineDash([]);
 
@@ -1359,14 +1485,17 @@
           const v = lines[si][hoverIdx];
           if (v == null || v !== v) continue;
           const spec = metric.series[si];
-          const useRight = !!spec.rightAxis && rightBounds;
+          const specPanel = spec.panel || "top";
+          const p = stacked
+            ? (panels[specPanel === "bottom" ? 1 : 0])
+            : panels[0];
+          const bounds = panelBounds[p.id];
+          const span = bounds.hi - bounds.lo;
           let y;
           if (metricId === "cost" && spec.fromCosts && v === COST_UNREACH) {
-            y = padT + 6;
+            y = p.padT + 6;
           } else {
-            const bLo = useRight ? rightBounds.lo : bounds.lo;
-            const bSpan = useRight ? rightSpan : span;
-            y = axisY - ((v - bLo) / bSpan) * plotH;
+            y = p.axisY - ((v - bounds.lo) / span) * p.plotH;
           }
           ctx.fillStyle = spec.color;
           ctx.beginPath();
