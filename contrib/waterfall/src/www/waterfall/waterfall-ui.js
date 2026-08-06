@@ -29,7 +29,7 @@
     return [255, 30, 30];
   }
 
-  function qs(action, iface, duration, channel, bandwidth, allowFft, amplifySurvey) {
+  function qs(action, iface, duration, channel, bandwidth, allowFft, amplifySurvey, slot) {
     let u = API + "?action=" + encodeURIComponent(action);
     if (iface) u += "&iface=" + encodeURIComponent(iface);
     if (duration != null && duration !== "") u += "&duration=" + encodeURIComponent(duration);
@@ -39,11 +39,12 @@
     /* Default amplify on; only send 0 when explicitly off. */
     if (amplifySurvey === false) u += "&amplify_survey=0";
     else if (amplifySurvey === true) u += "&amplify_survey=1";
+    if (slot != null && slot !== "") u += "&slot=" + encodeURIComponent(slot);
     return u;
   }
 
-  async function api(action, iface, duration, channel, bandwidth, allowFft, amplifySurvey) {
-    const r = await fetch(qs(action, iface, duration, channel, bandwidth, allowFft, amplifySurvey), { cache: "no-store", credentials: "same-origin" });
+  async function api(action, iface, duration, channel, bandwidth, allowFft, amplifySurvey, slot) {
+    const r = await fetch(qs(action, iface, duration, channel, bandwidth, allowFft, amplifySurvey, slot), { cache: "no-store", credentials: "same-origin" });
     const text = await r.text();
     let j = null;
     try {
@@ -164,7 +165,11 @@
     if (!sweeps.length) {
       ctx.fillStyle = "#888";
       ctx.font = "13px sans-serif";
-      ctx.fillText("No cached capture — click Start (RF session)", W / 2, H / 2);
+      if (meta.pending || cache.pending) {
+        ctx.fillText("New scan in process", W / 2, H / 2);
+      } else {
+        ctx.fillText("No cached capture — click Start (RF session)", W / 2, H / 2);
+      }
       return;
     }
 
@@ -321,6 +326,7 @@
     let fftOpt = root.querySelector(".wf-fft-opt");
     let amplifyOpt = root.querySelector(".wf-amplify-opt");
     let progressWrap = root.querySelector(".wf-progress");
+    let cacheTabs = root.querySelector(".wf-cache-tabs");
     let progressSections = null;
     let progressSectionsBar = null;
     let progressSectionsLabel = null;
@@ -330,6 +336,11 @@
     let progressTimer = null;
     let alive = true;
     let selectedIface = null;
+    let selectedSlot = 0;
+    let lastCacheSlots = null;
+    let scanRunning = false;
+    /* Browser-side copies of slot payloads (iface:slot → cache JSON). Node remains source of truth. */
+    let memCache = {};
     let fillingRadios = false;
     let fillingScan = false;
     let lastScan = null;
@@ -912,27 +923,221 @@
       applyRunningUi(status);
     }
 
-    function resize() {
-      if (!canvas) return;
-      const w = Math.max(480, root.clientWidth - 24);
-      canvas.width = w;
-      canvas.height = isModal ? 320 : Math.min(520, Math.max(360, window.innerHeight - 220));
+    function formatSlotTabLabel(slotInfo) {
+      if (!slotInfo) return "—";
+      if (slotInfo.slot === 0) return "Current";
+      if (!slotInfo.have_cache || slotInfo.pending) {
+        return slotInfo.label || (slotInfo.slot === 1 ? "Previous" : ("−" + slotInfo.slot));
+      }
+      const parts = [];
+      const t = formatStartedAt(slotInfo.started_at || slotInfo.ended_at);
+      if (t) {
+        /* HH:MM:SS from "YYYY-MM-DD HH:MM:SS" */
+        const m = t.match(/(\d{2}:\d{2}:\d{2})$/);
+        parts.push(m ? m[1] : t);
+      }
+      const ch = slotInfo.scan_channel;
+      if (ch === "all" || ch === "ALL") parts.push("ch ALL");
+      else if (ch != null && ch !== "") parts.push("ch " + ch);
+      if (slotInfo.plot_bandwidth != null && slotInfo.plot_bandwidth !== "" && slotInfo.plot_bandwidth !== "all") {
+        parts.push(slotInfo.plot_bandwidth + " MHz");
+      }
+      return parts.length ? parts.join(" · ") : (slotInfo.label || ("−" + slotInfo.slot));
     }
 
-    async function loadCache() {
-      const iface = getIface();
-      const c = await api("cache", iface);
+    function ensureCacheTabs() {
+      if (!cacheTabs) {
+        cacheTabs = document.createElement("div");
+        cacheTabs.className = "wf-cache-tabs";
+        cacheTabs.style.cssText = "display:flex;gap:4px;flex-wrap:wrap;margin:0 0 8px";
+        if (canvas && canvas.parentNode) {
+          canvas.parentNode.insertBefore(cacheTabs, canvas);
+        } else {
+          root.insertBefore(cacheTabs, root.firstChild);
+        }
+      }
+      if (cacheTabs.querySelectorAll(".wf-cache-tab").length === 4) return;
+      cacheTabs.innerHTML = "";
+      for (let s = 0; s < 4; s++) {
+        const btn = document.createElement("button");
+        btn.type = "button";
+        btn.className = "wf-cache-tab";
+        btn.setAttribute("data-slot", String(s));
+        btn.textContent = s === 0 ? "Current" : (s === 1 ? "Previous" : ("−" + s));
+        btn.style.cssText = "cursor:pointer;padding:4px 10px;font-size:0.85em";
+        btn.addEventListener("click", function () {
+          if (btn.disabled) return;
+          const slot = parseInt(btn.getAttribute("data-slot"), 10) || 0;
+          selectedSlot = slot;
+          syncCacheTabs(lastCacheSlots);
+          const iface = getIface();
+          if (slot === 0 && (scanRunning || (lastCacheSlots && lastCacheSlots[0] && lastCacheSlots[0].pending))) {
+            showPendingCurrent();
+            return;
+          }
+          /* Paint from browser memory first — never wait on the node to flip tabs. */
+          const hit = memCache[memKey(iface, slot)];
+          if (hit) {
+            paintLoadedCache(hit, iface, slot);
+            return;
+          }
+          setStatus("Loading…");
+          loadCache().catch(function (e) { setStatus(String(e.message || e)); });
+        });
+        cacheTabs.appendChild(btn);
+      }
+    }
+
+    function syncCacheTabs(slots, running) {
+      ensureCacheTabs();
+      lastCacheSlots = slots || lastCacheSlots;
+      const list = lastCacheSlots || [
+        { slot: 0, have_cache: false, pending: !!running, enabled: false, label: "Current" },
+        { slot: 1, have_cache: false, pending: false, enabled: false, label: "Previous" },
+        { slot: 2, have_cache: false, pending: false, enabled: false, label: "−2" },
+        { slot: 3, have_cache: false, pending: false, enabled: false, label: "−3" }
+      ];
+      const btns = cacheTabs.querySelectorAll(".wf-cache-tab");
+      for (let i = 0; i < btns.length; i++) {
+        const btn = btns[i];
+        const slot = parseInt(btn.getAttribute("data-slot"), 10) || 0;
+        const info = list[slot] || { slot: slot, have_cache: false, pending: false, enabled: false };
+        const isCurrentPending = slot === 0 && (!!running || !!info.pending);
+        btn.textContent = formatSlotTabLabel(info);
+        btn.title = info.have_cache && !info.pending
+          ? (formatStartedAt(info.started_at || info.ended_at) || btn.textContent)
+          : (isCurrentPending ? "New scan in process" : "Empty");
+        /* Current enabled when it has data or a scan is pending; others only with data. */
+        const canSelect = slot === 0
+          ? !!(info.have_cache || info.pending || running)
+          : !!(info.have_cache && !info.pending);
+        btn.disabled = !canSelect;
+        const active = selectedSlot === slot;
+        btn.style.opacity = btn.disabled ? "0.45" : "1";
+        btn.style.fontWeight = active ? "600" : "400";
+        btn.style.outline = active ? "1px solid #8af" : "";
+        btn.style.backgroundColor = active ? "#1e2a3a" : "";
+      }
+    }
+
+    function showPendingCurrent() {
+      resize();
+      drawHeatmap(canvas, {
+        sweeps: [],
+        pending: true,
+        meta: { pending: true, iface: getIface(), note: "New scan in process" }
+      });
+      setStatus("New scan in process");
+    }
+
+    function memKey(iface, slot) {
+      return String(iface || "default") + ":" + String(slot == null ? 0 : slot);
+    }
+
+    function rememberSlot(iface, slot, c) {
+      if (!c || c.pending || !c.have_cache || !(c.sweeps && c.sweeps.length)) return;
+      memCache[memKey(iface, slot)] = c;
+    }
+
+    function clearMemCache(iface) {
+      if (!iface) {
+        memCache = {};
+        return;
+      }
+      const prefix = String(iface) + ":";
+      const next = {};
+      for (const k in memCache) {
+        if (Object.prototype.hasOwnProperty.call(memCache, k) && k.indexOf(prefix) !== 0) {
+          next[k] = memCache[k];
+        }
+      }
+      memCache = next;
+    }
+
+    /* Mirror node rotate: Current→Previous→−2→−3; drop oldest; clear Current. */
+    function rotateMemCache(iface) {
+      const i = iface || getIface() || "default";
+      const k0 = memKey(i, 0);
+      const cur = memCache[k0];
+      if (cur && cur.have_cache && !cur.pending) {
+        delete memCache[memKey(i, 3)];
+        for (let s = 2; s >= 0; s--) {
+          const from = memCache[memKey(i, s)];
+          if (from) memCache[memKey(i, s + 1)] = from;
+          else delete memCache[memKey(i, s + 1)];
+        }
+      }
+      delete memCache[k0];
+    }
+
+    function paintLoadedCache(c, iface, slot) {
       resize();
       drawHeatmap(canvas, c);
-      if (c.have_cache && c.meta) {
-        setStatus("Cached (" + (c.meta.iface || iface || "?") + "): " + c.meta.sweep_count +
+      if (c && c.have_cache && c.meta) {
+        const slotTag = slot === 0 ? "Current" : ("slot −" + slot);
+        setStatus(slotTag + " (" + (c.meta.iface || iface || "?") + "): " + c.meta.sweep_count +
           " sweeps · " + Math.round(c.meta.f_start) + "–" + Math.round(c.meta.f_stop) + " MHz · " +
           (c.meta.chipset || "") +
           (c.meta.requested_duration_sec ? (" · " + c.meta.requested_duration_sec + "s run") : "") +
           " · ended " + (c.meta.ended_at || ""));
+      } else if (c && c.pending) {
+        showPendingCurrent();
       } else {
-        setStatus("No cache for " + (iface || "radio") + ". Choose duration and Start (RF disrupted).");
+        setStatus("No cache for " + (iface || "radio") + " · " +
+          (slot === 0 ? "Current" : ("−" + slot)));
       }
+    }
+
+    function resize() {
+      if (!canvas) return false;
+      const w = Math.max(480, root.clientWidth - 24);
+      const h = isModal ? 320 : Math.min(520, Math.max(360, window.innerHeight - 220));
+      if (canvas.width === w && canvas.height === h) return false;
+      canvas.width = w;
+      canvas.height = h;
+      return true;
+    }
+
+    async function fetchSlot(iface, slot) {
+      const c = await api("cache", iface, null, null, null, null, null, slot);
+      rememberSlot(iface, slot, c);
+      return c;
+    }
+
+    /* Background only — never block tab clicks or status paint. */
+    function prefetchFilledSlots() {
+      const iface = getIface();
+      const list = lastCacheSlots || [];
+      let chain = Promise.resolve();
+      for (let i = 0; i < list.length; i++) {
+        const info = list[i];
+        if (!info || !info.have_cache || info.pending) continue;
+        const slot = info.slot;
+        if (memCache[memKey(iface, slot)]) continue;
+        chain = chain.then(function () {
+          return fetchSlot(iface, slot).catch(function () {});
+        });
+      }
+      return chain;
+    }
+
+    async function loadCache(opts) {
+      opts = opts || {};
+      const force = !!opts.force;
+      const iface = getIface();
+      const slot = selectedSlot;
+      if (slot === 0 && (scanRunning || (lastCacheSlots && lastCacheSlots[0] && lastCacheSlots[0].pending))) {
+        showPendingCurrent();
+        return { have_cache: false, pending: true, sweeps: [] };
+      }
+      const key = memKey(iface, slot);
+      if (!force && memCache[key]) {
+        paintLoadedCache(memCache[key], iface, slot);
+        return memCache[key];
+      }
+      const c = await fetchSlot(iface, slot);
+      if (selectedSlot !== slot || getIface() !== iface) return c;
+      paintLoadedCache(c, iface, slot);
       return c;
     }
 
@@ -943,18 +1148,25 @@
       }
       try {
         const s = await api("status", getIface());
-        fillRadios(s);
-        fillDurations(s);
-        fillScanControls(s);
         const wasStopping = btnPhase === "stopping" || stopRequested;
+        const wasRunning = scanRunning;
+        scanRunning = !!s.running;
+        /* Rebuilding selects every second was locking the UI during scans. */
+        if (!s.running || !wasRunning) {
+          fillRadios(s);
+          fillDurations(s);
+          fillScanControls(s);
+        }
         applyRunningUi(s);
         updateClearCacheTip(s);
+        syncCacheTabs(s.cache_slots, s.running);
         if (s.running) {
           setStatus(runningMessage(s));
-          try { await loadCache(); } catch (_) {}
+          if (selectedSlot === 0) showPendingCurrent();
         } else {
           stopPoll();
-          await loadCache();
+          await loadCache({ force: true });
+          prefetchFilledSlots();
           if (wasStopping) {
             setStatus("Stopped early · RF restored · ready for Start · showing cache for " +
               (getIface() || "radio"));
@@ -963,7 +1175,6 @@
           }
         }
       } catch (e) {
-        /* Backend unreachable mid-scan: treat as abort, clear active colors. */
         if (btnPhase === "running" || btnPhase === "stopping") {
           stopPoll();
           hideProgress();
@@ -998,6 +1209,9 @@
         api("status", selectedIface).then((s) => {
           fillScanControls(s);
           syncFftOpt(s);
+          syncCacheTabs(s.cache_slots, s.running);
+          selectedSlot = 0;
+          syncCacheTabs(s.cache_slots, s.running);
           return loadCache();
         }).catch((e) => setStatus(String(e.message || e)));
       });
@@ -1069,11 +1283,16 @@
           }
           btnPhase = "running";
           stopRequested = false;
+          scanRunning = true;
+          selectedSlot = 0;
+          rotateMemCache(iface);
           markStartActive();
+          showPendingCurrent();
           /* Re-check before start in case another UI started a scan. */
           const cur = await api("status", iface);
           if (cur.running) {
             applyRunningUi(cur);
+            syncCacheTabs(cur.cache_slots, true);
             setStatus(runningMessage(cur));
             startPoll();
             return;
@@ -1083,23 +1302,32 @@
             (allowFft ? ", FFT opt-in" : (amplifySurvey ? ", amplify on" : ", amplify off")) + ")…");
           const r = await api("start", iface, dur, ch, bw, allowFft, amplifySurvey);
           if (!r.ok) {
+            scanRunning = false;
             const st = await api("status", iface).catch(() => null);
             if (st && st.running) {
+              scanRunning = true;
               applyRunningUi(st);
+              syncCacheTabs(st.cache_slots, true);
               setStatus(runningMessage(st));
               startPoll();
             } else {
               applyRunningUi({ running: false });
+              syncCacheTabs(st && st.cache_slots, false);
               setStatus(r.error || "Start failed");
             }
             return;
           }
+          syncCacheTabs(r.cache_slots, true);
+          selectedSlot = 0;
+          syncCacheTabs(r.cache_slots, true);
+          showPendingCurrent();
           const started = {
             running: true,
             remaining_sec: r.duration_sec || dur,
             section_remaining_sec: r.section_duration_sec || dur,
             section_count: r.section_count || 1,
             scan_mode: r.scan_mode || null,
+            cache_slots: r.cache_slots,
             session: {
               iface: r.iface || iface,
               ends_at: r.ends_at,
@@ -1115,6 +1343,7 @@
           setStatus(r.warning || runningMessage(started));
           startPoll();
         } catch (e) {
+          scanRunning = false;
           applyIdleButtons();
           if (durSel) durSel.disabled = false;
           if (radioSel) radioSel.disabled = false;
@@ -1162,15 +1391,30 @@
           const r = await api("clear_cache");
           const freed = r && r.freed_bytes != null ? r.freed_bytes : 0;
           const removed = r && r.removed != null ? r.removed : 0;
+          selectedSlot = 0;
+          lastCacheSlots = [
+            { slot: 0, have_cache: false, pending: false, enabled: false, label: "Current" },
+            { slot: 1, have_cache: false, pending: false, enabled: false, label: "Previous" },
+            { slot: 2, have_cache: false, pending: false, enabled: false, label: "−2" },
+            { slot: 3, have_cache: false, pending: false, enabled: false, label: "−3" }
+          ];
+          clearMemCache();
+          syncCacheTabs(lastCacheSlots, false);
           updateClearCacheTip({ cache_bytes: 0, cache_files: 0, running: false });
           drawHeatmap(canvas, { sweeps: [], meta: { iface: getIface() } });
           if (freed <= 0) setStatus("Cache empty");
           else setStatus("Cleared " + removed + " · freed " + formatBytes(freed));
+          try {
+            const s = await api("status", getIface());
+            updateClearCacheTip(s);
+            syncCacheTabs(s.cache_slots, false);
+          } catch (_) {}
         } catch (e) {
           setStatus(String(e.message || e));
           try {
             const s = await api("status", getIface());
             updateClearCacheTip(s);
+            syncCacheTabs(s.cache_slots, s.running);
           } catch (_) {}
         }
       });
@@ -1199,20 +1443,26 @@
 
     resize();
     ensureProgressEls();
+    ensureCacheTabs();
     hideProgress();
+    syncCacheTabs(null, false);
     api("status").then(async (s) => {
       fillRadios(s);
       fillDurations(s);
       fillScanControls(s);
       syncFftOpt(s);
+      scanRunning = !!s.running;
       applyRunningUi(s);
       updateClearCacheTip(s);
+      selectedSlot = 0;
+      syncCacheTabs(s.cache_slots, s.running);
       if (s.running) {
         setStatus(runningMessage(s));
         startPoll();
-        try { await loadCache(); } catch (_) {}
+        showPendingCurrent();
       } else {
-        await loadCache();
+        await loadCache({ force: true });
+        prefetchFilledSlots();
       }
     }).catch((e) => setStatus(String(e.message || e)));
 

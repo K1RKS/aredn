@@ -21,7 +21,6 @@ const unsupportedMsg = cap.unsupported_message || "Waterfall is not supported on
         <div style="margin:0 0 8px;font-size:0.9em;opacity:0.9">
             ath9k uses spectral FFT (disrupts RF). On QCA988x (hAP ac lite 5&nbsp;GHz) the default is
             <b>survey</b> (safe). Experimental FFT is opt-in only (short, disable-only recover — no wifi reload).
-            Each radio keeps its own RAM cache (<code>/tmp</code>).
         </div>
         {% } %}
         <div class="wf-radio-row" style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin:0 0 8px">
@@ -34,6 +33,7 @@ const unsupportedMsg = cap.unsupported_message || "Waterfall is not supported on
             <label style="font-size:0.9em">BW</label>
             <select class="wf-bandwidth" style="min-width:5.5rem"></select>
         </div>
+        <div class="wf-cache-tabs" style="display:flex;gap:4px;flex-wrap:wrap;margin:0 0 6px"></div>
         <canvas class="wf-canvas" style="width:100%;background:#000;border-radius:4px;display:block"></canvas>
         <div class="wf-progress" hidden style="margin:6px 0 0">
             <div class="wf-progress-sections" hidden style="margin:0 0 6px">

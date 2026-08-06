@@ -8,6 +8,7 @@ chmod 755 /usr/bin/waterfall-session 2>/dev/null || true
 chmod 755 /usr/bin/waterfall-ath10k-fft 2>/dev/null || true
 chmod 755 /usr/bin/waterfall-spectral-recover 2>/dev/null || true
 mkdir -p /etc/waterfall 2>/dev/null || true
+rm -rf /etc/waterfall/cache 2>/dev/null || true
 chmod 644 /app/main/tools/e/waterfall.ut 2>/dev/null || true
 chmod 644 /app/main/waterfall.ut 2>/dev/null || true
 chmod 644 /app/main/waterfall/e/api.ut 2>/dev/null || true

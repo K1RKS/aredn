@@ -25,8 +25,11 @@ import * as radios from "aredn.radios";
 import * as hardware from "aredn.hardware";
 
 const FFT_OUT = "/tmp/waterfall-fft.bin";
+/* Heatmap history in RAM (/tmp). Cleared on reboot — avoids flash wear. */
 const CACHE_JSON = "/tmp/waterfall-cache.json";
 const CACHE_PREFIX = "/tmp/waterfall-cache-";
+const CACHE_FLASH_DIR = "/etc/waterfall/cache"; /* legacy 0.2.37 location; cleared on upgrade */
+const CACHE_HISTORY_SLOTS = 3; /* slots 1..3 behind Current (0) */
 const SESSION_JSON = "/tmp/waterfall-session.json";
 const SESSION_PID = "/tmp/waterfall-session.pid";
 const SESSION_STOP = "/tmp/waterfall-session.stop";
@@ -52,7 +55,7 @@ const SPECTRAL_COUNT_DEFAULT = 32;
 
 export function packageVersion()
 {
-    return "0.2.35-r0";
+    return "0.2.41-r0";
 };
 
 /**
@@ -1917,20 +1920,105 @@ function emptyCache(iface)
         ok: true,
         version: packageVersion(),
         have_cache: false,
+        pending: false,
         sweeps: [],
         times: [],
         meta: iface ? { iface: iface } : null,
-        iface: iface || null
+        iface: iface || null,
+        slot: 0
     };
 }
 
-function cachePathForIface(iface)
+function pendingCache(iface)
 {
-    if (!iface || !match(iface, /^[a-zA-Z0-9]+$/)) {
-        return CACHE_JSON;
-    }
-    return `${CACHE_PREFIX}${iface}.json`;
+    return {
+        ok: true,
+        version: packageVersion(),
+        have_cache: false,
+        pending: true,
+        sweeps: [],
+        times: [],
+        meta: {
+            iface: iface || null,
+            pending: true,
+            note: "New scan in process"
+        },
+        iface: iface || null,
+        slot: 0
+    };
 }
+
+function clampCacheSlot(slot)
+{
+    let s = int(slot);
+    if (s != s || s < 0) {
+        return 0;
+    }
+    if (s > CACHE_HISTORY_SLOTS) {
+        return CACHE_HISTORY_SLOTS;
+    }
+    return s;
+};
+
+function cachePathForIface(iface, slot)
+{
+    const s = clampCacheSlot(slot == null ? 0 : slot);
+    if (!iface || !match(iface, /^[a-zA-Z0-9]+$/)) {
+        return s === 0 ? CACHE_JSON : `${CACHE_JSON}.${s}`;
+    }
+    if (s === 0) {
+        return `${CACHE_PREFIX}${iface}.json`;
+    }
+    return `${CACHE_PREFIX}${iface}.${s}.json`;
+}
+
+function moveCachePath(src, dst)
+{
+    if (src === dst) {
+        return;
+    }
+    try {
+        fs.unlink(dst);
+    }
+    catch (_) {
+    }
+    if (!fs.access(src)) {
+        return;
+    }
+    try {
+        const data = fs.readfile(src);
+        if (data != null) {
+            fs.writefile(dst, data);
+        }
+        fs.unlink(src);
+    }
+    catch (_) {
+        system(`mv -f '${src}' '${dst}' 2>/dev/null`);
+    }
+};
+
+/* One-shot: pull any 0.2.37 flash caches into /tmp, then drop the flash dir. */
+function migrateFlashCacheToTmp(iface, slot)
+{
+    const dst = cachePathForIface(iface, slot);
+    if (fs.access(dst)) {
+        return;
+    }
+    let src;
+    const s = clampCacheSlot(slot == null ? 0 : slot);
+    if (!iface || !match(iface, /^[a-zA-Z0-9]+$/)) {
+        src = s === 0 ? `${CACHE_FLASH_DIR}/waterfall-cache.json` : `${CACHE_FLASH_DIR}/waterfall-cache.json.${s}`;
+    }
+    else if (s === 0) {
+        src = `${CACHE_FLASH_DIR}/waterfall-cache-${iface}.json`;
+    }
+    else {
+        src = `${CACHE_FLASH_DIR}/waterfall-cache-${iface}.${s}.json`;
+    }
+    if (fs.access(src)) {
+        moveCachePath(src, dst);
+    }
+};
 
 export function clampDuration(durationSec)
 {
@@ -1950,11 +2038,43 @@ export function allowedDurations()
     return [5, 10, 15, 30, 60, 300, 600];
 };
 
-export function readCache(iface)
+function summarizeCacheSlot(iface, slot, cache)
 {
-    let path = cachePathForIface(iface);
-    if (!fs.access(path) && iface && fs.access(CACHE_JSON)) {
-        /* migrate legacy single-cache if it matches this iface */
+    const m = cache?.meta || {};
+    const have = !!(cache && cache.have_cache);
+    const pending = !!(cache && cache.pending);
+    let fallback = "Current";
+    if (slot === 1) {
+        fallback = "Previous";
+    }
+    else if (slot === 2) {
+        fallback = "−2";
+    }
+    else if (slot === 3) {
+        fallback = "−3";
+    }
+    return {
+        slot: slot,
+        have_cache: have,
+        pending: pending,
+        enabled: have && !pending,
+        label: fallback,
+        started_at: m.started_at ?? null,
+        ended_at: m.ended_at ?? null,
+        scan_channel: m.scan_channel ?? null,
+        plot_bandwidth: m.plot_bandwidth ?? null,
+        capture_mode: m.capture_mode ?? null,
+        sweep_count: m.sweep_count ?? length(cache?.sweeps || []),
+        iface: cache?.iface || iface || null
+    };
+};
+
+export function readCache(iface, slot)
+{
+    const s = clampCacheSlot(slot == null ? 0 : slot);
+    migrateFlashCacheToTmp(iface, s);
+    let path = cachePathForIface(iface, s);
+    if (s === 0 && !fs.access(path) && iface && fs.access(CACHE_JSON)) {
         try {
             const legacy = json(fs.readfile(CACHE_JSON));
             if (legacy?.meta?.iface === iface) {
@@ -1968,14 +2088,18 @@ export function readCache(iface)
         }
     }
     if (!fs.access(path)) {
-        return emptyCache(iface);
+        const e = emptyCache(iface);
+        e.slot = s;
+        return e;
     }
     try {
         const c = json(fs.readfile(path));
         c.ok = true;
-        c.have_cache = length(c.sweeps || []) > 0;
+        c.pending = !!(c.pending || c.meta?.pending);
+        c.have_cache = !c.pending && length(c.sweeps || []) > 0;
         c.version = packageVersion();
         c.iface = c.meta?.iface || iface || null;
+        c.slot = s;
         return c;
     }
     catch (_) {
@@ -1983,9 +2107,11 @@ export function readCache(iface)
             ok: false,
             error: "Corrupt waterfall cache",
             have_cache: false,
+            pending: false,
             sweeps: [],
             version: packageVersion(),
-            iface: iface || null
+            iface: iface || null,
+            slot: s
         };
     }
 };
@@ -1993,25 +2119,72 @@ export function readCache(iface)
 export function writeCache(cache)
 {
     const iface = cache?.meta?.iface || cache?.iface || null;
-    const path = cachePathForIface(iface);
+    const slot = clampCacheSlot(cache?.slot == null ? 0 : cache.slot);
+    const path = cachePathForIface(iface, slot);
+    cache.slot = slot;
     fs.writefile(path, sprintf("%J", cache));
+};
+
+export function listCacheSlots(iface)
+{
+    const out = [];
+    for (let s = 0; s <= CACHE_HISTORY_SLOTS; s++) {
+        push(out, summarizeCacheSlot(iface, s, readCache(iface, s)));
+    }
+    return out;
+};
+
+/**
+ * On Start: Current → Previous → −2 → −3 (drop oldest). Current becomes pending.
+ * Empty/pending Current is not pushed into history.
+ */
+export function rotateCacheForNewScan(iface)
+{
+    if (!iface || !match(iface, /^[a-zA-Z0-9]+$/)) {
+        return { ok: false, error: "iface required" };
+    }
+    const cur = readCache(iface, 0);
+    if (cur.have_cache && !cur.pending) {
+        const drop = cachePathForIface(iface, CACHE_HISTORY_SLOTS);
+        try {
+            fs.unlink(drop);
+        }
+        catch (_) {
+        }
+        for (let s = CACHE_HISTORY_SLOTS - 1; s >= 0; s--) {
+            moveCachePath(cachePathForIface(iface, s), cachePathForIface(iface, s + 1));
+        }
+    }
+    else {
+        try {
+            fs.unlink(cachePathForIface(iface, 0));
+        }
+        catch (_) {
+        }
+    }
+    const pending = pendingCache(iface);
+    writeCache(pending);
+    persistLog(`cache rotate iface=${iface}`);
+    return { ok: true, slots: listCacheSlots(iface) };
 };
 
 function isCacheFilename(name)
 {
-    return !!match(name, /^waterfall-cache(-[a-zA-Z0-9]+)?\.json$/);
+    return !!match(name, /^waterfall-cache(-[a-zA-Z0-9]+)?(\.[1-3])?\.json$/);
 };
 
-export function listCacheFiles()
+function collectCacheFilesInDir(dir, out)
 {
-    const names = fs.lsdir("/tmp") || [];
-    const out = [];
+    if (!fs.access(dir)) {
+        return;
+    }
+    const names = fs.lsdir(dir) || [];
     for (let i = 0; i < length(names); i++) {
         const name = names[i];
         if (!isCacheFilename(name)) {
             continue;
         }
-        const path = `/tmp/${name}`;
+        const path = `${dir}/${name}`;
         const st = fs.stat(path);
         push(out, {
             name: name,
@@ -2019,6 +2192,14 @@ export function listCacheFiles()
             bytes: st ? int(st.size) : 0
         });
     }
+};
+
+export function listCacheFiles()
+{
+    const out = [];
+    collectCacheFilesInDir("/tmp", out);
+    /* Legacy flash caches from 0.2.37 — Clear / upgrade should free them. */
+    collectCacheFilesInDir(CACHE_FLASH_DIR, out);
     return out;
 };
 
@@ -2051,6 +2232,7 @@ export function clearAllCaches()
         catch (_) {
         }
     }
+    system(`rm -rf ${CACHE_FLASH_DIR} 2>/dev/null`);
     persistLog(`cache clear removed=${removed} freed=${freed}`);
     return {
         ok: true,
@@ -2058,7 +2240,8 @@ export function clearAllCaches()
         removed: removed,
         have_cache: false,
         cache_bytes: 0,
-        cache_files: 0
+        cache_files: 0,
+        cache_slots: []
     };
 };
 
@@ -2226,6 +2409,13 @@ export function runSession(preferredIface, durationSec, channelSel, bandwidthSel
     fs.unlink(SESSION_STOP);
 
     const cap = probeCapability(preferredIface);
+    /* UI startSessionAsync already rotates + writes pending; do not rotate twice. */
+    if (cap.ok && cap.iface) {
+        const cur = readCache(cap.iface, 0);
+        if (!cur.pending) {
+            rotateCacheForNewScan(cap.iface);
+        }
+    }
     const plan = resolveScanPlan(preferredIface, channelSel, bandwidthSel);
     const sections = plan.ok ? planSections(plan) : [];
     const sectionCount = length(sections) > 0 ? length(sections) : 1;
@@ -2880,6 +3070,8 @@ export function runSession(preferredIface, durationSec, channelSel, bandwidthSel
         ok: length(sweeps) > 0,
         error: length(sweeps) > 0 ? null : (error || "No sweeps captured"),
         have_cache: length(sweeps) > 0,
+        pending: false,
+        slot: 0,
         version: packageVersion(),
         iface: cap.iface,
         meta: {
@@ -2892,6 +3084,7 @@ export function runSession(preferredIface, durationSec, channelSel, bandwidthSel
             amplify_survey: mode === "survey" ? amplify : false,
             survey_fallback: usedSurveyFallback,
             recovered: recovered,
+            pending: false,
             y_axis: "time",
             f_start: fStart,
             f_stop: fStop,
@@ -3007,6 +3200,7 @@ export function startSessionAsync(preferredIface, durationSec, channelSel, bandw
     fs.unlink(SESSION_STOP);
     const started = nowSec();
     const startMode = useSurvey ? "survey" : (useFragileFft ? "fft" : cap.capture_mode);
+    const rotated = rotateCacheForNewScan(cap.iface);
     writeSessionState({
         running: true,
         started_at: started,
@@ -3074,6 +3268,7 @@ export function startSessionAsync(preferredIface, durationSec, channelSel, bandw
         scan_mode: plan.mode,
         f_start: plan.f_start,
         f_stop: plan.f_stop,
+        cache_slots: rotated?.slots || listCacheSlots(cap.iface),
         warning: warn
     };
 };
@@ -3137,6 +3332,7 @@ export function sessionStatus(preferredIface)
         sweep_count: length(cache.sweeps || []),
         cache_bytes: usage.bytes,
         cache_files: usage.files,
+        cache_slots: listCacheSlots(sel),
         durations: allowedDurations(),
         default_duration: SESSION_DEFAULT_SEC,
         max_duration: SESSION_MAX_SEC,

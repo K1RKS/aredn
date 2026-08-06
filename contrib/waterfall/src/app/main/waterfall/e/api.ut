@@ -21,6 +21,7 @@ const mCh = match(q, /channel=([a-zA-Z0-9_-]+)/);
 const mBw = match(q, /bandwidth=([a-zA-Z0-9_-]+)/);
 const mFft = match(q, /allow_fft=([01])/);
 const mAmp = match(q, /amplify_survey=([01])/);
+const mSlot = match(q, /slot=([0-3])/);
 const action = (request.args && request.args.action) || (mAction ? mAction[1] : "status");
 const iface = (request.args && request.args.iface) || (mIface ? mIface[1] : null);
 const duration = (request.args && request.args.duration) ? int(request.args.duration) : (mDur ? int(mDur[1]) : 30);
@@ -42,6 +43,13 @@ else if (request.args && (request.args.amplify_survey === "1" || request.args.am
 else if (mAmp && mAmp[1] === "1") {
     amplifySurvey = true;
 }
+let cacheSlot = 0;
+if (request.args && request.args.slot != null && `${request.args.slot}` !== "") {
+    cacheSlot = int(request.args.slot);
+}
+else if (mSlot) {
+    cacheSlot = int(mSlot[1]);
+}
 
 if (action === "start") {
     print(sprintf("%J", wf.startSessionAsync(iface, duration, channel, bandwidth, allowFft, amplifySurvey)));
@@ -53,7 +61,7 @@ else if (action === "clear_cache") {
     print(sprintf("%J", wf.clearAllCaches()));
 }
 else if (action === "cache") {
-    print(sprintf("%J", wf.readCache(iface)));
+    print(sprintf("%J", wf.readCache(iface, cacheSlot)));
 }
 else if (action === "status" || action === "session_status" || action === "probe") {
     print(sprintf("%J", wf.sessionStatus(iface)));

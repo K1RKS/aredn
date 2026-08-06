@@ -22,6 +22,8 @@ const mFft = match(q, /allow_fft=([01])/);
 const allowFft = mFft && mFft[1] === "1";
 const mAmp = match(q, /amplify_survey=([01])/);
 const amplifySurvey = !(mAmp && mAmp[1] === "0");
+const mSlot = match(q, /slot=([0-3])/);
+const cacheSlot = mSlot ? int(mSlot[1]) : 0;
 const mFmt = match(q, /format=([a-zA-Z0-9]+)/);
 const wantJson = (mFmt && mFmt[1] === "json") ||
     action === "start" || action === "stop" || action === "cache" ||
@@ -74,7 +76,7 @@ if (wantJson) {
         jsonOut(wf.clearAllCaches());
     }
     else if (action === "cache") {
-        jsonOut(wf.readCache(iface));
+        jsonOut(wf.readCache(iface, cacheSlot));
     }
     else if (action === "status" || action === "session_status" || action === "probe") {
         jsonOut(wf.sessionStatus(iface));
