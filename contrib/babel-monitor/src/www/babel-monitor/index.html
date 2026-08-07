@@ -617,7 +617,9 @@
   let logSource = "syslog"; /* syslog | dumps | lqm | dmesg */
   let overviewDrag = null; /* { startX, startAge, width, moved } */
   let histZoomInited = false;
-  const ZOOM_STEPS = [60, 300, 900, 1800, 3600, 5400, 7200, 14400, 64800, 86400];
+  const ZOOM_STEPS = [
+    60, 120, 300, 600, 900, 1800, 3600, 7200, 14400, 21600, 43200, 86400
+  ]; /* 1m 2m 5m 10m 15m 30m 1h 2h 4h 6h 12h 24h — minute-aligned, integer tick counts */
   const ZOOM_LS_KEY = "babel-monitor-window-sec";
   let logFilterAll = true;
   const logFilterOn = {
@@ -1258,27 +1260,65 @@
   }
 
   function xTickStep(spanSec) {
-    if (spanSec <= 300) return 60;
-    if (spanSec <= 1800) return 300;
-    if (spanSec <= 3600) return 600;
-    if (spanSec <= 14400) return 3600;
-    if (spanSec <= 86400) return 14400;
-    return Math.max(1, Math.round(spanSec / 6));
+    if (spanSec <= 300) return 60;       /* ≤5m → 1m */
+    if (spanSec <= 1800) return 300;     /* ≤30m → 5m */
+    if (spanSec <= 3600) return 600;     /* ≤1h → 10m */
+    if (spanSec <= 21600) return 3600;   /* ≤6h → 1h */
+    if (spanSec <= 86400) return 14400;  /* ≤24h → 4h */
+    return Math.max(60, Math.round(spanSec / 6));
   }
 
-  /** Nice wall-clock tick unix times within [t0, t0+spanSec]. */
+  /** Nice wall-clock tick unix times within [t0, t0+spanSec] (span is minute-aligned). */
   function axisClockTicks(t0, spanSec) {
     const step = xTickStep(spanSec);
     const tEnd = t0 + spanSec;
     const out = [];
-    let t = Math.ceil(t0 / step) * step;
-    if (t - t0 < step * 0.2) t += step;
-    for (; t < tEnd - step * 0.15; t += step) {
+    for (let t = t0; t <= tEnd + 0.5; t += step) {
       out.push(t);
     }
-    if (!out.length || out[0] - t0 > step * 0.35) out.unshift(t0);
-    if (!out.length || tEnd - out[out.length - 1] > step * 0.2) out.push(tEnd);
+    if (out.length && out[out.length - 1] < tEnd - 0.5) out.push(tEnd);
     return out;
+  }
+
+  function nowUnix() {
+    return Math.floor(Date.now() / 1000);
+  }
+
+  function floorToMinute(t) {
+    return Math.floor(Number(t) / 60) * 60;
+  }
+
+  function ceilToMinute(t) {
+    return Math.ceil(Number(t) / 60) * 60;
+  }
+
+  /**
+   * Absolute minute-aligned viewport for chart + series fetch.
+   * Left/right edges always fall on whole minutes; span is windowSec.
+   */
+  function computeViewWindow() {
+    const now = nowUnix();
+    const span = Math.max(60, Number(windowSec) || 60);
+    let tEnd;
+    if (isLiveView()) {
+      tEnd = ceilToMinute(now);
+    } else {
+      tEnd = Math.round((now - viewEndAgeSec) / 60) * 60;
+      const liveEnd = ceilToMinute(now);
+      const oldestEnd = floorToMinute(now - Math.max(0, retentionSec)) + span;
+      if (tEnd > liveEnd) tEnd = liveEnd;
+      if (retentionSec > 0 && tEnd < oldestEnd) tEnd = oldestEnd;
+    }
+    let t0 = tEnd - span;
+    if (retentionSec > 0) {
+      const oldestStart = floorToMinute(now - retentionSec);
+      if (t0 < oldestStart) {
+        t0 = oldestStart;
+        tEnd = t0 + span;
+      }
+    }
+    const endAge = Math.max(0, now - tEnd);
+    return { t0: t0, tEnd: tEnd, windowSec: span, endAge: endAge, now: now };
   }
 
   function seriesT0() {
@@ -1885,7 +1925,9 @@
     const ctx = c.getContext("2d");
     const w = c.width, h = c.height;
     const padL = 44, padR = 18;
-    const t0 = seriesT0();
+    const vw = computeViewWindow();
+    const t0 = vw.t0;
+    const axisSpan = vw.windowSec;
 
     let panels;
     if (stacked) {
@@ -1931,7 +1973,7 @@
     chartLayout = {
       padL: padL, padR: padR, padT: panels[0].padT, padB: panels[panels.length - 1].padB,
       plotW: panels[0].plotW, plotH: panels[0].plotH,
-      t0: t0, windowSec: windowSec, n: series.length,
+      t0: t0, windowSec: axisSpan, n: series.length,
       stacked: stacked, panels: panels
     };
     ctx.clearRect(0, 0, w, h);
@@ -1941,7 +1983,7 @@
       drawAxes(ctx, w, h, {
         padL: panels[0].padL, padR: panels[0].padR, padT: panels[0].padT,
         padB: panels[0].padB, plotW: panels[0].plotW, plotH: panels[0].plotH,
-        windowSec: windowSec, t0: t0
+        windowSec: axisSpan, t0: t0
       }, emptyBounds, { drawTime: true });
       ctx.fillStyle = "#9aa3ad";
       ctx.font = "11px ui-sans-serif, system-ui, sans-serif";
@@ -2007,7 +2049,7 @@
       const span = bounds.hi - bounds.lo;
       drawAxes(ctx, w, h, {
         padL: p.padL, padR: p.padR, padT: p.padT, padB: p.padB,
-        plotW: p.plotW, plotH: p.plotH, windowSec: windowSec, t0: t0
+        plotW: p.plotW, plotH: p.plotH, windowSec: axisSpan, t0: t0
       }, bounds, {
         drawTime: p.drawTime,
         roundY: metricId === "cost" || p.id === "bottom"
@@ -2041,7 +2083,7 @@
           const ti = Number(series[i].t);
           if (ti !== ti) continue;
           const dt = ti - t0;
-          if (dt < 0 || dt > windowSec) continue;
+          if (dt < 0 || dt > axisSpan) continue;
           const x = xForTime(ti, chartLayout);
           const left0 = x - groupW / 2;
           for (let bi = 0; bi < barSpecs.length; bi++) {
@@ -2088,7 +2130,7 @@
             continue;
           }
           const dt = ti - t0;
-          if (dt < 0 || dt > windowSec) {
+          if (dt < 0 || dt > axisSpan) {
             started = false;
             continue;
           }
@@ -2237,9 +2279,12 @@
       return;
     }
     viewEndAgeSec = clampViewEndAge(viewEndAgeSec);
+    const vw = computeViewWindow();
+    /* Keep pan state on the snapped minute so Live/overview stay consistent */
+    if (!isLiveView()) viewEndAgeSec = vw.endAge;
     const slice = 300; /* match server SERIES_SLICE_S — one expand peak at a time */
-    const want = windowSec;
-    const baseEnd = viewEndAgeSec;
+    const want = vw.windowSec;
+    const baseEnd = vw.endAge;
     let all = [];
     if (want <= slice) {
       const data = await getJsonRetry(
